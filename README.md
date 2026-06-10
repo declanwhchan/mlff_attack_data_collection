@@ -1,5 +1,9 @@
 # Workflow
 
+## Reminder: Sync Local Changes To HPC
+
+Before running or submitting jobs on the HPC, push/sync all local changes from this computer so the HPC copy is up to date.
+
 ## SSH
 
 ### 1. Run Setup
@@ -34,11 +38,6 @@ sbatch scripts_bash/plot.sh
 get -r comprehensive_outputs
 get -r array_summaries
 get generated_material_tests.csv
-```
-
-### Optional Downloads
-
-```bash
-get outputs_mace
-get outputs_uma
+get -r outputs_mace
+get -r outputs_uma
 ```
