@@ -1,3 +1,11 @@
+## Main Repository
+
+This data-collection workflow depends on the main `mlff_attack` Python package:
+
+[TRustworthy-AI-Tools-for-Science/mlff_attack](https://github.com/TRustworthy-AI-Tools-for-Science/mlff_attack)
+
+**HPC setup reminder:** before running the workflow, make sure the HPC has `~/project/.venv-mace` and `~/project/.venv-uma` created on the cluster, with the main `mlff_attack` repo installed into both.
+
 # Workflow
 
 ## Reminder: Sync Local Changes To HPC
