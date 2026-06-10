@@ -1,0 +1,16 @@
+.venv*/
+__pycache__/
+.env
+
+outputs*/
+comprehensive_outputs/
+array_summaries/
+material_tests/
+
+*.out
+*.err
+slurm-*.out
+
+*.cif
+*.model
+*.pt
