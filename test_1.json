@@ -1,0 +1,30 @@
+{
+  "device": "cpu",
+  "epsilons": [0.001],
+  "relax_fmax": 0.01,
+  "relax_max_steps": 10,
+  "relax_optimizer": "LBFGS",
+  "models": [
+    {
+      "calculator": "mace",
+      "model_path": "mace-mh-1.model",
+      "mace_head": "omat_pbe"
+    },
+    {
+      "calculator": "uma",
+      "model_path": "uma-s-1p1",
+      "uma_task": "omat",
+      "uma_charge": 0,
+      "uma_spin": 1
+    }
+  ],
+  "attacks": [
+    {
+      "name": "fgsm",
+      "attack_type": "fgsm",
+      "n_steps": 1,
+      "alpha": null,
+      "clip": null
+    }
+  ]
+}
