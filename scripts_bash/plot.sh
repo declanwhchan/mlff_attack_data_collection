@@ -1,17 +1,23 @@
 #!/bin/bash
 #SBATCH --account=rrg-j3goals
 #SBATCH --time=01:00:00
-#SBATCH --mem=8G
-#SBATCH --cpus-per-task=1
+#SBATCH --mem=16G
+#SBATCH --cpus-per-task=4
 
-set -e
+set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
 
-module load gcc/12.3 python/3.11 cuda/12.6 arrow
+export PYTHONUNBUFFERED=1
+export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
+export MKL_NUM_THREADS=$SLURM_CPUS_PER_TASK
+export OPENBLAS_NUM_THREADS=$SLURM_CPUS_PER_TASK
+export NUMEXPR_NUM_THREADS=$SLURM_CPUS_PER_TASK
+
+module load gcc/12.3 python/3.11 arrow
 
 source ~/project/.venv-mace/bin/activate
 
-python - <<'PY'
+python -u - <<'PY'
 from pathlib import Path
 import pandas as pd
 
@@ -33,10 +39,10 @@ for calculator, output_dir in [
     output_path = output_dir / "summary.csv"
     combined.to_csv(output_path, index=False)
 
-    print(f"Wrote {len(combined)} rows to {output_path}")
+    print(f"Wrote {len(combined)} rows to {output_path}", flush=True)
 PY
 
-python scripts_python/run_comprehensive.py --output-dir comprehensive_outputs
+python -u scripts_python/run_comprehensive.py --output-dir comprehensive_outputs
 
 deactivate
 
