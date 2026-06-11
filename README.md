@@ -12,6 +12,15 @@ This data-collection workflow depends on the main `mlff_attack` Python package:
 
 Before running or submitting jobs on the HPC, push/sync all local changes from this computer so the HPC copy is up to date.
 
+### Materials Project API and Hugging Face Auth
+
+Create `.env` on the HPC:
+
+```bash
+MP_API_KEY=your_materials_project_key
+HF_TOKEN=hf_your_huggingface_token_here
+```
+
 ## SSH
 
 ### 1. Run Setup
@@ -20,13 +29,6 @@ sbatch scripts_bash/setup.sh
 ```
 
 ### 2. Run Main Jobs
-
-**Single-sample test**
-```bash
-sbatch --array=1-1 scripts_bash/main.sh
-```
-
-**Full run**
 ```bash
 sbatch scripts_bash/main.sh
 ```
