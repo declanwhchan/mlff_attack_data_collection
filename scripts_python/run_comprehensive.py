@@ -459,6 +459,9 @@ def plot_convergence_panel(ax, records, attack, step_col, conv_col):
         ax.set_axis_off()
         return False
 
+    epsilons = sorted(attack_records["epsilon"].dropna().unique())
+    epsilon_positions = {epsilon: index + 1 for index, epsilon in enumerate(epsilons)}
+
     for calculator, color in CALCULATOR_COLORS.items():
         data = attack_records[
             (attack_records["calculator"] == calculator)
@@ -469,9 +472,10 @@ def plot_convergence_panel(ax, records, attack, step_col, conv_col):
             continue
 
         grouped = data.groupby("epsilon", as_index=False)[step_col].mean()
+        grouped["epsilon_position"] = grouped["epsilon"].map(epsilon_positions)
 
         ax.plot(
-            grouped["epsilon"],
+            grouped["epsilon_position"],
             grouped[step_col],
             marker="o",
             markersize=4,
@@ -480,10 +484,12 @@ def plot_convergence_panel(ax, records, attack, step_col, conv_col):
             label=calculator.upper(),
         )
 
-        not_converged = data[data[conv_col] == False]
+        not_converged = data[data[conv_col] == False].copy()
         if not not_converged.empty:
+            not_converged["epsilon_position"] = not_converged["epsilon"].map(epsilon_positions)
+
             ax.scatter(
-                not_converged["epsilon"],
+                not_converged["epsilon_position"],
                 not_converged[step_col],
                 s=45,
                 facecolors="none",
@@ -492,15 +498,16 @@ def plot_convergence_panel(ax, records, attack, step_col, conv_col):
                 zorder=3,
             )
 
-    ax.set_xscale("log")
-    epsilons = sorted(attack_records["epsilon"].dropna().unique())
-    ax.set_xticks(epsilons)
+    tick_positions = list(range(1, len(epsilons) + 1))
+    ax.set_xticks(tick_positions)
     ax.set_xticklabels([format_epsilon_label(epsilon) for epsilon in epsilons])
     style_epsilon_tick_labels(ax, rotate=len(epsilons) >= 6)
     ax.set_xlabel(r"$\epsilon$ ($\AA$)")
     ax.set_ylabel("steps until convergence")
     ax.grid(True, axis="y")
-    ax.grid(True, axis="x", alpha=0.25)
+    ax.grid(False, axis="x")
+    ax.margins(x=0.03)
+
     return True
 
 
@@ -932,6 +939,9 @@ def plot_convergence_panel_by_steps(ax, records, attack, epsilon, step_col, conv
         ax.set_axis_off()
         return False
 
+    steps = sorted(attack_records["n_steps"].dropna().unique())
+    step_positions = {step: index + 1 for index, step in enumerate(steps)}
+
     for calculator, color in CALCULATOR_COLORS.items():
         data = attack_records[
             (attack_records["calculator"] == calculator)
@@ -942,9 +952,10 @@ def plot_convergence_panel_by_steps(ax, records, attack, epsilon, step_col, conv
             continue
 
         grouped = data.groupby("n_steps", as_index=False)[step_col].mean()
+        grouped["step_position"] = grouped["n_steps"].map(step_positions)
 
         ax.plot(
-            grouped["n_steps"],
+            grouped["step_position"],
             grouped[step_col],
             marker="o",
             markersize=4,
@@ -953,10 +964,12 @@ def plot_convergence_panel_by_steps(ax, records, attack, epsilon, step_col, conv
             label=calculator.upper(),
         )
 
-        not_converged = data[data[conv_col] == False]
+        not_converged = data[data[conv_col] == False].copy()
         if not not_converged.empty:
+            not_converged["step_position"] = not_converged["n_steps"].map(step_positions)
+
             ax.scatter(
-                not_converged["n_steps"],
+                not_converged["step_position"],
                 not_converged[step_col],
                 s=45,
                 facecolors="none",
@@ -965,9 +978,8 @@ def plot_convergence_panel_by_steps(ax, records, attack, epsilon, step_col, conv
                 zorder=3,
             )
 
-    steps = sorted(attack_records["n_steps"].dropna().unique())
-    ax.set_xscale("log")
-    ax.set_xticks(steps)
+    tick_positions = list(range(1, len(steps) + 1))
+    ax.set_xticks(tick_positions)
     ax.set_xticklabels([str(int(step)) for step in steps])
     ax.tick_params(axis="x", labelrotation=35, pad=2)
     for label in ax.get_xticklabels():
@@ -976,7 +988,8 @@ def plot_convergence_panel_by_steps(ax, records, attack, epsilon, step_col, conv
     ax.set_xlabel("n_steps")
     ax.set_ylabel("steps until convergence")
     ax.grid(True, axis="y")
-    ax.grid(True, axis="x", alpha=0.25)
+    ax.grid(False, axis="x")
+    ax.margins(x=0.03)
 
     return True
 
@@ -1078,7 +1091,7 @@ def draw_grouped_whisker_span_by_steps(ax, records, attack, epsilon, value_gette
     for label in ax.get_xticklabels():
         label.set_horizontalalignment("right")
 
-    ax.set_xlabel("attack steps")
+    ax.set_xlabel("n_steps")
     ax.set_ylabel(ylabel)
     ax.grid(True, axis="y")
     ax.grid(False, axis="x")
