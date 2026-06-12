@@ -599,10 +599,12 @@ def draw_grouped_whisker_span(ax, records, attack, value_getter, ylabel, missing
         if span is None:
             continue
 
-        if position % 1 < 0.5:
-            calculator = "mace"
-        else:
-            calculator = "uma"
+        center_position = round(position)
+        offset = position - center_position
+        calculator = min(
+            MODEL_OFFSETS,
+            key=lambda name: abs(offset - MODEL_OFFSETS[name]),
+        )
 
         x_value = round(position - MODEL_OFFSETS[calculator])
         series[calculator]["x"].append(x_value)
@@ -1061,10 +1063,12 @@ def draw_grouped_whisker_span_by_steps(ax, records, attack, epsilon, value_gette
         if span is None:
             continue
 
-        if position % 1 < 0.5:
-            calculator = "mace"
-        else:
-            calculator = "uma"
+        center_position = round(position)
+        offset = position - center_position
+        calculator = min(
+            MODEL_OFFSETS,
+            key=lambda name: abs(offset - MODEL_OFFSETS[name]),
+        )
 
         x_value = round(position - MODEL_OFFSETS[calculator])
         series[calculator]["x"].append(x_value)
