@@ -34,21 +34,25 @@ Scripts ending in `_1.sh` are the single-test versions of the same workflow, so 
 ## SSH
 
 ### 1. Run Setup
+
 ```bash
 sbatch scripts_bash/setup.sh
 ```
 
 ### 2. Run Main Jobs
+
 ```bash
 sbatch scripts_bash/main.sh
 ```
 
 ### 3. Generate Plots
+
 ```bash
 sbatch scripts_bash/plot.sh
 ```
 
 ### Check Status of Jobs
+
 ```bash
 # Refresh checking the queue every second:
 watch -n 1 sq
@@ -59,12 +63,26 @@ tail -f slurm-<jobid>.out
 
 ## SFTP
 
-### Download Results
+### View Plots Without Downloading
+
+On the HPC, SSH from the repo directory:
+
+```bash
+python -m http.server 8888
+```
+
+Then, open a separate terminal:
+```bash
+ssh -L 8888:localhost:8888 <username>@fir.alliancecan.ca
+```
+
+Open http://localhost:8888
+
+
+### Or Download Results
 
 ```bash
 get -r comprehensive_outputs
-get -r array_summaries
-get generated_material_tests.csv
 get -r outputs_mace
 get -r outputs_uma
 ```
