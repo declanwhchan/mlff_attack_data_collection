@@ -6,6 +6,7 @@ outputs*/
 comprehensive_outputs/
 array_summaries/
 material_tests/
+*.png
 
 *.out
 *.err
