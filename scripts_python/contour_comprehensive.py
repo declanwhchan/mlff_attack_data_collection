@@ -10,9 +10,9 @@ import pandas as pd
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 BETA_COLORS = {
-    0.10: "#E69F00",  # orange
-    0.05: "#009E73",  # green
-    0.00: "#7B3294",  # purple
+    0.10: "#E69F00",
+    0.05: "#009E73",
+    0.00: "#7B3294",
 }
 
 CALC_COLORS = {
@@ -20,6 +20,7 @@ CALC_COLORS = {
     "uma": "#D55E00",
 }
 
+CONTOUR_BAND_COLOR = "#66C2A5"
 ATTACK_ORDER = ["FGSM", "I-FGSM", "PGD"]
 
 
@@ -62,9 +63,7 @@ def read_csv(path):
 
 def summary_rows(contour_dir):
     data = read_csv(Path(contour_dir) / "summary.csv")
-    if data is None:
-        return pd.DataFrame()
-    if "status" not in data.columns:
+    if data is None or "status" not in data.columns:
         return pd.DataFrame()
     return data[data["status"] == "success"].copy()
 
@@ -129,7 +128,12 @@ def contour_metric_values(rows, metric):
     for _, row in rows.iterrows():
         metrics = read_csv(row["metrics_csv"])
         if metrics is not None and metric in metrics.columns:
-            values.extend(metrics[metric].replace([np.inf, -np.inf], np.nan).dropna().tolist())
+            values.extend(
+                metrics[metric]
+                .replace([np.inf, -np.inf], np.nan)
+                .dropna()
+                .tolist()
+            )
     return np.asarray(values, dtype=float)
 
 
@@ -138,14 +142,12 @@ def contour_stats(rows, metric):
     if values.size == 0:
         return None
     return {
-        "median": float(np.median(values)),
-        "mean": float(np.mean(values)),
         "p05": float(np.percentile(values, 5)),
         "p95": float(np.percentile(values, 95)),
     }
 
 
-def add_contour_reference(ax, stats, ylabel_kind):
+def add_contour_band(ax, stats):
     if stats is None:
         return
 
@@ -155,29 +157,22 @@ def add_contour_reference(ax, stats, ylabel_kind):
     ax.axhspan(
         lower,
         upper,
-        color="#9E9E9E",
-        alpha=0.20,
+        color=CONTOUR_BAND_COLOR,
+        alpha=0.28,
         linewidth=0,
         label="contour p05-p95",
         zorder=0,
     )
-    ax.axhline(
-        stats["median"],
-        color="#555555",
-        linestyle="--",
-        linewidth=1.1,
-        label="contour median",
-        zorder=1,
-    )
+
     ax.text(
         0.02,
         0.94,
-        f"contour median={stats['median']:.3g}\ncontour p95={stats['p95']:.3g}",
+        f"contour p95={upper:.3g}",
         transform=ax.transAxes,
         ha="left",
         va="top",
         fontsize=6.5,
-        color="#333333",
+        color="#1B7837",
     )
 
 
@@ -215,9 +210,7 @@ def attack_metric_table(attacks):
             "n_steps": int(float(row["n_steps"])) if pd.notna(row.get("n_steps")) else np.nan,
             "is_step_sweep": is_step_sweep,
             "attack_median_displacement_a": float(np.median(disp)) if disp.size else np.nan,
-            "attack_p95_displacement_a": float(np.percentile(disp, 95)) if disp.size else np.nan,
             "attack_median_force_delta_ev_a": float(np.median(force)) if force.size else np.nan,
-            "attack_p95_force_delta_ev_a": float(np.percentile(force, 95)) if force.size else np.nan,
         })
 
     return pd.DataFrame(rows)
@@ -236,15 +229,13 @@ def draw_attack_panels(fig, axes, data, x_col, x_label, calculator, contour_rows
         ax_disp = axes[0, col]
         ax_force = axes[1, col]
 
-        add_contour_reference(ax_disp, disp_stats, "displacement")
-        add_contour_reference(ax_force, force_stats, "force")
+        add_contour_band(ax_disp, disp_stats)
+        add_contour_band(ax_force, force_stats)
 
         if not subset.empty:
             grouped = subset.groupby(x_col, as_index=False).agg({
                 "attack_median_displacement_a": "median",
-                "attack_p95_displacement_a": "median",
                 "attack_median_force_delta_ev_a": "median",
-                "attack_p95_force_delta_ev_a": "median",
             })
 
             ax_disp.plot(
@@ -252,22 +243,10 @@ def draw_attack_panels(fig, axes, data, x_col, x_label, calculator, contour_rows
                 grouped["attack_median_displacement_a"],
                 marker="o",
                 markersize=4,
-                linewidth=1.5,
+                linewidth=1.6,
                 color=color,
                 label="attack median",
                 zorder=3,
-            )
-            ax_disp.plot(
-                grouped[x_col],
-                grouped["attack_p95_displacement_a"],
-                marker="^",
-                markersize=3.5,
-                linewidth=1.0,
-                linestyle=":",
-                color=color,
-                alpha=0.75,
-                label="attack p95",
-                zorder=2,
             )
 
             ax_force.plot(
@@ -275,22 +254,10 @@ def draw_attack_panels(fig, axes, data, x_col, x_label, calculator, contour_rows
                 grouped["attack_median_force_delta_ev_a"],
                 marker="o",
                 markersize=4,
-                linewidth=1.5,
+                linewidth=1.6,
                 color=color,
                 label="attack median",
                 zorder=3,
-            )
-            ax_force.plot(
-                grouped[x_col],
-                grouped["attack_p95_force_delta_ev_a"],
-                marker="^",
-                markersize=3.5,
-                linewidth=1.0,
-                linestyle=":",
-                color=color,
-                alpha=0.75,
-                label="attack p95",
-                zorder=2,
             )
 
         ax_disp.set_title(attack)
@@ -306,11 +273,24 @@ def draw_attack_panels(fig, axes, data, x_col, x_label, calculator, contour_rows
             ax.grid(True, axis="y")
             ax.margins(x=0.04)
             if subset.empty:
-                ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha="center", va="center")
+                ax.text(
+                    0.5,
+                    0.5,
+                    "No data",
+                    transform=ax.transAxes,
+                    ha="center",
+                    va="center",
+                )
 
     handles, labels = axes[0, 0].get_legend_handles_labels()
     if handles:
-        fig.legend(handles, labels, loc="upper center", ncol=4, bbox_to_anchor=(0.5, 1.02))
+        fig.legend(
+            handles,
+            labels,
+            loc="upper center",
+            ncol=2,
+            bbox_to_anchor=(0.5, 1.02),
+        )
 
     fig.suptitle(title, y=1.08, fontsize=10)
 
@@ -343,7 +323,10 @@ def plot_contour_vs_attack(material_slug, calculator, contour_rows, attacks, out
             title=f"{material_slug} {calculator.upper()}: attacks vs contour baseline by epsilon",
         )
         fig.tight_layout(rect=[0, 0, 1, 0.95])
-        fig.savefig(material_dir / f"{calculator}_contour_vs_attack_by_epsilon.png", bbox_inches="tight")
+        fig.savefig(
+            material_dir / f"{calculator}_contour_vs_attack_by_epsilon.png",
+            bbox_inches="tight",
+        )
         plt.close(fig)
 
     step_data = table[table["is_step_sweep"]].copy()
@@ -360,19 +343,22 @@ def plot_contour_vs_attack(material_slug, calculator, contour_rows, attacks, out
             title=f"{material_slug} {calculator.upper()}: attacks vs contour baseline by n_steps",
         )
         fig.tight_layout(rect=[0, 0, 1, 0.95])
-        fig.savefig(material_dir / f"{calculator}_contour_vs_attack_by_n_steps.png", bbox_inches="tight")
+        fig.savefig(
+            material_dir / f"{calculator}_contour_vs_attack_by_n_steps.png",
+            bbox_inches="tight",
+        )
         plt.close(fig)
 
     disp_stats = contour_stats(contour_rows, "mean_displacement_from_initial_a")
     force_stats = contour_stats(contour_rows, "mean_force_delta_from_initial_ev_a")
-    energy_stats = contour_stats(contour_rows, "energy_deviation_mev_per_atom")
+    energy_values = contour_metric_values(contour_rows, "energy_deviation_mev_per_atom")
 
-    table["contour_displacement_median_a"] = np.nan if disp_stats is None else disp_stats["median"]
+    table["contour_displacement_p05_a"] = np.nan if disp_stats is None else disp_stats["p05"]
     table["contour_displacement_p95_a"] = np.nan if disp_stats is None else disp_stats["p95"]
-    table["contour_force_delta_median_ev_a"] = np.nan if force_stats is None else force_stats["median"]
+    table["contour_force_delta_p05_ev_a"] = np.nan if force_stats is None else force_stats["p05"]
     table["contour_force_delta_p95_ev_a"] = np.nan if force_stats is None else force_stats["p95"]
     table["contour_abs_energy_deviation_p95_mev_atom"] = (
-        np.nan if energy_stats is None else abs(energy_stats["p95"])
+        np.nan if energy_values.size == 0 else float(np.percentile(np.abs(energy_values), 95))
     )
 
     return table
@@ -394,8 +380,8 @@ def plot_six_panel(material_slug, calculator, rows, output_dir):
     for beta, metrics in loaded:
         color = color_for_beta(beta)
         label = format_beta(beta)
-
         step = metrics["step"]
+
         axes[0, 0].plot(step, metrics["energy_deviation_mev_per_atom"], lw=1.0, color=color, label=label)
         axes[0, 1].hist(
             metrics["energy_deviation_mev_per_atom"].dropna(),
@@ -487,8 +473,6 @@ def plot_mace_vs_uma(material_slug, all_rows, output_dir):
 def plot_global(records, output_dir):
     if records.empty:
         return
-
-    output_dir.mkdir(parents=True, exist_ok=True)
 
     usable = records[
         records["contour_displacement_p95_a"].notna()
