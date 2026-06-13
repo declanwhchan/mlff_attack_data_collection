@@ -44,6 +44,16 @@ PY
 
 python -u scripts_python/run_comprehensive.py --output-dir comprehensive_outputs
 
+if [ -f outputs_mace/contour/summary.csv ] || [ -f outputs_uma/contour/summary.csv ]; then
+  python -u scripts_python/contour_comprehensive.py \
+    --mace-contour-dir outputs_mace/contour \
+    --uma-contour-dir outputs_uma/contour \
+    --comprehensive-dir comprehensive_outputs \
+    --output-dir comprehensive_outputs/contour
+else
+  echo "No contour summaries found; skipping contour comparison plots."
+fi
+
 deactivate
 
 echo "Plotting complete."

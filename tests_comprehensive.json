@@ -5,6 +5,12 @@
   "relax_fmax": 0.01,
   "relax_max_steps": 300,
   "relax_optimizer": "LBFGS",
+  "contour_betas": [0.1, 0.05, 0.0],
+  "contour_steps": 500,
+  "contour_maxstep": 0.01,
+  "contour_angle_limit": 20,
+  "contour_seed": 12345,
+  "contour_energy_target": null,
   "models": [
     {
       "calculator": "mace",
