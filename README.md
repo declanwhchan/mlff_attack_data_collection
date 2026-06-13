@@ -43,10 +43,16 @@ Run the next step only after the previous step is fully completed. All steps are
 sbatch scripts_bash/setup.sh
 ```
 
-### 2. Run Main Jobs
+### 2.1 Run Main Jobs
 
 ```bash
 sbatch scripts_bash/main.sh
+```
+
+### 2.2 Run Contour Exploration (Optional)
+
+```bash
+sbatch scripts_bash/contour.sh
 ```
 
 ### 3. Generate Plots
@@ -71,17 +77,17 @@ tail -f slurm-<jobid>.out
 
 ### View Plots Without Downloading
 
-On the HPC, in SSH from the repo directory:
+In PowerShell:
+
+```bash
+ssh -L 8888:localhost:8888 <username>@fir.alliancecan.ca
+```
+
+Then, open a separate terminal and ensure you are in the same ```login<#>```. If not, then ```ssh login<#>``` and continue on HPC:
 
 ```bash
 cd mlff_attack_data_collection
 python -m http.server 8888
-```
-
-Then, open a separate terminal and ensure you are in the same login#:
-
-```bash
-ssh -L 8888:localhost:8888 <username>@fir.alliancecan.ca
 ```
 
 Open http://localhost:8888
