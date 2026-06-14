@@ -470,6 +470,66 @@ def plot_mace_vs_uma(material_slug, all_rows, output_dir):
     plt.close(fig)
 
 
+def axis_limit(values, pad=0.06):
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    values = values[values >= 0]
+
+    if values.size == 0:
+        return 1.0
+
+    upper = float(values.max())
+    if upper <= 0:
+        return 1.0
+
+    return upper * (1.0 + pad)
+
+
+def plot_one_global_panel(ax, data, x_col, y_col, xlabel, ylabel, title):
+    if data.empty:
+        ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha="center", va="center")
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        ax.set_title(title)
+        return
+
+    for calculator, color in CALC_COLORS.items():
+        subset = data[data["calculator"] == calculator]
+        if subset.empty:
+            continue
+
+        ax.scatter(
+            subset[x_col],
+            subset[y_col],
+            s=26,
+            color=color,
+            alpha=0.72,
+            edgecolor="white",
+            linewidth=0.35,
+            label=calculator.upper(),
+        )
+
+    x_max = axis_limit(data[x_col])
+    y_max = axis_limit(data[y_col])
+
+    line_max = min(x_max, y_max)
+    ax.plot(
+        [0, line_max],
+        [0, line_max],
+        color="#555555",
+        lw=1.0,
+        linestyle="--",
+        label="1:1",
+    )
+
+    ax.set_xlim(0, x_max)
+    ax.set_ylim(0, y_max)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.grid(True, alpha=0.35)
+
+
 def plot_global(records, output_dir):
     if records.empty:
         return
@@ -489,81 +549,25 @@ def plot_global(records, output_dir):
 
     fig, axes = plt.subplots(1, 2, figsize=(10.8, 4.4))
 
-    ax = axes[0]
-    if not displacement.empty:
-        for calculator, color in CALC_COLORS.items():
-            subset = displacement[displacement["calculator"] == calculator]
-            if subset.empty:
-                continue
-            ax.scatter(
-                subset["contour_displacement_p95_a"],
-                subset["attack_median_displacement_a"],
-                s=26,
-                color=color,
-                alpha=0.72,
-                edgecolor="white",
-                linewidth=0.35,
-                label=calculator.upper(),
-            )
+    plot_one_global_panel(
+        ax=axes[0],
+        data=displacement,
+        x_col="contour_displacement_p95_a",
+        y_col="attack_median_displacement_a",
+        xlabel=r"Contour p95 displacement ($\AA$)",
+        ylabel=r"Attack median displacement ($\AA$)",
+        title="Displacement",
+    )
 
-        max_value = float(np.nanmax([
-            displacement["contour_displacement_p95_a"].max(),
-            displacement["attack_median_displacement_a"].max(),
-        ]))
-        ax.plot(
-            [0, max_value],
-            [0, max_value],
-            color="#555555",
-            lw=1.0,
-            linestyle="--",
-            label="1:1",
-        )
-
-    ax.set_xlabel(r"Contour p95 displacement ($\AA$)")
-    ax.set_ylabel(r"Attack median displacement ($\AA$)")
-    ax.set_title("Displacement")
-    ax.grid(True, alpha=0.35)
-    ax.set_xlim(left=0)
-    ax.set_ylim(bottom=0)
-
-    ax = axes[1]
-    if not force.empty:
-        for calculator, color in CALC_COLORS.items():
-            subset = force[force["calculator"] == calculator]
-            if subset.empty:
-                continue
-            ax.scatter(
-                subset["contour_force_delta_p95_ev_a"],
-                subset["attack_median_force_delta_ev_a"],
-                s=26,
-                color=color,
-                alpha=0.72,
-                edgecolor="white",
-                linewidth=0.35,
-                label=calculator.upper(),
-            )
-
-        max_value = float(np.nanmax([
-            force["contour_force_delta_p95_ev_a"].max(),
-            force["attack_median_force_delta_ev_a"].max(),
-        ]))
-        ax.plot(
-            [0, max_value],
-            [0, max_value],
-            color="#555555",
-            lw=1.0,
-            linestyle="--",
-            label="1:1",
-        )
-
-    ax.set_xlabel(r"Contour p95 $\Delta$ force (eV/$\AA$)")
-    ax.set_ylabel(r"Attack median $\Delta$ force (eV/$\AA$)")
-    ax.set_title("Force delta")
-    ax.set_xscale("symlog", linthresh=0.1)
-    ax.set_yscale("symlog", linthresh=0.1)
-    ax.grid(True, which="both", alpha=0.35)
-    ax.set_xlim(left=0)
-    ax.set_ylim(bottom=0)
+    plot_one_global_panel(
+        ax=axes[1],
+        data=force,
+        x_col="contour_force_delta_p95_ev_a",
+        y_col="attack_median_force_delta_ev_a",
+        xlabel=r"Contour p95 $\Delta$ force (eV/$\AA$)",
+        ylabel=r"Attack median $\Delta$ force (eV/$\AA$)",
+        title="Force delta",
+    )
 
     handles, labels = axes[0].get_legend_handles_labels()
     if not handles:
