@@ -262,7 +262,7 @@ def draw_attack_panels(fig, axes, data, x_col, x_label, calculator, contour_rows
 
         ax_disp.set_title(attack)
         ax_disp.set_ylabel(r"Displacement ($\AA$)" if col == 0 else "")
-        ax_force.set_ylabel(r"Force delta (eV/$\AA$)" if col == 0 else "")
+        ax_force.set_ylabel(r"$\Delta$ force (eV/$\AA$)" if col == 0 else "")
         ax_force.set_xlabel(x_label)
 
         if x_col == "epsilon":
@@ -474,47 +474,118 @@ def plot_global(records, output_dir):
     if records.empty:
         return
 
-    usable = records[
+    displacement = records[
         records["contour_displacement_p95_a"].notna()
         & records["attack_median_displacement_a"].notna()
     ].copy()
 
-    if usable.empty:
+    force = records[
+        records["contour_force_delta_p95_ev_a"].notna()
+        & records["attack_median_force_delta_ev_a"].notna()
+    ].copy()
+
+    if displacement.empty and force.empty:
         return
 
-    fig, ax = plt.subplots(figsize=(5.8, 4.4))
+    fig, axes = plt.subplots(1, 2, figsize=(10.8, 4.4))
 
-    for calculator, color in CALC_COLORS.items():
-        subset = usable[usable["calculator"] == calculator]
-        if subset.empty:
-            continue
-        ax.scatter(
-            subset["contour_displacement_p95_a"],
-            subset["attack_median_displacement_a"],
-            s=26,
-            color=color,
-            alpha=0.72,
-            edgecolor="white",
-            linewidth=0.35,
-            label=calculator.upper(),
+    ax = axes[0]
+    if not displacement.empty:
+        for calculator, color in CALC_COLORS.items():
+            subset = displacement[displacement["calculator"] == calculator]
+            if subset.empty:
+                continue
+            ax.scatter(
+                subset["contour_displacement_p95_a"],
+                subset["attack_median_displacement_a"],
+                s=26,
+                color=color,
+                alpha=0.72,
+                edgecolor="white",
+                linewidth=0.35,
+                label=calculator.upper(),
+            )
+
+        max_value = float(np.nanmax([
+            displacement["contour_displacement_p95_a"].max(),
+            displacement["attack_median_displacement_a"].max(),
+        ]))
+        ax.plot(
+            [0, max_value],
+            [0, max_value],
+            color="#555555",
+            lw=1.0,
+            linestyle="--",
+            label="1:1",
         )
-
-    max_value = float(np.nanmax([
-        usable["contour_displacement_p95_a"].max(),
-        usable["attack_median_displacement_a"].max(),
-    ]))
-    ax.plot([0, max_value], [0, max_value], color="#555555", lw=1.0, linestyle="--", label="1:1")
 
     ax.set_xlabel(r"Contour p95 displacement ($\AA$)")
     ax.set_ylabel(r"Attack median displacement ($\AA$)")
-    ax.set_title("Attack displacement relative to contour baseline")
+    ax.set_title("Displacement")
     ax.grid(True, alpha=0.35)
-    ax.legend(loc="best")
     ax.set_xlim(left=0)
     ax.set_ylim(bottom=0)
 
-    fig.tight_layout()
-    fig.savefig(output_dir / "global_contour_vs_attack_displacement.png", bbox_inches="tight")
+    ax = axes[1]
+    if not force.empty:
+        for calculator, color in CALC_COLORS.items():
+            subset = force[force["calculator"] == calculator]
+            if subset.empty:
+                continue
+            ax.scatter(
+                subset["contour_force_delta_p95_ev_a"],
+                subset["attack_median_force_delta_ev_a"],
+                s=26,
+                color=color,
+                alpha=0.72,
+                edgecolor="white",
+                linewidth=0.35,
+                label=calculator.upper(),
+            )
+
+        max_value = float(np.nanmax([
+            force["contour_force_delta_p95_ev_a"].max(),
+            force["attack_median_force_delta_ev_a"].max(),
+        ]))
+        ax.plot(
+            [0, max_value],
+            [0, max_value],
+            color="#555555",
+            lw=1.0,
+            linestyle="--",
+            label="1:1",
+        )
+
+    ax.set_xlabel(r"Contour p95 $\Delta$ force (eV/$\AA$)")
+    ax.set_ylabel(r"Attack median $\Delta$ force (eV/$\AA$)")
+    ax.set_title("Force delta")
+    ax.set_xscale("symlog", linthresh=0.1)
+    ax.set_yscale("symlog", linthresh=0.1)
+    ax.grid(True, which="both", alpha=0.35)
+    ax.set_xlim(left=0)
+    ax.set_ylim(bottom=0)
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    if not handles:
+        handles, labels = axes[1].get_legend_handles_labels()
+
+    if handles:
+        fig.legend(
+            handles,
+            labels,
+            loc="upper center",
+            ncol=3,
+            bbox_to_anchor=(0.5, 1.03),
+            frameon=False,
+        )
+
+    fig.suptitle("Attack response relative to contour baseline", y=1.08, fontsize=11)
+    fig.tight_layout(rect=[0, 0, 1, 0.98])
+
+    fig.savefig(
+        output_dir / "global_contour_vs_attack_displacement_and_force.png",
+        bbox_inches="tight",
+    )
     plt.close(fig)
 
 

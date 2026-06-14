@@ -773,13 +773,13 @@ def make_per_attack_figures(records, output_dir):
         plots = [
             (
                 "delta_force_after_perturb_before_relax",
-                r"$\Delta$ force magnitude (eV/$\AA$)",
+                r"$\Delta$ force (eV/$\AA$)",
                 lambda row: force_delta_values(row["run_dir"], "before_forces.csv", "perturbed_forces.csv"),
                 f"{attack}: force change before relaxation",
             ),
             (
                 "delta_force_after_perturb_after_relax",
-                r"$\Delta$ force magnitude (eV/$\AA$)",
+                r"$\Delta$ force (eV/$\AA$)",
                 lambda row: force_delta_values(row["run_dir"], "before_forces.csv", "after_forces.csv"),
                 f"{attack}: force change after relaxation",
             ),
@@ -1269,7 +1269,7 @@ def main():
         records=epsilon_records,
         output_dir=args.output_dir,
         figure_name="figure_2_delta_force_by_epsilon",
-        ylabel=r"$\Delta$ force magnitude (eV/$\AA$)",
+        ylabel=r"$\Delta$ force (eV/$\AA$)",
         rows=[
             (
                 "After attack, before relaxation",
@@ -1294,7 +1294,7 @@ def main():
         records=epsilon_records,
         output_dir=args.output_dir,
         figure_name="figure_2_delta_force_whisker_span_by_epsilon",
-        ylabel=r"whisker span of $\Delta$ force magnitude (eV/$\AA$)",
+        ylabel=r"whisker span of $\Delta$ force (eV/$\AA$)",
         rows=[
             (
                 "After attack, before relaxation",
@@ -1371,7 +1371,7 @@ def main():
         records=n_step_records,
         output_dir=args.output_dir,
         figure_name="figure_5_delta_force_by_n_steps",
-        ylabel=r"$\Delta$ force magnitude (eV/$\AA$)",
+        ylabel=r"$\Delta$ force (eV/$\AA$)",
         epsilon=0.1,
         rows=[
             (
@@ -1397,7 +1397,7 @@ def main():
         records=n_step_records,
         output_dir=args.output_dir,
         figure_name="figure_5_delta_force_whisker_span_by_n_steps",
-        ylabel=r"whisker span of $\Delta$ force magnitude (eV/$\AA$)",
+        ylabel=r"whisker span of $\Delta$ force (eV/$\AA$)",
         epsilon=0.1,
         rows=[
             (
@@ -1492,7 +1492,7 @@ def main():
                 records=material_epsilon_records,
                 output_dir=material_output_dir,
                 figure_name="figure_2_delta_force_by_epsilon",
-                ylabel=r"$\Delta$ force magnitude (eV/$\AA$)",
+                ylabel=r"$\Delta$ force (eV/$\AA$)",
                 rows=[
                     (
                         "After attack, before relaxation",
@@ -1545,7 +1545,7 @@ def main():
                 records=material_n_step_records,
                 output_dir=material_output_dir,
                 figure_name="figure_5_delta_force_by_n_steps",
-                ylabel=r"$\Delta$ force magnitude (eV/$\AA$)",
+                ylabel=r"$\Delta$ force (eV/$\AA$)",
                 epsilon=0.1,
                 rows=[
                     (
