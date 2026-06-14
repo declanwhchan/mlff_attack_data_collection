@@ -24,6 +24,24 @@ CONTOUR_BAND_COLOR = "#66C2A5"
 ATTACK_ORDER = ["FGSM", "I-FGSM", "PGD"]
 
 
+def add_panel_label(ax, label):
+    ax.text(
+        -0.13,
+        1.08,
+        label,
+        transform=ax.transAxes,
+        fontsize=10,
+        fontweight="bold",
+        va="top",
+        ha="left",
+    )
+
+
+def label_axes(axes):
+    for index, ax in enumerate(np.asarray(axes).ravel()):
+        add_panel_label(ax, chr(ord("A") + index))
+
+
 def apply_style():
     plt.rcParams.update({
         "figure.facecolor": "white",
@@ -216,12 +234,12 @@ def attack_metric_table(attacks):
     return pd.DataFrame(rows)
 
 
-def draw_attack_panels(fig, axes, data, x_col, x_label, calculator, contour_rows, title):
+def draw_attack_panels(fig, axes, data, x_col, x_label, calculator, contour_rows, title, attacks_to_plot):
     disp_stats = contour_stats(contour_rows, "mean_displacement_from_initial_a")
     force_stats = contour_stats(contour_rows, "mean_force_delta_from_initial_ev_a")
     color = CALC_COLORS.get(calculator, "#333333")
 
-    for col, attack in enumerate(ATTACK_ORDER):
+    for col, attack in enumerate(attacks_to_plot):
         subset = data[data["attack_label"] == attack].copy()
         subset = subset[np.isfinite(subset[x_col])]
         subset = subset.sort_values(x_col)
@@ -321,7 +339,9 @@ def plot_contour_vs_attack(material_slug, calculator, contour_rows, attacks, out
             calculator=calculator,
             contour_rows=contour_rows,
             title=f"{material_slug} {calculator.upper()}: attacks vs contour baseline by epsilon",
+            attacks_to_plot=ATTACK_ORDER,
         )
+        label_axes(axes)
         fig.tight_layout(rect=[0, 0, 1, 0.95])
         fig.savefig(
             material_dir / f"{calculator}_contour_vs_attack_by_epsilon.png",
@@ -331,7 +351,7 @@ def plot_contour_vs_attack(material_slug, calculator, contour_rows, attacks, out
 
     step_data = table[table["is_step_sweep"]].copy()
     if not step_data.empty:
-        fig, axes = plt.subplots(2, 3, figsize=(8.8, 4.8), sharex=False, sharey="row")
+        fig, axes = plt.subplots(2, 2, figsize=(6.4, 4.8), sharex=False, sharey="row")
         draw_attack_panels(
             fig=fig,
             axes=axes,
@@ -341,7 +361,9 @@ def plot_contour_vs_attack(material_slug, calculator, contour_rows, attacks, out
             calculator=calculator,
             contour_rows=contour_rows,
             title=f"{material_slug} {calculator.upper()}: attacks vs contour baseline by n_steps",
+            attacks_to_plot=["I-FGSM", "PGD"],
         )
+        label_axes(axes)
         fig.tight_layout(rect=[0, 0, 1, 0.95])
         fig.savefig(
             material_dir / f"{calculator}_contour_vs_attack_by_n_steps.png",
@@ -415,6 +437,7 @@ def plot_six_panel(material_slug, calculator, rows, output_dir):
     axes[0, 2].legend(loc="upper right")
     axes[1, 2].legend(loc="upper right")
 
+    label_axes(axes)
     fig.suptitle(f"{material_slug} {calculator.upper()} contour exploration", fontsize=10)
     fig.tight_layout(rect=[0, 0, 1, 0.96])
 
@@ -461,6 +484,7 @@ def plot_mace_vs_uma(material_slug, all_rows, output_dir):
         ax.grid(True, alpha=0.35)
 
     axes[0, 0].legend(loc="best")
+    label_axes(axes)
     fig.suptitle(f"{material_slug}: MACE vs UMA contour exploration", fontsize=10)
     fig.tight_layout(rect=[0, 0, 1, 0.95])
 
@@ -566,7 +590,7 @@ def plot_global(records, output_dir):
         y_col="attack_median_force_delta_ev_a",
         xlabel=r"Contour p95 $\Delta$ force (eV/$\AA$)",
         ylabel=r"Attack median $\Delta$ force (eV/$\AA$)",
-        title="Force delta",
+        title=r"$\Delta$ force",
     )
 
     handles, labels = axes[0].get_legend_handles_labels()
@@ -583,7 +607,8 @@ def plot_global(records, output_dir):
             frameon=False,
         )
 
-    fig.suptitle("Attack response relative to contour baseline", y=1.08, fontsize=11)
+    label_axes(axes)
+    fig.suptitle("Attack vs contour baseline", y=1.08, fontsize=11)
     fig.tight_layout(rect=[0, 0, 1, 0.98])
 
     fig.savefig(
