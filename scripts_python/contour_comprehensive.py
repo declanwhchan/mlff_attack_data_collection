@@ -214,11 +214,41 @@ def attack_metric_table(attacks):
     rows = []
 
     for _, row in attacks.iterrows():
-        disp = attack_displacement(row, "before_forces.csv", "perturbed_forces.csv")
-        force = attack_force_delta(row, "before_forces.csv", "perturbed_forces.csv")
+        relaxation_before_attack_disp = attack_displacement(
+            row,
+            "before_forces.csv",
+            "perturbed_forces.csv",
+        )
+        relaxation_before_attack_force = attack_force_delta(
+            row,
+            "before_forces.csv",
+            "perturbed_forces.csv",
+        )
+
+        relaxation_after_attack_disp = attack_displacement(
+            row,
+            "before_forces.csv",
+            "after_forces.csv",
+        )
+        relaxation_after_attack_force = attack_force_delta(
+            row,
+            "before_forces.csv",
+            "after_forces.csv",
+        )
 
         run_id = str(row.get("run_id", ""))
         is_step_sweep = "_steps" in run_id
+
+        relaxation_before_attack_median_displacement = (
+            float(np.median(relaxation_before_attack_disp))
+            if relaxation_before_attack_disp.size
+            else np.nan
+        )
+        relaxation_before_attack_median_force_delta = (
+            float(np.median(relaxation_before_attack_force))
+            if relaxation_before_attack_force.size
+            else np.nan
+        )
 
         rows.append({
             "material_slug": row.get("material_slug"),
@@ -227,8 +257,23 @@ def attack_metric_table(attacks):
             "epsilon": float(row["epsilon"]) if pd.notna(row.get("epsilon")) else np.nan,
             "n_steps": int(float(row["n_steps"])) if pd.notna(row.get("n_steps")) else np.nan,
             "is_step_sweep": is_step_sweep,
-            "attack_median_displacement_a": float(np.median(disp)) if disp.size else np.nan,
-            "attack_median_force_delta_ev_a": float(np.median(force)) if force.size else np.nan,
+
+            "relaxation_before_attack_median_displacement_a": relaxation_before_attack_median_displacement,
+            "relaxation_before_attack_median_force_delta_ev_a": relaxation_before_attack_median_force_delta,
+            "relaxation_after_attack_median_displacement_a": (
+                float(np.median(relaxation_after_attack_disp))
+                if relaxation_after_attack_disp.size
+                else np.nan
+            ),
+            "relaxation_after_attack_median_force_delta_ev_a": (
+                float(np.median(relaxation_after_attack_force))
+                if relaxation_after_attack_force.size
+                else np.nan
+            ),
+
+            # Keep existing per-material plots unchanged.
+            "attack_median_displacement_a": relaxation_before_attack_median_displacement,
+            "attack_median_force_delta_ev_a": relaxation_before_attack_median_force_delta,
         })
 
     return pd.DataFrame(rows)
@@ -432,6 +477,8 @@ def plot_six_panel(material_slug, calculator, rows, output_dir):
         ax.set_ylabel(ylabel)
         ax.grid(True, alpha=0.35)
 
+    axes[1, 1].set_yscale("symlog", linthresh=1e-3)
+    
     axes[0, 0].axhline(0, color="#222222", lw=0.8, alpha=0.65)
     axes[0, 1].legend(loc="upper right")
     axes[0, 2].legend(loc="upper right")
@@ -554,18 +601,15 @@ def plot_one_global_panel(ax, data, x_col, y_col, xlabel, ylabel, title):
     ax.grid(True, alpha=0.35)
 
 
-def plot_global(records, output_dir):
-    if records.empty:
-        return
-
+def plot_global_relaxation_state(records, output_dir, displacement_col, force_col, title, output_name):
     displacement = records[
         records["contour_displacement_p95_a"].notna()
-        & records["attack_median_displacement_a"].notna()
+        & records[displacement_col].notna()
     ].copy()
 
     force = records[
         records["contour_force_delta_p95_ev_a"].notna()
-        & records["attack_median_force_delta_ev_a"].notna()
+        & records[force_col].notna()
     ].copy()
 
     if displacement.empty and force.empty:
@@ -577,9 +621,9 @@ def plot_global(records, output_dir):
         ax=axes[0],
         data=displacement,
         x_col="contour_displacement_p95_a",
-        y_col="attack_median_displacement_a",
+        y_col=displacement_col,
         xlabel=r"Contour p95 displacement ($\AA$)",
-        ylabel=r"Attack median displacement ($\AA$)",
+        ylabel=r"Median displacement ($\AA$)",
         title="Displacement",
     )
 
@@ -587,9 +631,9 @@ def plot_global(records, output_dir):
         ax=axes[1],
         data=force,
         x_col="contour_force_delta_p95_ev_a",
-        y_col="attack_median_force_delta_ev_a",
+        y_col=force_col,
         xlabel=r"Contour p95 $\Delta$ force (eV/$\AA$)",
-        ylabel=r"Attack median $\Delta$ force (eV/$\AA$)",
+        ylabel=r"Median $\Delta$ force (eV/$\AA$)",
         title=r"$\Delta$ force",
     )
 
@@ -608,14 +652,148 @@ def plot_global(records, output_dir):
         )
 
     label_axes(axes)
-    fig.suptitle("Attack vs contour baseline", y=1.08, fontsize=11)
+    fig.suptitle(f"{title} vs contour exploration", y=1.08, fontsize=11)
     fig.tight_layout(rect=[0, 0, 1, 0.98])
+    fig.savefig(output_dir / output_name, bbox_inches="tight")
+    plt.close(fig)
 
+
+def plot_relaxation_attack_grid_panel(ax, data, y_col, attack_label, row_label):
+    subset = data[
+        (data["attack_label"] == attack_label)
+        & data["contour_displacement_p95_a"].notna()
+        & data[y_col].notna()
+    ].copy()
+
+    if subset.empty:
+        ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha="center", va="center")
+        ax.set_title(attack_label)
+        ax.set_xlabel(r"Contour p95 displacement ($\AA$)")
+        ax.set_ylabel(r"Median displacement ($\AA$)" if row_label else "")
+        return
+
+    for calculator, color in CALC_COLORS.items():
+        calc_subset = subset[subset["calculator"] == calculator]
+        if calc_subset.empty:
+            continue
+
+        ax.scatter(
+            calc_subset["contour_displacement_p95_a"],
+            calc_subset[y_col],
+            s=24,
+            color=color,
+            alpha=0.72,
+            edgecolor="white",
+            linewidth=0.35,
+            label=calculator.upper(),
+        )
+
+    x_max = axis_limit(subset["contour_displacement_p95_a"])
+    y_max = axis_limit(subset[y_col])
+    line_max = min(x_max, y_max)
+
+    ax.plot(
+        [0, line_max],
+        [0, line_max],
+        color="#555555",
+        lw=1.0,
+        linestyle="--",
+        label="1:1",
+    )
+
+    ax.set_xlim(0, x_max)
+    ax.set_ylim(0, y_max)
+    ax.set_title(attack_label)
+    ax.set_xlabel(r"Contour p95 displacement ($\AA$)")
+    ax.set_ylabel(r"Median displacement ($\AA$)" if row_label else "")
+    ax.grid(True, alpha=0.35)
+
+
+def plot_global_relaxation_attack_grid(records, output_dir):
+    if records.empty:
+        return
+
+    fig, axes = plt.subplots(2, 3, figsize=(12.0, 7.2), sharex=False, sharey=False)
+
+    rows = [
+        (
+            "Relaxation before attack",
+            "relaxation_before_attack_median_displacement_a",
+        ),
+        (
+            "Relaxation after attack",
+            "relaxation_after_attack_median_displacement_a",
+        ),
+    ]
+
+    for row_index, (row_title, displacement_col) in enumerate(rows):
+        for col_index, attack in enumerate(ATTACK_ORDER):
+            ax = axes[row_index, col_index]
+            plot_relaxation_attack_grid_panel(
+                ax=ax,
+                data=records,
+                y_col=displacement_col,
+                attack_label=attack,
+                row_label=(col_index == 0),
+            )
+
+            if col_index == 0:
+                ax.text(
+                    -0.32,
+                    0.5,
+                    row_title,
+                    transform=ax.transAxes,
+                    rotation=90,
+                    ha="center",
+                    va="center",
+                    fontsize=9,
+                    fontweight="bold",
+                )
+
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    if handles:
+        fig.legend(
+            handles,
+            labels,
+            loc="upper center",
+            ncol=3,
+            bbox_to_anchor=(0.5, 1.02),
+            frameon=False,
+        )
+
+    label_axes(axes)
+    fig.suptitle("Relaxation vs contour exploration by attack type", y=1.06, fontsize=11)
+    fig.tight_layout(rect=[0.04, 0, 1, 0.98])
     fig.savefig(
-        output_dir / "global_contour_vs_attack_displacement_and_force.png",
+        output_dir / "global_relaxation_vs_contour_exploration_by_attack_type.png",
         bbox_inches="tight",
     )
     plt.close(fig)
+
+
+def plot_global(records, output_dir):
+    if records.empty:
+        return
+
+    plot_global_relaxation_state(
+        records=records,
+        output_dir=output_dir,
+        displacement_col="relaxation_before_attack_median_displacement_a",
+        force_col="relaxation_before_attack_median_force_delta_ev_a",
+        title="Relaxation before attack",
+        output_name="global_relaxation_before_attack_vs_contour_exploration.png",
+    )
+
+    plot_global_relaxation_state(
+        records=records,
+        output_dir=output_dir,
+        displacement_col="relaxation_after_attack_median_displacement_a",
+        force_col="relaxation_after_attack_median_force_delta_ev_a",
+        title="Relaxation after attack",
+        output_name="global_relaxation_after_attack_vs_contour_exploration.png",
+    )
+
+    plot_global_relaxation_attack_grid(records, output_dir)
 
 
 def main():
