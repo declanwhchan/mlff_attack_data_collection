@@ -3,6 +3,7 @@
 #SBATCH --time=01:00:00
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=4
+#SBATCH --output=plot-%j.out
 
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$(pwd)}"

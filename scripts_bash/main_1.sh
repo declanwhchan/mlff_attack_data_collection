@@ -4,6 +4,7 @@
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=8
 #SBATCH --array=1-2
+#SBATCH --output=main-1-%j.out
 
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$(pwd)}"

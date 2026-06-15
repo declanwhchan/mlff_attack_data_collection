@@ -4,6 +4,7 @@
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=4
 #SBATCH --array=1-40%10
+#SBATCH --output=contour-%j.out
 
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
