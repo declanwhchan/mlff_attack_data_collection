@@ -1,20 +1,42 @@
 ## MLFF Attack Data Collection
 
-This repo runs the HPC data-collection workflow for the main `mlff_attack` package:
+This repo runs an HPC data-collection workflow from the `mlff_attack` package:
 
 [TRustworthy-AI-Tools-for-Science/mlff_attack](https://github.com/TRustworthy-AI-Tools-for-Science/mlff_attack)
 
-**HPC setup reminder:** before running the workflow, make sure the HPC has `~/project/.venv-mace` and `~/project/.venv-uma` created on the cluster, with the main `mlff_attack` repo installed into both.
+## Setup On HPC
 
-## Reminders:
+This repo expects two separate Python environments because MACE and UMA have different dependency stacks.
 
-### Sync Local Changes To HPC
+Expected folder layout on HPC after the following 3 steps:
 
-Before running or submitting jobs on the HPC, in SFTP, push/sync all local changes from this computer so the HPC copy is up to date.
+```bash
+~/project/
+├── mlff_attack/
+├── mlff_attack_data_collection/
+├── .venv-mace/
+└── .venv-uma/
+```
 
-### Create `.env` On HPC
+### 1. Clone Repos
 
-In the HPC repo directory, create `.env` and enter the following:
+```bash
+cd ~/project
+
+git clone https://github.com/TRustworthy-AI-Tools-for-Science/mlff_attack.git
+git clone https://github.com/declanwhchan/mlff_attack_data_collection.git
+```
+
+### 2. Create Python Environments
+
+```bash
+cd ~/project/mlff_attack_data_collection
+bash scripts_bash/dependencies.sh
+```
+
+### 3. Create `.env`
+
+Create `.env` in `mlff_attack_data_collection` and enter the following:
 
 ```bash
 MP_API_KEY=your_materials_project_key
@@ -31,7 +53,7 @@ chmod 600 .env
 
 # Workflow
 
-Scripts ending in `_1.sh` are the single-test versions of the same workflow, so you can run `setup_1.sh` and `main_1.sh` for a quick check before running the full collection.
+Scripts ending in `_1.sh` are the single-test versions of the same workflow, so you can run `setup_1.sh` and `main_1.sh` for a quick check before running the full collection. **Reminder to sync local changes to HPC:** Before running or submitting jobs on the HPC, in SFTP, push/sync all local changes from this computer so the HPC copy is up to date.
 
 ## Data Collection Jobs
 
