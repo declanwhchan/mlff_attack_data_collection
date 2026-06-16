@@ -3,7 +3,7 @@ __pycache__/
 .env
 
 outputs*/
-comprehensive_outputs/
+outputs_comprehensive/
 array_summaries/
 material_tests/
 *.png
