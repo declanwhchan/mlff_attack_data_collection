@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import argparse
+import csv
 import math
+import re
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
 import numpy as np
 import pandas as pd
+from ase.io import read as read_structure
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -126,6 +129,102 @@ def slug_text(value):
             previous_underscore = True
 
     return "".join(chars).strip("_")
+
+
+def material_file_slug(text):
+    text = str(text).strip().lower()
+    text = re.sub(r"[^a-z0-9]+", "_", text)
+    return text.strip("_")
+
+
+def read_material_rows(path):
+    path = Path(path)
+    if not path.exists():
+        return []
+
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        return list(csv.DictReader(handle))
+
+
+def structure_path_for_material(row, structures_dir):
+    mpid = str(row["mpid"]).strip()
+    label = material_file_slug(row["material_label"])
+    return Path(structures_dir) / f"{mpid}_{label}.cif"
+
+
+def make_structure_summary(materials_path, structures_dir, output_dir):
+    material_rows = read_material_rows(materials_path)
+    if not material_rows:
+        return
+
+    rows = []
+    missing = []
+
+    for material in material_rows:
+        path = structure_path_for_material(material, structures_dir)
+        if not path.exists():
+            missing.append({
+                "category": material.get("category"),
+                "material_label": material.get("material_label"),
+                "mpid": material.get("mpid"),
+                "reason": f"Missing structure file: {path}",
+            })
+            continue
+
+        atoms = read_structure(path)
+        symbols = atoms.get_chemical_symbols()
+        elements = sorted(set(symbols))
+        cell_lengths = atoms.cell.lengths()
+        cell_angles = atoms.cell.angles()
+        volume = float(atoms.get_volume())
+        n_atoms = len(atoms)
+
+        rows.append({
+            "category": material.get("category"),
+            "material_label": material.get("material_label"),
+            "formula": material.get("formula"),
+            "mpid": material.get("mpid"),
+            "n_atoms": n_atoms,
+            "n_elements": len(elements),
+            "elements": ";".join(elements),
+            "volume_a3": volume,
+            "volume_per_atom_a3": volume / n_atoms if n_atoms else np.nan,
+            "cell_a": float(cell_lengths[0]),
+            "cell_b": float(cell_lengths[1]),
+            "cell_c": float(cell_lengths[2]),
+            "cell_alpha": float(cell_angles[0]),
+            "cell_beta": float(cell_angles[1]),
+            "cell_gamma": float(cell_angles[2]),
+        })
+
+    output_dir = Path(output_dir)
+    if rows:
+        summary = pd.DataFrame(rows)
+        summary.to_csv(output_dir / "materials_summary_combined.csv", index=False)
+
+        by_category = summary.groupby("category", as_index=False).agg({
+            "material_label": "count",
+            "n_atoms": ["median", "min", "max"],
+            "n_elements": "median",
+            "volume_per_atom_a3": ["median", "min", "max"],
+        })
+
+        by_category.columns = [
+            "category",
+            "n_materials",
+            "median_atoms",
+            "min_atoms",
+            "max_atoms",
+            "median_n_elements",
+            "median_volume_per_atom_a3",
+            "min_volume_per_atom_a3",
+            "max_volume_per_atom_a3",
+        ]
+
+        by_category.to_csv(output_dir / "structure_summary_by_category.csv", index=False)
+
+    if missing:
+        pd.DataFrame(missing).to_csv(output_dir / "structure_summary_missing.csv", index=False)
 
 
 def material_info(row, run_dir):
@@ -1532,9 +1631,13 @@ def main():
     parser.add_argument("--mace-dir", default=BASE_DIR / "outputs_mace", type=Path)
     parser.add_argument("--uma-dir", default=BASE_DIR / "outputs_uma", type=Path)
     parser.add_argument("--output-dir", default=BASE_DIR / "comprehensive_outputs", type=Path)
+    parser.add_argument("--materials", default=BASE_DIR / "tests_materials.csv", type=Path)
+    parser.add_argument("--structures-dir", default=BASE_DIR / "mp_structures", type=Path)
     args = parser.parse_args()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
+
+    make_structure_summary(args.materials, args.structures_dir, args.output_dir)
 
     mace_records, mace_missing = load_summary(
         args.mace_dir / "summary.csv",
@@ -1873,8 +1976,6 @@ def main():
         ],
     )
 
-    per_attack_missing = make_per_attack_figures(epsilon_records, args.output_dir)
-
     for material_slug, material_records in records.groupby("material_slug"):
         material_output_dir = args.output_dir / str(material_slug)
         material_output_dir.mkdir(parents=True, exist_ok=True)
@@ -2009,7 +2110,6 @@ def main():
     missing_rows.extend(convergence_force_after_missing)
     missing_rows.extend(force_displacement_before_missing)
     missing_rows.extend(force_displacement_after_missing)
-    missing_rows.extend(per_attack_missing)
 
     pd.DataFrame(missing_rows).to_csv(
         args.output_dir / "missing_data_report.csv",
@@ -2018,6 +2118,7 @@ def main():
 
     print(f"Saved comprehensive plots to {args.output_dir}")
     print(f"Saved combined dataset to {args.output_dir / 'combined_dataset.csv'}")
+    print(f"Saved structure summary to {args.output_dir / 'materials_summary_combined.csv'}")
     print("Main publication figures:")
     print(f"  {args.output_dir / 'figure_1_convergence_by_epsilon.png'}")
     print(f"  {args.output_dir / 'figure_2_delta_force_by_epsilon.png'}")
