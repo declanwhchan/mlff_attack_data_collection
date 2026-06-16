@@ -65,15 +65,12 @@ Run the next step only after the previous step is fully completed. All steps are
 sbatch scripts_bash/setup.sh
 ```
 
-### 2.1 Run Main Jobs
+### 2 Run Main Jobs
 
 ```bash
 sbatch scripts_bash/main.sh
-```
 
-### 2.2 Run Contour Exploration (Optional)
-
-```bash
+# Run contour exploration (OPTIONAL)
 sbatch scripts_bash/contour.sh
 ```
 
@@ -81,6 +78,9 @@ sbatch scripts_bash/contour.sh
 
 ```bash
 sbatch scripts_bash/plot.sh
+
+# Visualize initial atomic structures (OPTIONAL)
+sbatch scripts_bash/visualize.sh
 ```
 
 ### Check Status of Jobs
