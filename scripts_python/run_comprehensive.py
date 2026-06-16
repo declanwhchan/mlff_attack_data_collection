@@ -451,6 +451,11 @@ def add_panel_label(ax, label):
     )
 
 
+def label_axes(axes):
+    for index, ax in enumerate(np.asarray(axes).ravel()):
+        add_panel_label(ax, chr(ord("A") + index))
+
+
 def finite_xy(data, x_col, y_col):
     clean = data[[x_col, y_col]].replace([np.inf, -np.inf], np.nan).dropna()
     return clean[x_col].to_numpy(dtype=float), clean[y_col].to_numpy(dtype=float)
