@@ -495,7 +495,7 @@ def add_std_ellipse(ax, x, y, color, n_std, label=None):
     ax.add_patch(ellipse)
 
 
-def epsilon_bubble_sizes(values):
+def bubble_sizes(values):
     values = pd.Series(values).replace([np.inf, -np.inf], np.nan).dropna()
     if values.empty:
         return np.array([])
@@ -510,133 +510,6 @@ def epsilon_bubble_sizes(values):
     return 35.0 + 115.0 * scaled
 
 
-def convergence_displacement_rows(records, displacement_getter, step_col, missing_rows, figure_name):
-    rows = []
-
-    for _, row in records.iterrows():
-        displacements, reason = displacement_getter(row)
-        if displacements is None:
-            missing_rows.append({
-                "figure": figure_name,
-                "run_id": row["run_id"],
-                "reason": reason,
-            })
-            continue
-
-        step_value = row.get(step_col)
-        if step_value is None or pd.isna(step_value):
-            missing_rows.append({
-                "figure": figure_name,
-                "run_id": row["run_id"],
-                "reason": f"Missing {step_col}",
-            })
-            continue
-
-        rows.append({
-            "run_id": row["run_id"],
-            "material_slug": row["material_slug"],
-            "calculator": row["calculator"],
-            "attack_label": row["attack_label"],
-            "epsilon": row["epsilon"],
-            "n_steps": row["n_steps"],
-            "median_displacement_a": float(np.median(displacements)),
-            "relax_steps": float(step_value),
-        })
-
-    return pd.DataFrame(rows)
-
-
-def draw_convergence_displacement_panel(ax, data, attack, show_ylabel):
-    subset = data[data["attack_label"] == attack].copy()
-
-    if subset.empty:
-        ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha="center", va="center")
-        ax.set_title(attack)
-        ax.set_xlabel(r"Median displacement ($\AA$)")
-        if show_ylabel:
-            ax.set_ylabel("Relaxation steps")
-        ax.grid(True, alpha=0.35)
-        return
-
-    for calculator, color in CALCULATOR_COLORS.items():
-        calc_data = subset[subset["calculator"] == calculator].copy()
-        if calc_data.empty:
-            continue
-
-        sizes = epsilon_bubble_sizes(calc_data["epsilon"])
-        ax.scatter(
-            calc_data["median_displacement_a"],
-            calc_data["relax_steps"],
-            s=sizes,
-            color=color,
-            alpha=0.58,
-            edgecolor="white",
-            linewidth=0.45,
-            label=calculator.upper(),
-        )
-
-        x, y = finite_xy(calc_data, "median_displacement_a", "relax_steps")
-        add_std_ellipse(ax, x, y, color, n_std=1, label=f"{calculator.upper()} 1 std")
-        add_std_ellipse(ax, x, y, color, n_std=2, label=f"{calculator.upper()} 2 std")
-
-    ax.set_title(attack)
-    ax.set_xlabel(r"Median displacement ($\AA$)")
-    if show_ylabel:
-        ax.set_ylabel("Relaxation steps")
-    ax.grid(True, alpha=0.35)
-    ax.margins(x=0.08, y=0.10)
-
-
-def make_convergence_displacement_bubble_ellipse_figure(
-    records,
-    output_dir,
-    figure_name,
-    title,
-    step_col,
-    displacement_getter,
-):
-    missing_rows = []
-    data = convergence_displacement_rows(
-        records=records,
-        displacement_getter=displacement_getter,
-        step_col=step_col,
-        missing_rows=missing_rows,
-        figure_name=figure_name,
-    )
-
-    if data.empty:
-        return missing_rows
-
-    fig, axes = plt.subplots(1, 3, figsize=(11.2, 3.8), sharex=False, sharey=False)
-
-    for col_index, attack in enumerate(ATTACK_ORDER):
-        draw_convergence_displacement_panel(
-            axes[col_index],
-            data,
-            attack,
-            show_ylabel=(col_index == 0),
-        )
-
-    handles, labels = axes[0].get_legend_handles_labels()
-    if handles:
-        fig.legend(
-            handles,
-            labels,
-            loc="upper center",
-            ncol=4,
-            bbox_to_anchor=(0.5, 1.06),
-            frameon=False,
-        )
-
-    label_axes(axes)
-    fig.suptitle(title, y=1.12, fontsize=11)
-    fig.tight_layout(rect=[0, 0, 1, 0.98])
-    save_figure(fig, output_dir / figure_name)
-    plt.close(fig)
-
-    return missing_rows
-
-
 def metric_median(row, getter):
     values, reason = getter(row)
     if values is None:
@@ -644,12 +517,20 @@ def metric_median(row, getter):
     return float(np.median(values)), None
 
 
-def parametric_rows(records, x_getter, y_getter, missing_rows, figure_name):
+def scalar_metric(row, column):
+    value = row.get(column)
+    if value is None or pd.isna(value):
+        return None, f"Missing {column}"
+    return float(value), None
+
+
+def parametric_rows(records, x_getter, y_getter, bubble_col, missing_rows, figure_name):
     rows = []
 
     for _, row in records.iterrows():
         x_value, x_reason = x_getter(row)
         y_value, y_reason = y_getter(row)
+        bubble_value = row.get(bubble_col)
 
         if x_value is None or y_value is None:
             missing_rows.append({
@@ -659,11 +540,19 @@ def parametric_rows(records, x_getter, y_getter, missing_rows, figure_name):
             })
             continue
 
+        if bubble_value is None or pd.isna(bubble_value):
+            missing_rows.append({
+                "figure": figure_name,
+                "run_id": row["run_id"],
+                "reason": f"Missing {bubble_col}",
+            })
+            continue
+
         rows.append({
             "run_id": row["run_id"],
             "calculator": row["calculator"],
             "attack_label": row["attack_label"],
-            "epsilon": row["epsilon"],
+            "bubble": float(bubble_value),
             "x": x_value,
             "y": y_value,
         })
@@ -691,7 +580,7 @@ def draw_parametric_panel(ax, data, attack, x_label, y_label, show_ylabel):
         ax.scatter(
             calc_data["x"],
             calc_data["y"],
-            s=epsilon_bubble_sizes(calc_data["epsilon"]),
+            s=bubble_sizes(calc_data["bubble"]),
             color=color,
             alpha=0.58,
             edgecolor="white",
@@ -711,52 +600,198 @@ def draw_parametric_panel(ax, data, attack, x_label, y_label, show_ylabel):
     ax.margins(x=0.08, y=0.10)
 
 
-def make_parametric_bubble_ellipse_figure(
+def make_parametric_state_figure(
     records,
     output_dir,
     figure_name,
     title,
     x_label,
     y_label,
-    x_getter,
-    y_getter,
+    bubble_label,
+    attacks_to_plot,
+    x_getters,
+    y_getters,
 ):
     missing_rows = []
-    data = parametric_rows(records, x_getter, y_getter, missing_rows, figure_name)
+    rows = [
+        ("After attack, before relaxation", x_getters[0], y_getters[0]),
+        ("After attack, after relaxation", x_getters[1], y_getters[1]),
+    ]
 
-    if data.empty:
-        return missing_rows
+    fig, axes = plt.subplots(
+        2,
+        len(attacks_to_plot),
+        figsize=(4.0 * len(attacks_to_plot), 7.0),
+        sharex=False,
+        sharey=False,
+    )
 
-    fig, axes = plt.subplots(1, 3, figsize=(11.2, 3.8), sharex=False, sharey=False)
+    axes = np.asarray(axes)
+    if axes.ndim == 1:
+        axes = axes.reshape(2, 1)
 
-    for col_index, attack in enumerate(ATTACK_ORDER):
-        draw_parametric_panel(
-            axes[col_index],
-            data,
-            attack,
-            x_label=x_label,
-            y_label=y_label,
-            show_ylabel=(col_index == 0),
+    panel_index = 0
+    any_data = False
+
+    for row_index, (row_title, x_getter, y_getter) in enumerate(rows):
+        data = parametric_rows(
+            records=records,
+            x_getter=x_getter,
+            y_getter=y_getter,
+            bubble_col="epsilon" if "epsilon" in figure_name else "n_steps",
+            missing_rows=missing_rows,
+            figure_name=figure_name,
         )
 
-    handles, labels = axes[0].get_legend_handles_labels()
+        if not data.empty:
+            any_data = True
+
+        for col_index, attack in enumerate(attacks_to_plot):
+            ax = axes[row_index, col_index]
+            draw_parametric_panel(
+                ax=ax,
+                data=data,
+                attack=attack,
+                x_label=x_label,
+                y_label=y_label,
+                show_ylabel=(col_index == 0),
+            )
+
+            if col_index == 0:
+                ax.text(
+                    -0.34,
+                    0.5,
+                    row_title,
+                    transform=ax.transAxes,
+                    rotation=90,
+                    va="center",
+                    ha="center",
+                    fontsize=8,
+                    fontweight="bold",
+                )
+
+            add_panel_label(ax, chr(ord("A") + panel_index))
+            panel_index += 1
+
+    if not any_data:
+        plt.close(fig)
+        return missing_rows
+
+    handles, labels = axes[0, 0].get_legend_handles_labels()
     if handles:
         fig.legend(
             handles,
             labels,
             loc="upper center",
             ncol=4,
-            bbox_to_anchor=(0.5, 1.06),
+            bbox_to_anchor=(0.5, 1.04),
             frameon=False,
+            title=f"Bubble size = {bubble_label}",
         )
 
-    label_axes(axes)
-    fig.suptitle(title, y=1.12, fontsize=11)
-    fig.tight_layout(rect=[0, 0, 1, 0.98])
+    fig.suptitle(title, y=1.09, fontsize=11)
+    fig.tight_layout(rect=[0.04, 0, 1, 0.99])
     save_figure(fig, output_dir / figure_name)
     plt.close(fig)
 
     return missing_rows
+
+
+def make_parametric_figure_set(records, output_dir, suffix, attacks_to_plot, bubble_label):
+    convergence_displacement_missing = make_parametric_state_figure(
+        records=records,
+        output_dir=output_dir,
+        figure_name=f"figure_7_convergence_vs_displacement_by_{suffix}",
+        title=f"Convergence vs displacement by {bubble_label}",
+        x_label=r"Median displacement ($\AA$)",
+        y_label="Relaxation steps",
+        bubble_label=bubble_label,
+        attacks_to_plot=attacks_to_plot,
+        x_getters=[
+            lambda row: metric_median(row, lambda item: displacement_values(
+                item["run_dir"],
+                "before_forces.csv",
+                "perturbed_forces.csv",
+            )),
+            lambda row: metric_median(row, lambda item: displacement_values(
+                item["run_dir"],
+                "before_forces.csv",
+                "after_forces.csv",
+            )),
+        ],
+        y_getters=[
+            lambda row: scalar_metric(row, "before_relax_steps"),
+            lambda row: scalar_metric(row, "after_relax_steps"),
+        ],
+    )
+
+    convergence_force_missing = make_parametric_state_figure(
+        records=records,
+        output_dir=output_dir,
+        figure_name=f"figure_8_convergence_vs_delta_force_by_{suffix}",
+        title=f"Convergence vs delta force by {bubble_label}",
+        x_label=r"Median $\Delta$ force (eV/$\AA$)",
+        y_label="Relaxation steps",
+        bubble_label=bubble_label,
+        attacks_to_plot=attacks_to_plot,
+        x_getters=[
+            lambda row: metric_median(row, lambda item: force_delta_values(
+                item["run_dir"],
+                "before_forces.csv",
+                "perturbed_forces.csv",
+            )),
+            lambda row: metric_median(row, lambda item: force_delta_values(
+                item["run_dir"],
+                "before_forces.csv",
+                "after_forces.csv",
+            )),
+        ],
+        y_getters=[
+            lambda row: scalar_metric(row, "before_relax_steps"),
+            lambda row: scalar_metric(row, "after_relax_steps"),
+        ],
+    )
+
+    force_displacement_missing = make_parametric_state_figure(
+        records=records,
+        output_dir=output_dir,
+        figure_name=f"figure_9_delta_force_vs_displacement_by_{suffix}",
+        title=f"Delta force vs displacement by {bubble_label}",
+        x_label=r"Median displacement ($\AA$)",
+        y_label=r"Median $\Delta$ force (eV/$\AA$)",
+        bubble_label=bubble_label,
+        attacks_to_plot=attacks_to_plot,
+        x_getters=[
+            lambda row: metric_median(row, lambda item: displacement_values(
+                item["run_dir"],
+                "before_forces.csv",
+                "perturbed_forces.csv",
+            )),
+            lambda row: metric_median(row, lambda item: displacement_values(
+                item["run_dir"],
+                "before_forces.csv",
+                "after_forces.csv",
+            )),
+        ],
+        y_getters=[
+            lambda row: metric_median(row, lambda item: force_delta_values(
+                item["run_dir"],
+                "before_forces.csv",
+                "perturbed_forces.csv",
+            )),
+            lambda row: metric_median(row, lambda item: force_delta_values(
+                item["run_dir"],
+                "before_forces.csv",
+                "after_forces.csv",
+            )),
+        ],
+    )
+
+    return (
+        convergence_displacement_missing
+        + convergence_force_missing
+        + force_displacement_missing
+    )
 
 
 def collect_box_data(records, attack, value_getter, missing_rows):
@@ -1635,7 +1670,7 @@ def main():
     )
     parser.add_argument("--mace-dir", default=BASE_DIR / "outputs_mace", type=Path)
     parser.add_argument("--uma-dir", default=BASE_DIR / "outputs_uma", type=Path)
-    parser.add_argument("--output-dir", default=BASE_DIR / "comprehensive_outputs", type=Path)
+    parser.add_argument("--output-dir", default=BASE_DIR / "outputs_comprehensive", type=Path)
     parser.add_argument("--materials", default=BASE_DIR / "tests_materials.csv", type=Path)
     parser.add_argument("--structures-dir", default=BASE_DIR / "mp_structures", type=Path)
     args = parser.parse_args()
@@ -1777,102 +1812,20 @@ def main():
         ],
     )
 
-    convergence_displacement_before_missing = make_convergence_displacement_bubble_ellipse_figure(
+    parametric_by_epsilon_missing = make_parametric_figure_set(
         records=epsilon_records,
         output_dir=args.output_dir,
-        figure_name="figure_7_convergence_vs_displacement_before_attack_bubble_ellipse",
-        title="Relaxation before attack: convergence vs displacement",
-        step_col="before_relax_steps",
-        displacement_getter=lambda row: displacement_values(
-            row["run_dir"],
-            "before_forces.csv",
-            "perturbed_forces.csv",
-        ),
+        suffix="epsilon",
+        attacks_to_plot=ATTACK_ORDER,
+        bubble_label="epsilon",
     )
 
-    convergence_displacement_after_missing = make_convergence_displacement_bubble_ellipse_figure(
-        records=epsilon_records,
+    parametric_by_steps_missing = make_parametric_figure_set(
+        records=n_step_records,
         output_dir=args.output_dir,
-        figure_name="figure_7_convergence_vs_displacement_after_attack_bubble_ellipse",
-        title="Relaxation after attack: convergence vs displacement",
-        step_col="after_relax_steps",
-        displacement_getter=lambda row: displacement_values(
-            row["run_dir"],
-            "before_forces.csv",
-            "after_forces.csv",
-        ),
-    )
-
-    convergence_force_before_missing = make_parametric_bubble_ellipse_figure(
-        records=epsilon_records,
-        output_dir=args.output_dir,
-        figure_name="figure_8_convergence_vs_delta_force_before_attack_bubble_ellipse",
-        title="Relaxation before attack: convergence vs delta force",
-        x_label=r"Median $\Delta$ force (eV/$\AA$)",
-        y_label="Relaxation steps",
-        x_getter=lambda row: metric_median(row, lambda item: force_delta_values(
-            item["run_dir"],
-            "before_forces.csv",
-            "perturbed_forces.csv",
-        )),
-        y_getter=lambda row: (row["before_relax_steps"], None)
-            if pd.notna(row["before_relax_steps"])
-            else (None, "Missing before_relax_steps"),
-    )
-
-    convergence_force_after_missing = make_parametric_bubble_ellipse_figure(
-        records=epsilon_records,
-        output_dir=args.output_dir,
-        figure_name="figure_8_convergence_vs_delta_force_after_attack_bubble_ellipse",
-        title="Relaxation after attack: convergence vs delta force",
-        x_label=r"Median $\Delta$ force (eV/$\AA$)",
-        y_label="Relaxation steps",
-        x_getter=lambda row: metric_median(row, lambda item: force_delta_values(
-            item["run_dir"],
-            "before_forces.csv",
-            "after_forces.csv",
-        )),
-        y_getter=lambda row: (row["after_relax_steps"], None)
-            if pd.notna(row["after_relax_steps"])
-            else (None, "Missing after_relax_steps"),
-    )
-
-    force_displacement_before_missing = make_parametric_bubble_ellipse_figure(
-        records=epsilon_records,
-        output_dir=args.output_dir,
-        figure_name="figure_9_delta_force_vs_displacement_before_attack_bubble_ellipse",
-        title="Relaxation before attack: delta force vs displacement",
-        x_label=r"Median displacement ($\AA$)",
-        y_label=r"Median $\Delta$ force (eV/$\AA$)",
-        x_getter=lambda row: metric_median(row, lambda item: displacement_values(
-            item["run_dir"],
-            "before_forces.csv",
-            "perturbed_forces.csv",
-        )),
-        y_getter=lambda row: metric_median(row, lambda item: force_delta_values(
-            item["run_dir"],
-            "before_forces.csv",
-            "perturbed_forces.csv",
-        )),
-    )
-
-    force_displacement_after_missing = make_parametric_bubble_ellipse_figure(
-        records=epsilon_records,
-        output_dir=args.output_dir,
-        figure_name="figure_9_delta_force_vs_displacement_after_attack_bubble_ellipse",
-        title="Relaxation after attack: delta force vs displacement",
-        x_label=r"Median displacement ($\AA$)",
-        y_label=r"Median $\Delta$ force (eV/$\AA$)",
-        x_getter=lambda row: metric_median(row, lambda item: displacement_values(
-            item["run_dir"],
-            "before_forces.csv",
-            "after_forces.csv",
-        )),
-        y_getter=lambda row: metric_median(row, lambda item: force_delta_values(
-            item["run_dir"],
-            "before_forces.csv",
-            "after_forces.csv",
-        )),
+        suffix="n_steps",
+        attacks_to_plot=STEP_ATTACK_ORDER,
+        bubble_label="n_steps",
     )
 
     make_convergence_by_steps_figure(n_step_records, args.output_dir, epsilon=0.1)
@@ -2046,6 +1999,14 @@ def main():
                 ],
             )
 
+            make_parametric_figure_set(
+                records=material_epsilon_records,
+                output_dir=material_output_dir,
+                suffix="epsilon",
+                attacks_to_plot=ATTACK_ORDER,
+                bubble_label="epsilon",
+            )
+
         if not material_n_step_records.empty:
             make_convergence_by_steps_figure(material_n_step_records, material_output_dir, epsilon=0.1)
 
@@ -2101,6 +2062,14 @@ def main():
                 ],
             )
 
+            make_parametric_figure_set(
+                records=material_n_step_records,
+                output_dir=material_output_dir,
+                suffix="n_steps",
+                attacks_to_plot=STEP_ATTACK_ORDER,
+                bubble_label="n_steps",
+            )
+
     missing_rows.extend(force_missing)
     missing_rows.extend(force_whisker_missing)
     missing_rows.extend(displacement_missing)
@@ -2109,12 +2078,8 @@ def main():
     missing_rows.extend(force_by_steps_whisker_missing)
     missing_rows.extend(displacement_by_steps_missing)
     missing_rows.extend(displacement_by_steps_whisker_missing)
-    missing_rows.extend(convergence_displacement_before_missing)
-    missing_rows.extend(convergence_displacement_after_missing)
-    missing_rows.extend(convergence_force_before_missing)
-    missing_rows.extend(convergence_force_after_missing)
-    missing_rows.extend(force_displacement_before_missing)
-    missing_rows.extend(force_displacement_after_missing)
+    missing_rows.extend(parametric_by_epsilon_missing)
+    missing_rows.extend(parametric_by_steps_missing)
 
     pd.DataFrame(missing_rows).to_csv(
         args.output_dir / "missing_data_report.csv",
@@ -2135,12 +2100,12 @@ def main():
     print(f"  {args.output_dir / 'figure_5_delta_force_whisker_span_by_n_steps.png'}")
     print(f"  {args.output_dir / 'figure_6_displacement_by_n_steps.png'}")
     print(f"  {args.output_dir / 'figure_6_displacement_whisker_span_by_n_steps.png'}")
-    print(f"  {args.output_dir / 'figure_7_convergence_vs_displacement_before_attack_bubble_ellipse.png'}")
-    print(f"  {args.output_dir / 'figure_7_convergence_vs_displacement_after_attack_bubble_ellipse.png'}")
-    print(f"  {args.output_dir / 'figure_8_convergence_vs_delta_force_before_attack_bubble_ellipse.png'}")
-    print(f"  {args.output_dir / 'figure_8_convergence_vs_delta_force_after_attack_bubble_ellipse.png'}")
-    print(f"  {args.output_dir / 'figure_9_delta_force_vs_displacement_before_attack_bubble_ellipse.png'}")
-    print(f"  {args.output_dir / 'figure_9_delta_force_vs_displacement_after_attack_bubble_ellipse.png'}")
+    print(f"  {args.output_dir / 'figure_7_convergence_vs_displacement_by_epsilon.png'}")
+    print(f"  {args.output_dir / 'figure_7_convergence_vs_displacement_by_n_steps.png'}")
+    print(f"  {args.output_dir / 'figure_8_convergence_vs_delta_force_by_epsilon.png'}")
+    print(f"  {args.output_dir / 'figure_8_convergence_vs_delta_force_by_n_steps.png'}")
+    print(f"  {args.output_dir / 'figure_9_delta_force_vs_displacement_by_epsilon.png'}")
+    print(f"  {args.output_dir / 'figure_9_delta_force_vs_displacement_by_n_steps.png'}")
 
 if __name__ == "__main__":
     main()
