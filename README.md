@@ -121,7 +121,7 @@ Login using SFTP:
 
 ```bash
 cd mlff_attack_data_collection
-get -r comprehensive_outputs
+get -r outputs_comprehensive
 get -r outputs_mace
 get -r outputs_uma
 ```

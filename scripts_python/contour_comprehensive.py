@@ -800,8 +800,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mace-contour-dir", default=BASE_DIR / "outputs_mace" / "contour", type=Path)
     parser.add_argument("--uma-contour-dir", default=BASE_DIR / "outputs_uma" / "contour", type=Path)
-    parser.add_argument("--comprehensive-dir", default=BASE_DIR / "comprehensive_outputs", type=Path)
-    parser.add_argument("--output-dir", default=BASE_DIR / "comprehensive_outputs" / "contour", type=Path)
+    parser.add_argument("--comprehensive-dir", default=BASE_DIR / "outputs_comprehensive", type=Path)
+    parser.add_argument("--output-dir", default=BASE_DIR / "outputs_comprehensive" / "contour", type=Path)
     args = parser.parse_args()
 
     apply_style()
