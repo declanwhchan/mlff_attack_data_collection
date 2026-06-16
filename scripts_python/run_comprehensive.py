@@ -4,6 +4,7 @@ import argparse
 import math
 
 import matplotlib.pyplot as plt
+from matplotlib.patches import Ellipse
 import numpy as np
 import pandas as pd
 
@@ -349,6 +350,187 @@ def add_panel_label(ax, label):
         va="top",
         ha="left",
     )
+
+
+def finite_xy(data, x_col, y_col):
+    clean = data[[x_col, y_col]].replace([np.inf, -np.inf], np.nan).dropna()
+    return clean[x_col].to_numpy(dtype=float), clean[y_col].to_numpy(dtype=float)
+
+
+def add_std_ellipse(ax, x, y, color, n_std, label=None):
+    if len(x) < 3 or len(y) < 3:
+        return
+
+    covariance = np.cov(x, y)
+    if not np.isfinite(covariance).all():
+        return
+
+    eigenvalues, eigenvectors = np.linalg.eigh(covariance)
+    if np.any(eigenvalues <= 0):
+        return
+
+    order = eigenvalues.argsort()[::-1]
+    eigenvalues = eigenvalues[order]
+    eigenvectors = eigenvectors[:, order]
+
+    angle = np.degrees(np.arctan2(eigenvectors[1, 0], eigenvectors[0, 0]))
+    width, height = 2 * n_std * np.sqrt(eigenvalues)
+
+    ellipse = Ellipse(
+        xy=(float(np.mean(x)), float(np.mean(y))),
+        width=float(width),
+        height=float(height),
+        angle=float(angle),
+        fill=False,
+        edgecolor=color,
+        linewidth=1.0 if n_std == 1 else 0.8,
+        linestyle="-" if n_std == 1 else "--",
+        alpha=0.85 if n_std == 1 else 0.55,
+        label=label,
+    )
+    ax.add_patch(ellipse)
+
+
+def epsilon_bubble_sizes(values):
+    values = pd.Series(values).replace([np.inf, -np.inf], np.nan).dropna()
+    if values.empty:
+        return np.array([])
+
+    minimum = float(values.min())
+    maximum = float(values.max())
+
+    if maximum <= minimum:
+        return np.full(len(values), 70.0)
+
+    scaled = (values.to_numpy(dtype=float) - minimum) / (maximum - minimum)
+    return 35.0 + 115.0 * scaled
+
+
+def convergence_displacement_rows(records, displacement_getter, step_col, missing_rows, figure_name):
+    rows = []
+
+    for _, row in records.iterrows():
+        displacements, reason = displacement_getter(row)
+        if displacements is None:
+            missing_rows.append({
+                "figure": figure_name,
+                "run_id": row["run_id"],
+                "reason": reason,
+            })
+            continue
+
+        step_value = row.get(step_col)
+        if step_value is None or pd.isna(step_value):
+            missing_rows.append({
+                "figure": figure_name,
+                "run_id": row["run_id"],
+                "reason": f"Missing {step_col}",
+            })
+            continue
+
+        rows.append({
+            "run_id": row["run_id"],
+            "material_slug": row["material_slug"],
+            "calculator": row["calculator"],
+            "attack_label": row["attack_label"],
+            "epsilon": row["epsilon"],
+            "n_steps": row["n_steps"],
+            "median_displacement_a": float(np.median(displacements)),
+            "relax_steps": float(step_value),
+        })
+
+    return pd.DataFrame(rows)
+
+
+def draw_convergence_displacement_panel(ax, data, attack, show_ylabel):
+    subset = data[data["attack_label"] == attack].copy()
+
+    if subset.empty:
+        ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha="center", va="center")
+        ax.set_title(attack)
+        ax.set_xlabel(r"Median displacement ($\AA$)")
+        if show_ylabel:
+            ax.set_ylabel("Relaxation steps")
+        ax.grid(True, alpha=0.35)
+        return
+
+    for calculator, color in CALCULATOR_COLORS.items():
+        calc_data = subset[subset["calculator"] == calculator].copy()
+        if calc_data.empty:
+            continue
+
+        sizes = epsilon_bubble_sizes(calc_data["epsilon"])
+        ax.scatter(
+            calc_data["median_displacement_a"],
+            calc_data["relax_steps"],
+            s=sizes,
+            color=color,
+            alpha=0.58,
+            edgecolor="white",
+            linewidth=0.45,
+            label=calculator.upper(),
+        )
+
+        x, y = finite_xy(calc_data, "median_displacement_a", "relax_steps")
+        add_std_ellipse(ax, x, y, color, n_std=1, label=f"{calculator.upper()} 1 std")
+        add_std_ellipse(ax, x, y, color, n_std=2, label=f"{calculator.upper()} 2 std")
+
+    ax.set_title(attack)
+    ax.set_xlabel(r"Median displacement ($\AA$)")
+    if show_ylabel:
+        ax.set_ylabel("Relaxation steps")
+    ax.grid(True, alpha=0.35)
+    ax.margins(x=0.08, y=0.10)
+
+
+def make_convergence_displacement_bubble_ellipse_figure(
+    records,
+    output_dir,
+    figure_name,
+    title,
+    step_col,
+    displacement_getter,
+):
+    missing_rows = []
+    data = convergence_displacement_rows(
+        records=records,
+        displacement_getter=displacement_getter,
+        step_col=step_col,
+        missing_rows=missing_rows,
+        figure_name=figure_name,
+    )
+
+    if data.empty:
+        return missing_rows
+
+    fig, axes = plt.subplots(1, 3, figsize=(11.2, 3.8), sharex=False, sharey=False)
+
+    for col_index, attack in enumerate(ATTACK_ORDER):
+        draw_convergence_displacement_panel(
+            axes[col_index],
+            data,
+            attack,
+            show_ylabel=(col_index == 0),
+        )
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    if handles:
+        fig.legend(
+            handles,
+            labels,
+            loc="upper center",
+            ncol=4,
+            bbox_to_anchor=(0.5, 1.06),
+            frameon=False,
+        )
+
+    label_axes(axes)
+    fig.suptitle(title, y=1.12, fontsize=11)
+    fig.tight_layout(rect=[0, 0, 1, 0.98])
+    save_figure(fig, output_dir / figure_name)
+    plt.close(fig)
+
+    return missing_rows
 
 
 def collect_box_data(records, attack, value_getter, missing_rows):
@@ -1365,6 +1547,32 @@ def main():
         ],
     )
 
+    convergence_displacement_before_missing = make_convergence_displacement_bubble_ellipse_figure(
+        records=epsilon_records,
+        output_dir=args.output_dir,
+        figure_name="figure_7_convergence_vs_displacement_before_attack_bubble_ellipse",
+        title="Relaxation before attack: convergence vs displacement",
+        step_col="before_relax_steps",
+        displacement_getter=lambda row: displacement_values(
+            row["run_dir"],
+            "before_forces.csv",
+            "perturbed_forces.csv",
+        ),
+    )
+
+    convergence_displacement_after_missing = make_convergence_displacement_bubble_ellipse_figure(
+        records=epsilon_records,
+        output_dir=args.output_dir,
+        figure_name="figure_7_convergence_vs_displacement_after_attack_bubble_ellipse",
+        title="Relaxation after attack: convergence vs displacement",
+        step_col="after_relax_steps",
+        displacement_getter=lambda row: displacement_values(
+            row["run_dir"],
+            "before_forces.csv",
+            "after_forces.csv",
+        ),
+    )
+
     make_convergence_by_steps_figure(n_step_records, args.output_dir, epsilon=0.1)
 
     force_by_steps_missing = make_distribution_by_steps_figure(
@@ -1601,6 +1809,8 @@ def main():
     missing_rows.extend(force_by_steps_whisker_missing)
     missing_rows.extend(displacement_by_steps_missing)
     missing_rows.extend(displacement_by_steps_whisker_missing)
+    missing_rows.extend(convergence_displacement_before_missing)
+    missing_rows.extend(convergence_displacement_after_missing)
     missing_rows.extend(per_attack_missing)
 
     pd.DataFrame(missing_rows).to_csv(
@@ -1621,7 +1831,8 @@ def main():
     print(f"  {args.output_dir / 'figure_5_delta_force_whisker_span_by_n_steps.png'}")
     print(f"  {args.output_dir / 'figure_6_displacement_by_n_steps.png'}")
     print(f"  {args.output_dir / 'figure_6_displacement_whisker_span_by_n_steps.png'}")
-
+    print(f"  {args.output_dir / 'figure_7_convergence_vs_displacement_before_attack_bubble_ellipse.png'}")
+    print(f"  {args.output_dir / 'figure_7_convergence_vs_displacement_after_attack_bubble_ellipse.png'}")
 
 if __name__ == "__main__":
     main()
