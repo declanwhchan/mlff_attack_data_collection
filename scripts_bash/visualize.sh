@@ -21,7 +21,7 @@ source ~/project/.venv-mace/bin/activate
 python -u scripts_python/visualize.py \
   --materials tests_materials.csv \
   --structures-dir mp_structures \
-  --output outputs_comprehensive/initial_structures_5x4.png \
+  --output-dir outputs_visuals \
   --dpi 600
 
 deactivate
