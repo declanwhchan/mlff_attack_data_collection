@@ -115,13 +115,14 @@ python -m http.server 8888
 Open http://localhost:8888
 
 
-### Or Download Results
+### Or Download Main Results
 
 Login using SFTP:
 
 ```bash
 cd mlff_attack_data_collection
 get -r outputs_comprehensive
+get -r outputs_visuals
 get -r outputs_mace
 get -r outputs_uma
 ```
