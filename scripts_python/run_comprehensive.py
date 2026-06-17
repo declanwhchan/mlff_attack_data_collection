@@ -715,7 +715,7 @@ def make_parametric_figure_set(records, output_dir, suffix, attacks_to_plot, bub
         figure_name=f"figure_7_convergence_vs_displacement_by_{suffix}",
         title=f"Convergence vs displacement by {bubble_label}",
         x_label=r"Median displacement ($\AA$)",
-        y_label="relaxation steps",
+        y_label="Relaxation steps",
         bubble_label=bubble_label,
         attacks_to_plot=attacks_to_plot,
         x_getters=[
@@ -742,7 +742,7 @@ def make_parametric_figure_set(records, output_dir, suffix, attacks_to_plot, bub
         figure_name=f"figure_8_convergence_vs_delta_force_by_{suffix}",
         title=f"Convergence vs delta force by {bubble_label}",
         x_label=r"Median $\Delta$ force (eV/$\AA$)",
-        y_label="relaxation steps",
+        y_label="Relaxation steps",
         bubble_label=bubble_label,
         attacks_to_plot=attacks_to_plot,
         x_getters=[
@@ -956,7 +956,7 @@ def plot_convergence_panel(ax, records, attack, step_col, conv_col):
     ax.set_xticklabels([format_epsilon_label(epsilon) for epsilon in epsilons])
     style_epsilon_tick_labels(ax, rotate=len(epsilons) >= 6)
     ax.set_xlabel(r"$\epsilon$ ($\AA$)")
-    ax.set_ylabel("relaxation steps")
+    ax.set_ylabel("Relaxation steps")
     ax.grid(True, axis="y")
     ax.grid(False, axis="x")
     ax.margins(x=0.03)
@@ -1164,7 +1164,7 @@ def make_ci_figure(records, output_dir, figure_name, ylabel, rows):
         bbox_to_anchor=(0.5, 1.03),
     )
 
-    fig.suptitle("Line = median, shaded band = 95% bootstrap CI", y=1.02, fontsize=9)
+    fig.suptitle("Line = median, shaded band = 95% CI", y=1.02, fontsize=9)
     fig.tight_layout(rect=[0.03, 0.00, 1.00, 0.94])
     save_figure(fig, output_dir / figure_name)
     plt.close(fig)
@@ -1262,13 +1262,13 @@ def make_per_attack_figures(records, output_dir):
             ),
             (
                 "displacement_after_perturb_before_relax",
-                r"atomic displacement ($\AA$)",
+                r"Displacement ($\AA$)",
                 lambda row: displacement_values(row["run_dir"], "before_forces.csv", "perturbed_forces.csv"),
                 f"{attack}: displacement before relaxation",
             ),
             (
                 "displacement_after_perturb_after_relax",
-                r"atomic displacement ($\AA$)",
+                r"Displacement ($\AA$)",
                 lambda row: displacement_values(row["run_dir"], "before_forces.csv", "after_forces.csv"),
                 f"{attack}: displacement after relaxation",
             ),
@@ -1464,7 +1464,7 @@ def plot_convergence_panel_by_steps(ax, records, attack, epsilon, step_col, conv
         label.set_horizontalalignment("right")
 
     ax.set_xlabel("n_steps")
-    ax.set_ylabel("relaxation steps")
+    ax.set_ylabel("Relaxation steps")
     ax.grid(True, axis="y")
     ax.grid(False, axis="x")
     ax.margins(x=0.03)
@@ -1646,7 +1646,7 @@ def make_ci_by_steps_figure(records, output_dir, figure_name, ylabel, rows, epsi
             add_panel_label(ax, chr(ord("A") + panel_index))
             panel_index += 1
 
-    fig.suptitle(rf"Fixed $\epsilon$ = {epsilon:g} $\AA$; line = median, shaded band = 95% bootstrap CI", y=1.02, fontsize=9)
+    fig.suptitle(rf"Fixed $\epsilon$ = {epsilon:g} $\AA$; line = median, shaded band = 95% CI", y=1.02, fontsize=9)
     fig.legend(
         handles=model_legend_handles(),
         loc="upper center",
@@ -1821,7 +1821,7 @@ def main():
         records=epsilon_records,
         output_dir=args.output_dir,
         figure_name="figure_3_displacement_by_epsilon",
-        ylabel=r"atomic displacement ($\AA$)",
+        ylabel=r"Displacement ($\AA$)",
         rows=[
             (
                 "After attack, before relaxation",
@@ -1941,7 +1941,7 @@ def main():
         records=n_step_records,
         output_dir=args.output_dir,
         figure_name="figure_6_displacement_by_n_steps",
-        ylabel=r"atomic displacement ($\AA$)",
+        ylabel=r"Displacement ($\AA$)",
         epsilon=0.1,
         rows=[
             (
@@ -1968,6 +1968,108 @@ def main():
         output_dir=args.output_dir,
         figure_name="figure_6_displacement_ci_by_n_steps",
         ylabel=r"median atomic displacement with 95% CI ($\AA$)",
+        epsilon=0.1,
+        rows=[
+            (
+                "After attack, before relaxation",
+                lambda: (lambda row: displacement_values(
+                    row["run_dir"],
+                    "before_forces.csv",
+                    "perturbed_forces.csv",
+                )),
+            ),
+            (
+                "After attack, after relaxation",
+                lambda: (lambda row: displacement_values(
+                    row["run_dir"],
+                    "before_forces.csv",
+                    "after_forces.csv",
+                )),
+            ),
+        ],
+    )
+
+    force_whisker_span_missing = make_distribution_figure(
+        records=epsilon_records,
+        output_dir=args.output_dir,
+        figure_name="figure_2_delta_force_whisker_span_by_epsilon",
+        ylabel=r"$\Delta$ force (eV/$\AA$)",
+        rows=[
+            (
+                "After attack, before relaxation",
+                lambda: (lambda row: force_delta_values(
+                    row["run_dir"],
+                    "before_forces.csv",
+                    "perturbed_forces.csv",
+                )),
+            ),
+            (
+                "After attack, after relaxation",
+                lambda: (lambda row: force_delta_values(
+                    row["run_dir"],
+                    "before_forces.csv",
+                    "after_forces.csv",
+                )),
+            ),
+        ],
+    )
+
+    displacement_whisker_span_missing = make_distribution_figure(
+        records=epsilon_records,
+        output_dir=args.output_dir,
+        figure_name="figure_3_displacement_whisker_span_by_epsilon",
+        ylabel=r"Displacement ($\AA$)",
+        rows=[
+            (
+                "After attack, before relaxation",
+                lambda: (lambda row: displacement_values(
+                    row["run_dir"],
+                    "before_forces.csv",
+                    "perturbed_forces.csv",
+                )),
+            ),
+            (
+                "After attack, after relaxation",
+                lambda: (lambda row: displacement_values(
+                    row["run_dir"],
+                    "before_forces.csv",
+                    "after_forces.csv",
+                )),
+            ),
+        ],
+    )
+
+    force_by_steps_whisker_span_missing = make_distribution_by_steps_figure(
+        records=n_step_records,
+        output_dir=args.output_dir,
+        figure_name="figure_5_delta_force_whisker_span_by_n_steps",
+        ylabel=r"$\Delta$ force (eV/$\AA$)",
+        epsilon=0.1,
+        rows=[
+            (
+                "After attack, before relaxation",
+                lambda: (lambda row: force_delta_values(
+                    row["run_dir"],
+                    "before_forces.csv",
+                    "perturbed_forces.csv",
+                )),
+            ),
+            (
+                "After attack, after relaxation",
+                lambda: (lambda row: force_delta_values(
+                    row["run_dir"],
+                    "before_forces.csv",
+                    "after_forces.csv",
+                )),
+            ),
+        ],
+    )
+
+    displacement_by_steps_whisker_span_missing = make_distribution_by_steps_figure(
+        records=n_step_records,
+        output_dir=args.output_dir,
+        figure_name="figure_6_displacement_whisker_span_by_n_steps",
+        ylabel=r"Displacement ($\AA$)",
         epsilon=0.1,
         rows=[
             (
@@ -2029,11 +2131,111 @@ def main():
                 ],
             )
 
+            make_ci_figure(
+                records=material_epsilon_records,
+                output_dir=material_output_dir,
+                figure_name="figure_2_delta_force_ci_by_epsilon",
+                ylabel=r"Median $\Delta$ force with 95% CI (eV/$\AA$)",
+                rows=[
+                    (
+                        "After attack, before relaxation",
+                        lambda: (lambda row: force_delta_values(
+                            row["run_dir"],
+                            "before_forces.csv",
+                            "perturbed_forces.csv",
+                        )),
+                    ),
+                    (
+                        "After attack, after relaxation",
+                        lambda: (lambda row: force_delta_values(
+                            row["run_dir"],
+                            "before_forces.csv",
+                            "after_forces.csv",
+                        )),
+                    ),
+                ],
+            )
+
             make_distribution_figure(
                 records=material_epsilon_records,
                 output_dir=material_output_dir,
                 figure_name="figure_3_displacement_by_epsilon",
-                ylabel=r"atomic displacement ($\AA$)",
+                ylabel=r"Displacement ($\AA$)",
+                rows=[
+                    (
+                        "After attack, before relaxation",
+                        lambda: (lambda row: displacement_values(
+                            row["run_dir"],
+                            "before_forces.csv",
+                            "perturbed_forces.csv",
+                        )),
+                    ),
+                    (
+                        "After attack, after relaxation",
+                        lambda: (lambda row: displacement_values(
+                            row["run_dir"],
+                            "before_forces.csv",
+                            "after_forces.csv",
+                        )),
+                    ),
+                ],
+            )
+
+            make_ci_figure(
+                records=material_epsilon_records,
+                output_dir=material_output_dir,
+                figure_name="figure_3_displacement_ci_by_epsilon",
+                ylabel=r"Median atomic displacement with 95% CI ($\AA$)",
+                rows=[
+                    (
+                        "After attack, before relaxation",
+                        lambda: (lambda row: displacement_values(
+                            row["run_dir"],
+                            "before_forces.csv",
+                            "perturbed_forces.csv",
+                        )),
+                    ),
+                    (
+                        "After attack, after relaxation",
+                        lambda: (lambda row: displacement_values(
+                            row["run_dir"],
+                            "before_forces.csv",
+                            "after_forces.csv",
+                        )),
+                    ),
+                ],
+            )
+
+            make_distribution_figure(
+                records=material_epsilon_records,
+                output_dir=material_output_dir,
+                figure_name="figure_2_delta_force_whisker_span_by_epsilon",
+                ylabel=r"$\Delta$ force (eV/$\AA$)",
+                rows=[
+                    (
+                        "After attack, before relaxation",
+                        lambda: (lambda row: force_delta_values(
+                            row["run_dir"],
+                            "before_forces.csv",
+                            "perturbed_forces.csv",
+                        )),
+                    ),
+                    (
+                        "After attack, after relaxation",
+                        lambda: (lambda row: force_delta_values(
+                            row["run_dir"],
+                            "before_forces.csv",
+                            "after_forces.csv",
+                        )),
+                    ),
+                ],
+            )
+
+            make_distribution_figure(
+                records=material_epsilon_records,
+                output_dir=material_output_dir,
+                figure_name="figure_3_displacement_whisker_span_by_epsilon",
+                ylabel=r"Displacement ($\AA$)",
                 rows=[
                     (
                         "After attack, before relaxation",
@@ -2063,7 +2265,11 @@ def main():
             )
 
         if not material_n_step_records.empty:
-            make_convergence_by_steps_figure(material_n_step_records, material_output_dir, epsilon=0.1)
+            make_convergence_by_steps_figure(
+                material_n_step_records,
+                material_output_dir,
+                epsilon=0.1,
+            )
 
             make_distribution_by_steps_figure(
                 records=material_n_step_records,
@@ -2091,11 +2297,115 @@ def main():
                 ],
             )
 
+            make_ci_by_steps_figure(
+                records=material_n_step_records,
+                output_dir=material_output_dir,
+                figure_name="figure_5_delta_force_ci_by_n_steps",
+                ylabel=r"Median $\Delta$ force with 95% CI (eV/$\AA$)",
+                epsilon=0.1,
+                rows=[
+                    (
+                        "After attack, before relaxation",
+                        lambda: (lambda row: force_delta_values(
+                            row["run_dir"],
+                            "before_forces.csv",
+                            "perturbed_forces.csv",
+                        )),
+                    ),
+                    (
+                        "After attack, after relaxation",
+                        lambda: (lambda row: force_delta_values(
+                            row["run_dir"],
+                            "before_forces.csv",
+                            "after_forces.csv",
+                        )),
+                    ),
+                ],
+            )
+
             make_distribution_by_steps_figure(
                 records=material_n_step_records,
                 output_dir=material_output_dir,
                 figure_name="figure_6_displacement_by_n_steps",
-                ylabel=r"atomic displacement ($\AA$)",
+                ylabel=r"Displacement ($\AA$)",
+                epsilon=0.1,
+                rows=[
+                    (
+                        "After attack, before relaxation",
+                        lambda: (lambda row: displacement_values(
+                            row["run_dir"],
+                            "before_forces.csv",
+                            "perturbed_forces.csv",
+                        )),
+                    ),
+                    (
+                        "After attack, after relaxation",
+                        lambda: (lambda row: displacement_values(
+                            row["run_dir"],
+                            "before_forces.csv",
+                            "after_forces.csv",
+                        )),
+                    ),
+                ],
+            )
+
+            make_ci_by_steps_figure(
+                records=material_n_step_records,
+                output_dir=material_output_dir,
+                figure_name="figure_6_displacement_ci_by_n_steps",
+                ylabel=r"Median atomic displacement with 95% CI ($\AA$)",
+                epsilon=0.1,
+                rows=[
+                    (
+                        "After attack, before relaxation",
+                        lambda: (lambda row: displacement_values(
+                            row["run_dir"],
+                            "before_forces.csv",
+                            "perturbed_forces.csv",
+                        )),
+                    ),
+                    (
+                        "After attack, after relaxation",
+                        lambda: (lambda row: displacement_values(
+                            row["run_dir"],
+                            "before_forces.csv",
+                            "after_forces.csv",
+                        )),
+                    ),
+                ],
+            )
+
+            make_distribution_by_steps_figure(
+                records=material_n_step_records,
+                output_dir=material_output_dir,
+                figure_name="figure_5_delta_force_whisker_span_by_n_steps",
+                ylabel=r"$\Delta$ force (eV/$\AA$)",
+                epsilon=0.1,
+                rows=[
+                    (
+                        "After attack, before relaxation",
+                        lambda: (lambda row: force_delta_values(
+                            row["run_dir"],
+                            "before_forces.csv",
+                            "perturbed_forces.csv",
+                        )),
+                    ),
+                    (
+                        "After attack, after relaxation",
+                        lambda: (lambda row: force_delta_values(
+                            row["run_dir"],
+                            "before_forces.csv",
+                            "after_forces.csv",
+                        )),
+                    ),
+                ],
+            )
+
+            make_distribution_by_steps_figure(
+                records=material_n_step_records,
+                output_dir=material_output_dir,
+                figure_name="figure_6_displacement_whisker_span_by_n_steps",
+                ylabel=r"Displacement ($\AA$)",
                 epsilon=0.1,
                 rows=[
                     (
@@ -2126,15 +2436,17 @@ def main():
             )
 
     missing_rows.extend(force_missing)
+    missing_rows.extend(force_whisker_span_missing)
     missing_rows.extend(force_by_epsilon_missing)
     missing_rows.extend(displacement_missing)
+    missing_rows.extend(displacement_whisker_span_missing)
     missing_rows.extend(displacement_by_epsilon_missing)
     missing_rows.extend(force_by_steps_missing)
+    missing_rows.extend(force_by_steps_whisker_span_missing)
     missing_rows.extend(force_by_steps_ci_missing)
     missing_rows.extend(displacement_by_steps_missing)
+    missing_rows.extend(displacement_by_steps_whisker_span_missing)
     missing_rows.extend(displacement_by_steps_ci_missing)
-    missing_rows.extend(parametric_by_epsilon_missing)
-    missing_rows.extend(parametric_by_steps_missing)
 
     pd.DataFrame(missing_rows).to_csv(
         args.output_dir / "missing_data_report.csv",
@@ -2147,13 +2459,17 @@ def main():
     print("Main publication figures:")
     print(f"  {args.output_dir / 'figure_1_convergence_by_epsilon.png'}")
     print(f"  {args.output_dir / 'figure_2_delta_force_by_epsilon.png'}")
+    print(f"  {args.output_dir / 'figure_2_delta_force_whisker_span_by_epsilon.png'}")
     print(f"  {args.output_dir / 'figure_2_delta_force_ci_by_epsilon.png'}")
     print(f"  {args.output_dir / 'figure_3_displacement_by_epsilon.png'}")
+    print(f"  {args.output_dir / 'figure_3_displacement_whisker_span_by_epsilon.png'}")
     print(f"  {args.output_dir / 'figure_3_displacement_ci_by_epsilon.png'}")
     print(f"  {args.output_dir / 'figure_4_convergence_by_n_steps.png'}")
     print(f"  {args.output_dir / 'figure_5_delta_force_by_n_steps.png'}")
+    print(f"  {args.output_dir / 'figure_5_delta_force_whisker_span_by_n_steps.png'}")
     print(f"  {args.output_dir / 'figure_5_delta_force_ci_by_n_steps.png'}")
     print(f"  {args.output_dir / 'figure_6_displacement_by_n_steps.png'}")
+    print(f"  {args.output_dir / 'figure_6_displacement_whisker_span_by_n_steps.png'}")
     print(f"  {args.output_dir / 'figure_6_displacement_ci_by_n_steps.png'}")
     print(f"  {args.output_dir / 'figure_7_convergence_vs_displacement_by_epsilon.png'}")
     print(f"  {args.output_dir / 'figure_7_convergence_vs_displacement_by_n_steps.png'}")
