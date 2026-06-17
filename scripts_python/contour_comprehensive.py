@@ -214,23 +214,23 @@ def attack_metric_table(attacks):
     rows = []
 
     for _, row in attacks.iterrows():
-        relaxation_before_attack_disp = attack_displacement(
+        after_attack_before_relaxation_disp = attack_displacement(
             row,
             "before_forces.csv",
             "perturbed_forces.csv",
         )
-        relaxation_before_attack_force = attack_force_delta(
+        after_attack_before_relaxation_force = attack_force_delta(
             row,
             "before_forces.csv",
             "perturbed_forces.csv",
         )
 
-        relaxation_after_attack_disp = attack_displacement(
+        after_attack_after_relaxation_disp = attack_displacement(
             row,
             "before_forces.csv",
             "after_forces.csv",
         )
-        relaxation_after_attack_force = attack_force_delta(
+        after_attack_after_relaxation_force = attack_force_delta(
             row,
             "before_forces.csv",
             "after_forces.csv",
@@ -239,14 +239,14 @@ def attack_metric_table(attacks):
         run_id = str(row.get("run_id", ""))
         is_step_sweep = "_steps" in run_id
 
-        relaxation_before_attack_median_displacement = (
-            float(np.median(relaxation_before_attack_disp))
-            if relaxation_before_attack_disp.size
+        after_attack_before_relaxation_median_displacement = (
+            float(np.median(after_attack_before_relaxation_disp))
+            if after_attack_before_relaxation_disp.size
             else np.nan
         )
-        relaxation_before_attack_median_force_delta = (
-            float(np.median(relaxation_before_attack_force))
-            if relaxation_before_attack_force.size
+        after_attack_before_relaxation_median_force_delta = (
+            float(np.median(after_attack_before_relaxation_force))
+            if after_attack_before_relaxation_force.size
             else np.nan
         )
 
@@ -258,22 +258,22 @@ def attack_metric_table(attacks):
             "n_steps": int(float(row["n_steps"])) if pd.notna(row.get("n_steps")) else np.nan,
             "is_step_sweep": is_step_sweep,
 
-            "relaxation_before_attack_median_displacement_a": relaxation_before_attack_median_displacement,
-            "relaxation_before_attack_median_force_delta_ev_a": relaxation_before_attack_median_force_delta,
-            "relaxation_after_attack_median_displacement_a": (
-                float(np.median(relaxation_after_attack_disp))
-                if relaxation_after_attack_disp.size
+            "after_attack_before_relaxation_median_displacement_a": after_attack_before_relaxation_median_displacement,
+            "after_attack_before_relaxation_median_force_delta_ev_a": after_attack_before_relaxation_median_force_delta,
+            "after_attack_after_relaxation_median_displacement_a": (
+                float(np.median(after_attack_after_relaxation_disp))
+                if after_attack_after_relaxation_disp.size
                 else np.nan
             ),
-            "relaxation_after_attack_median_force_delta_ev_a": (
-                float(np.median(relaxation_after_attack_force))
-                if relaxation_after_attack_force.size
+            "after_attack_after_relaxation_median_force_delta_ev_a": (
+                float(np.median(after_attack_after_relaxation_force))
+                if after_attack_after_relaxation_force.size
                 else np.nan
             ),
 
             # Keep existing per-material plots unchanged.
-            "attack_median_displacement_a": relaxation_before_attack_median_displacement,
-            "attack_median_force_delta_ev_a": relaxation_before_attack_median_force_delta,
+            "attack_median_displacement_a": after_attack_before_relaxation_median_displacement,
+            "attack_median_force_delta_ev_a": after_attack_before_relaxation_median_force_delta,
         })
 
     return pd.DataFrame(rows)
@@ -658,18 +658,27 @@ def plot_global_relaxation_state(records, output_dir, displacement_col, force_co
     plt.close(fig)
 
 
-def plot_relaxation_attack_grid_panel(ax, data, y_col, attack_label, row_label):
+def plot_relaxation_attack_grid_panel(
+    ax,
+    data,
+    x_col,
+    y_col,
+    attack_label,
+    xlabel,
+    ylabel,
+    row_label,
+):
     subset = data[
         (data["attack_label"] == attack_label)
-        & data["contour_displacement_p95_a"].notna()
+        & data[x_col].notna()
         & data[y_col].notna()
     ].copy()
 
     if subset.empty:
         ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha="center", va="center")
         ax.set_title(attack_label)
-        ax.set_xlabel(r"Contour p95 displacement ($\AA$)")
-        ax.set_ylabel(r"Median displacement ($\AA$)" if row_label else "")
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel if row_label else "")
         return
 
     for calculator, color in CALC_COLORS.items():
@@ -678,7 +687,7 @@ def plot_relaxation_attack_grid_panel(ax, data, y_col, attack_label, row_label):
             continue
 
         ax.scatter(
-            calc_subset["contour_displacement_p95_a"],
+            calc_subset[x_col],
             calc_subset[y_col],
             s=24,
             color=color,
@@ -688,7 +697,7 @@ def plot_relaxation_attack_grid_panel(ax, data, y_col, attack_label, row_label):
             label=calculator.upper(),
         )
 
-    x_max = axis_limit(subset["contour_displacement_p95_a"])
+    x_max = axis_limit(subset[x_col])
     y_max = axis_limit(subset[y_col])
     line_max = min(x_max, y_max)
 
@@ -704,36 +713,44 @@ def plot_relaxation_attack_grid_panel(ax, data, y_col, attack_label, row_label):
     ax.set_xlim(0, x_max)
     ax.set_ylim(0, y_max)
     ax.set_title(attack_label)
-    ax.set_xlabel(r"Contour p95 displacement ($\AA$)")
-    ax.set_ylabel(r"Median displacement ($\AA$)" if row_label else "")
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel if row_label else "")
     ax.grid(True, alpha=0.35)
 
 
-def plot_global_relaxation_attack_grid(records, output_dir):
+def plot_global_relaxation_attack_grid(
+    records,
+    output_dir,
+    x_col,
+    before_col,
+    after_col,
+    xlabel,
+    ylabel,
+    title,
+    output_name,
+):
     if records.empty:
         return
 
     fig, axes = plt.subplots(2, 3, figsize=(12.0, 7.2), sharex=False, sharey=False)
 
     rows = [
-        (
-            "Relaxation before attack",
-            "relaxation_before_attack_median_displacement_a",
-        ),
-        (
-            "Relaxation after attack",
-            "relaxation_after_attack_median_displacement_a",
-        ),
+        ("After attack, before relaxation", before_col),
+        ("After attack, after relaxation", after_col),
     ]
 
-    for row_index, (row_title, displacement_col) in enumerate(rows):
+    for row_index, (row_title, y_col) in enumerate(rows):
         for col_index, attack in enumerate(ATTACK_ORDER):
             ax = axes[row_index, col_index]
+
             plot_relaxation_attack_grid_panel(
                 ax=ax,
                 data=records,
-                y_col=displacement_col,
+                x_col=x_col,
+                y_col=y_col,
                 attack_label=attack,
+                xlabel=xlabel,
+                ylabel=ylabel,
                 row_label=(col_index == 0),
             )
 
@@ -762,12 +779,9 @@ def plot_global_relaxation_attack_grid(records, output_dir):
         )
 
     label_axes(axes)
-    fig.suptitle("Relaxation vs contour exploration by attack type", y=1.06, fontsize=11)
+    fig.suptitle(title, y=1.06, fontsize=11)
     fig.tight_layout(rect=[0.04, 0, 1, 0.98])
-    fig.savefig(
-        output_dir / "global_relaxation_vs_contour_exploration_by_attack_type.png",
-        bbox_inches="tight",
-    )
+    fig.savefig(output_dir / output_name, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -778,22 +792,44 @@ def plot_global(records, output_dir):
     plot_global_relaxation_state(
         records=records,
         output_dir=output_dir,
-        displacement_col="relaxation_before_attack_median_displacement_a",
-        force_col="relaxation_before_attack_median_force_delta_ev_a",
-        title="Relaxation before attack",
-        output_name="global_relaxation_before_attack_vs_contour_exploration.png",
+        displacement_col="after_attack_before_relaxation_median_displacement_a",
+        force_col="after_attack_before_relaxation_median_force_delta_ev_a",
+        title="After attack, before relaxation",
+        output_name="global_after_attack_before_relaxation_vs_contour_exploration.png",
     )
 
     plot_global_relaxation_state(
         records=records,
         output_dir=output_dir,
-        displacement_col="relaxation_after_attack_median_displacement_a",
-        force_col="relaxation_after_attack_median_force_delta_ev_a",
-        title="Relaxation after attack",
-        output_name="global_relaxation_after_attack_vs_contour_exploration.png",
+        displacement_col="after_attack_after_relaxation_median_displacement_a",
+        force_col="after_attack_after_relaxation_median_force_delta_ev_a",
+        title="After attack, after relaxation",
+        output_name="global_after_attack_after_relaxation_vs_contour_exploration.png",
     )
 
-    plot_global_relaxation_attack_grid(records, output_dir)
+    plot_global_relaxation_attack_grid(
+        records=records,
+        output_dir=output_dir,
+        x_col="contour_displacement_p95_a",
+        before_col="after_attack_before_relaxation_median_displacement_a",
+        after_col="after_attack_after_relaxation_median_displacement_a",
+        xlabel=r"Contour p95 displacement ($\AA$)",
+        ylabel=r"Median displacement ($\AA$)",
+        title="Relaxation vs contour exploration by attack type: displacement",
+        output_name="global_relaxation_vs_contour_exploration_by_attack_type_displacement.png",
+    )
+
+    plot_global_relaxation_attack_grid(
+        records=records,
+        output_dir=output_dir,
+        x_col="contour_force_delta_p95_ev_a",
+        before_col="after_attack_before_relaxation_median_force_delta_ev_a",
+        after_col="after_attack_after_relaxation_median_force_delta_ev_a",
+        xlabel=r"Contour p95 $\Delta$ force (eV/$\AA$)",
+        ylabel=r"Median $\Delta$ force (eV/$\AA$)",
+        title=r"Relaxation vs contour exploration by attack type: $\Delta$ force",
+        output_name="global_relaxation_vs_contour_exploration_by_attack_type_delta_force.png",
+    )
 
 
 def main():

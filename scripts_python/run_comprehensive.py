@@ -720,7 +720,7 @@ def make_parametric_figure_set(records, output_dir, suffix, attacks_to_plot, bub
             )),
         ],
         y_getters=[
-            lambda row: scalar_metric(row, "before_relax_steps"),
+            lambda row: scalar_metric(row, "after_relax_steps"),
             lambda row: scalar_metric(row, "after_relax_steps"),
         ],
     )
@@ -747,7 +747,7 @@ def make_parametric_figure_set(records, output_dir, suffix, attacks_to_plot, bub
             )),
         ],
         y_getters=[
-            lambda row: scalar_metric(row, "before_relax_steps"),
+            lambda row: scalar_metric(row, "after_relax_steps"),
             lambda row: scalar_metric(row, "after_relax_steps"),
         ],
     )

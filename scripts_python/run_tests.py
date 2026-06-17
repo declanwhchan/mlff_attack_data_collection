@@ -421,7 +421,7 @@ def run_one(row):
         relaxed_atoms,
         output_dir,
         "before",
-        plot_title(row, calculator, "Forces Before Attack Relaxation"),
+        plot_title(row, calculator, "Forces Before Attack, After Relaxation"),
     )
 
     after_force_csv = save_force_data(attack_relaxed_atoms, output_dir, "after")
@@ -429,7 +429,7 @@ def run_one(row):
         attack_relaxed_atoms,
         output_dir,
         "after",
-        plot_title(row, calculator, "Forces After Attack and Relaxation"),
+        plot_title(row, calculator, "Forces After Attack, After Relaxation"),
     )
 
     final_relaxed_cif = output_dir / "final_relaxed.cif"
