@@ -444,20 +444,20 @@ def apply_shared_figure_header(fig, subtitle=None, left=0.05):
             handles=model_legend_handles(),
             loc="upper center",
             ncol=2,
-            bbox_to_anchor=(0.5, 1.105),
+            bbox_to_anchor=(0.5, 1.045),
             borderaxespad=0.0,
         )
-        fig.suptitle(subtitle, y=1.035, fontsize=9)
-        fig.tight_layout(rect=[left, 0.00, 1.00, 0.91])
+        fig.suptitle(subtitle, y=1.005, fontsize=9)
+        fig.tight_layout(rect=[left, 0.00, 1.00, 0.955])
     else:
         fig.legend(
             handles=model_legend_handles(),
             loc="upper center",
             ncol=2,
-            bbox_to_anchor=(0.5, 1.035),
+            bbox_to_anchor=(0.5, 1.015),
             borderaxespad=0.0,
         )
-        fig.tight_layout(rect=[left, 0.00, 1.00, 0.95])
+        fig.tight_layout(rect=[left, 0.00, 1.00, 0.975])
 
 
 def add_panel_label(ax, label):
@@ -1560,20 +1560,10 @@ def draw_whisker_span(ax, records, attack, value_getter, ylabel, missing_rows):
         ax.plot(
             x_values,
             y_values,
-            color=color,
+            marker="o",
+            markersize=4,
             linewidth=1.8,
-            alpha=0.78,
-            zorder=2,
-        )
-
-        ax.scatter(
-            x_values,
-            y_values,
-            s=42,
             color=color,
-            alpha=0.88,
-            edgecolor="white",
-            linewidth=0.45,
             label=calculator.upper(),
             zorder=3,
         )
@@ -1714,20 +1704,10 @@ def draw_whisker_span_by_steps(ax, records, attack, epsilon, value_getter, ylabe
         ax.plot(
             x_values,
             y_values,
-            color=color,
+            marker="o",
+            markersize=4,
             linewidth=1.8,
-            alpha=0.78,
-            zorder=2,
-        )
-
-        ax.scatter(
-            x_values,
-            y_values,
-            s=42,
             color=color,
-            alpha=0.88,
-            edgecolor="white",
-            linewidth=0.45,
             label=calculator.upper(),
             zorder=3,
         )
