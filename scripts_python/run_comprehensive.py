@@ -438,28 +438,6 @@ def model_legend_handles():
     ]
 
 
-def apply_shared_figure_header(fig, subtitle=None, left=0.05):
-    if subtitle:
-        fig.legend(
-            handles=model_legend_handles(),
-            loc="upper center",
-            ncol=2,
-            bbox_to_anchor=(0.5, 1.105),
-            borderaxespad=0.0,
-        )
-        fig.suptitle(subtitle, y=1.035, fontsize=9)
-        fig.tight_layout(rect=[left, 0.00, 1.00, 0.91])
-    else:
-        fig.legend(
-            handles=model_legend_handles(),
-            loc="upper center",
-            ncol=2,
-            bbox_to_anchor=(0.5, 1.035),
-            borderaxespad=0.0,
-        )
-        fig.tight_layout(rect=[left, 0.00, 1.00, 0.95])
-
-
 def add_panel_label(ax, label):
     ax.text(
         -0.13,
@@ -1019,7 +997,14 @@ def make_convergence_figure(records, output_dir):
             add_panel_label(ax, chr(ord("A") + panel_index))
             panel_index += 1
 
-    apply_shared_figure_header(fig, left=0.03)
+    fig.legend(
+        handles=model_legend_handles(),
+        loc="upper center",
+        ncol=2,
+        bbox_to_anchor=(0.5, 1.03),
+    )
+
+    fig.tight_layout(rect=[0.03, 0.00, 1.00, 0.96])
     save_figure(fig, output_dir / "figure_1_convergence_by_epsilon")
     plt.close(fig)
 
@@ -1172,11 +1157,15 @@ def make_ci_figure(records, output_dir, figure_name, ylabel, rows):
             add_panel_label(ax, chr(ord("A") + panel_index))
             panel_index += 1
 
-    apply_shared_figure_header(
-        fig,
-        subtitle="Line = median, shaded band = 95% CI",
-        left=0.03,
+    fig.legend(
+        handles=model_legend_handles(),
+        loc="upper center",
+        ncol=2,
+        bbox_to_anchor=(0.5, 1.03),
     )
+
+    fig.suptitle("Line = median, shaded band = 95% CI", y=1.02, fontsize=9)
+    fig.tight_layout(rect=[0.03, 0.00, 1.00, 0.94])
     save_figure(fig, output_dir / figure_name)
     plt.close(fig)
 
@@ -1223,7 +1212,14 @@ def make_distribution_figure(records, output_dir, figure_name, ylabel, rows):
             add_panel_label(ax, chr(ord("A") + panel_index))
             panel_index += 1
 
-    apply_shared_figure_header(fig, left=0.03)
+    fig.legend(
+        handles=model_legend_handles(),
+        loc="upper center",
+        ncol=2,
+        bbox_to_anchor=(0.5, 1.03),
+    )
+
+    fig.tight_layout(rect=[0.03, 0.00, 1.00, 0.96])
     save_figure(fig, output_dir / figure_name)
     plt.close(fig)
 
@@ -1410,296 +1406,6 @@ def draw_grouped_boxplot_by_steps(ax, records, attack, epsilon, value_getter, yl
     return True
 
 
-def tukey_whisker_span(values):
-    values = np.asarray(values, dtype=float)
-    values = values[np.isfinite(values)]
-
-    if len(values) == 0:
-        return None
-
-    if len(values) == 1:
-        return 0.0
-
-    q1, q3 = np.percentile(values, [25, 75])
-    iqr = q3 - q1
-
-    lower_fence = q1 - 1.5 * iqr
-    upper_fence = q3 + 1.5 * iqr
-
-    inlier_values = values[(values >= lower_fence) & (values <= upper_fence)]
-    if len(inlier_values) == 0:
-        return None
-
-    return float(np.max(inlier_values) - np.min(inlier_values))
-
-
-def whisker_span_delta(row, initial_getter, final_getter):
-    initial_values, initial_reason = initial_getter(row)
-    if initial_values is None:
-        return None, initial_reason
-
-    final_values, final_reason = final_getter(row)
-    if final_values is None:
-        return None, final_reason
-
-    initial_span = tukey_whisker_span(initial_values)
-    final_span = tukey_whisker_span(final_values)
-
-    if initial_span is None:
-        return None, "No initial whisker span"
-    if final_span is None:
-        return None, "No final whisker span"
-
-    return final_span - initial_span, None
-
-
-def collect_whisker_span_delta_data(records, attack, initial_getter, final_getter, missing_rows):
-    attack_records = records[records["attack_label"] == attack].copy()
-    epsilons = sorted(attack_records["epsilon"].dropna().unique())
-
-    points = []
-    rng = np.random.default_rng(12345)
-
-    for index, epsilon in enumerate(epsilons, start=1):
-        for calculator in ["mace", "uma"]:
-            rowset = attack_records[
-                (attack_records["epsilon"] == epsilon)
-                & (attack_records["calculator"] == calculator)
-            ]
-
-            for _, row in rowset.iterrows():
-                value, reason = whisker_span_delta(row, initial_getter, final_getter)
-                if value is None:
-                    missing_rows.append({
-                        "attack": attack,
-                        "calculator": calculator,
-                        "epsilon": epsilon,
-                        "run_id": row["run_id"],
-                        "reason": reason,
-                    })
-                    continue
-
-                points.append({
-                    "x": index + MODEL_OFFSETS[calculator] + rng.normal(0.0, 0.012),
-                    "y": value,
-                    "calculator": calculator,
-                })
-
-    return epsilons, points
-
-
-def draw_whisker_span_delta(ax, records, attack, initial_getter, final_getter, ylabel, missing_rows):
-    epsilons, points = collect_whisker_span_delta_data(
-        records,
-        attack,
-        initial_getter,
-        final_getter,
-        missing_rows,
-    )
-
-    if not points:
-        ax.text(0.5, 0.5, "No plottable data", ha="center", va="center", transform=ax.transAxes)
-        ax.set_axis_off()
-        return False
-
-    for calculator, color in CALCULATOR_COLORS.items():
-        calc_points = [point for point in points if point["calculator"] == calculator]
-        if not calc_points:
-            continue
-
-        ax.scatter(
-            [point["x"] for point in calc_points],
-            [point["y"] for point in calc_points],
-            s=24,
-            color=color,
-            alpha=0.75,
-            edgecolor="white",
-            linewidth=0.35,
-            label=calculator.upper(),
-            zorder=3,
-        )
-
-    ax.axhline(0.0, color="#444444", linewidth=0.9, linestyle="--", alpha=0.65)
-
-    tick_positions = list(range(1, len(epsilons) + 1))
-    ax.set_xticks(tick_positions)
-    ax.set_xticklabels([format_epsilon_label(epsilon) for epsilon in epsilons])
-    style_epsilon_tick_labels(ax, rotate=len(epsilons) >= 6)
-    ax.set_xlabel(r"$\epsilon$ ($\AA$)")
-    ax.set_ylabel(ylabel)
-    ax.grid(True, axis="y")
-    ax.grid(False, axis="x")
-    ax.margins(x=0.05, y=0.12)
-
-    return True
-
-
-def make_whisker_span_delta_figure(records, output_dir, figure_name, ylabel, initial_getter, final_getter):
-    fig, axes = plt.subplots(1, 3, figsize=(8.4, 3.2), sharex=False, sharey=False)
-
-    all_missing = []
-
-    for col_index, attack in enumerate(ATTACK_ORDER):
-        ax = axes[col_index]
-        attack_missing = []
-
-        draw_whisker_span_delta(
-            ax=ax,
-            records=records,
-            attack=attack,
-            initial_getter=initial_getter,
-            final_getter=final_getter,
-            ylabel=ylabel,
-            missing_rows=attack_missing,
-        )
-
-        for missing in attack_missing:
-            missing["figure"] = figure_name
-            missing["panel"] = attack
-        all_missing.extend(attack_missing)
-
-        ax.set_title(attack)
-        add_panel_label(ax, chr(ord("A") + col_index))
-
-    apply_shared_figure_header(
-        fig,
-        subtitle="Each dot = final whisker span - initial whisker span",
-        left=0.05,
-    )
-    save_figure(fig, output_dir / figure_name)
-    plt.close(fig)
-
-    return all_missing
-
-
-def collect_whisker_span_delta_data_by_steps(records, attack, epsilon, initial_getter, final_getter, missing_rows):
-    attack_records = records[
-        (records["attack_label"] == attack)
-        & (records["epsilon"] == float(epsilon))
-    ].copy()
-    steps = sorted(attack_records["n_steps"].dropna().unique())
-
-    points = []
-    rng = np.random.default_rng(12345)
-
-    for index, n_steps in enumerate(steps, start=1):
-        for calculator in ["mace", "uma"]:
-            rowset = attack_records[
-                (attack_records["n_steps"] == n_steps)
-                & (attack_records["calculator"] == calculator)
-            ]
-
-            for _, row in rowset.iterrows():
-                value, reason = whisker_span_delta(row, initial_getter, final_getter)
-                if value is None:
-                    missing_rows.append({
-                        "attack": attack,
-                        "calculator": calculator,
-                        "epsilon": epsilon,
-                        "n_steps": n_steps,
-                        "run_id": row["run_id"],
-                        "reason": reason,
-                    })
-                    continue
-
-                points.append({
-                    "x": index + MODEL_OFFSETS[calculator] + rng.normal(0.0, 0.012),
-                    "y": value,
-                    "calculator": calculator,
-                })
-
-    return steps, points
-
-
-def draw_whisker_span_delta_by_steps(ax, records, attack, epsilon, initial_getter, final_getter, ylabel, missing_rows):
-    steps, points = collect_whisker_span_delta_data_by_steps(
-        records,
-        attack,
-        epsilon,
-        initial_getter,
-        final_getter,
-        missing_rows,
-    )
-
-    if not points:
-        ax.text(0.5, 0.5, "No plottable data", ha="center", va="center", transform=ax.transAxes)
-        ax.set_axis_off()
-        return False
-
-    for calculator, color in CALCULATOR_COLORS.items():
-        calc_points = [point for point in points if point["calculator"] == calculator]
-        if not calc_points:
-            continue
-
-        ax.scatter(
-            [point["x"] for point in calc_points],
-            [point["y"] for point in calc_points],
-            s=24,
-            color=color,
-            alpha=0.75,
-            edgecolor="white",
-            linewidth=0.35,
-            label=calculator.upper(),
-            zorder=3,
-        )
-
-    ax.axhline(0.0, color="#444444", linewidth=0.9, linestyle="--", alpha=0.65)
-
-    tick_positions = list(range(1, len(steps) + 1))
-    ax.set_xticks(tick_positions)
-    ax.set_xticklabels([str(int(step)) for step in steps])
-    ax.tick_params(axis="x", labelrotation=35, pad=2)
-    for label in ax.get_xticklabels():
-        label.set_horizontalalignment("right")
-
-    ax.set_xlabel("n_steps")
-    ax.set_ylabel(ylabel)
-    ax.grid(True, axis="y")
-    ax.grid(False, axis="x")
-    ax.margins(x=0.05, y=0.12)
-
-    return True
-
-
-def make_whisker_span_delta_by_steps_figure(records, output_dir, figure_name, ylabel, initial_getter, final_getter, epsilon=0.1):
-    fig, axes = plt.subplots(1, 2, figsize=(7.0, 3.4), sharex=False, sharey=False)
-
-    all_missing = []
-
-    for col_index, attack in enumerate(STEP_ATTACK_ORDER):
-        ax = axes[col_index]
-        attack_missing = []
-
-        draw_whisker_span_delta_by_steps(
-            ax=ax,
-            records=records,
-            attack=attack,
-            epsilon=epsilon,
-            initial_getter=initial_getter,
-            final_getter=final_getter,
-            ylabel=ylabel,
-            missing_rows=attack_missing,
-        )
-
-        for missing in attack_missing:
-            missing["figure"] = figure_name
-            missing["panel"] = attack
-        all_missing.extend(attack_missing)
-
-        ax.set_title(attack)
-        add_panel_label(ax, chr(ord("A") + col_index))
-
-    apply_shared_figure_header(
-        fig,
-        subtitle=rf"Fixed $\epsilon$ = {epsilon:g} $\AA$; each dot = final whisker span - initial whisker span",
-        left=0.06,
-    )
-    save_figure(fig, output_dir / figure_name)
-    plt.close(fig)
-
-    return all_missing
-
-
 def plot_convergence_panel_by_steps(ax, records, attack, epsilon, step_col, conv_col):
     attack_records = records[
         (records["attack_label"] == attack)
@@ -1799,11 +1505,15 @@ def make_convergence_by_steps_figure(records, output_dir, epsilon=0.1):
             add_panel_label(ax, chr(ord("A") + panel_index))
             panel_index += 1
 
-    apply_shared_figure_header(
-        fig,
-        subtitle=rf"Fixed $\epsilon$ = {epsilon:g} $\AA$",
-        left=0.05,
+    fig.suptitle(rf"Fixed $\epsilon$ = {epsilon:g} $\AA$", y=1.02, fontsize=9)
+    fig.legend(
+        handles=model_legend_handles(),
+        loc="upper center",
+        ncol=2,
+        bbox_to_anchor=(0.5, 1.00),
     )
+
+    fig.tight_layout(rect=[0.05, 0.00, 1.00, 0.94])
     save_figure(fig, output_dir / "figure_4_convergence_by_n_steps")
     plt.close(fig)
 
@@ -1936,11 +1646,15 @@ def make_ci_by_steps_figure(records, output_dir, figure_name, ylabel, rows, epsi
             add_panel_label(ax, chr(ord("A") + panel_index))
             panel_index += 1
 
-    apply_shared_figure_header(
-        fig,
-        subtitle=rf"Fixed $\epsilon$ = {epsilon:g} $\AA$; line = median, shaded band = 95% CI",
-        left=0.05,
+    fig.suptitle(rf"Fixed $\epsilon$ = {epsilon:g} $\AA$; line = median, shaded band = 95% CI", y=1.02, fontsize=9)
+    fig.legend(
+        handles=model_legend_handles(),
+        loc="upper center",
+        ncol=2,
+        bbox_to_anchor=(0.5, 1.00),
     )
+
+    fig.tight_layout(rect=[0.05, 0.00, 1.00, 0.94])
     save_figure(fig, output_dir / figure_name)
     plt.close(fig)
 
@@ -1988,11 +1702,15 @@ def make_distribution_by_steps_figure(records, output_dir, figure_name, ylabel, 
             add_panel_label(ax, chr(ord("A") + panel_index))
             panel_index += 1
 
-    apply_shared_figure_header(
-        fig,
-        subtitle=rf"Fixed $\epsilon$ = {epsilon:g} $\AA$",
-        left=0.05,
+    fig.suptitle(rf"Fixed $\epsilon$ = {epsilon:g} $\AA$", y=1.02, fontsize=9)
+    fig.legend(
+        handles=model_legend_handles(),
+        loc="upper center",
+        ncol=2,
+        bbox_to_anchor=(0.5, 1.00),
     )
+
+    fig.tight_layout(rect=[0.05, 0.00, 1.00, 0.94])
     save_figure(fig, output_dir / figure_name)
     plt.close(fig)
 
@@ -2271,74 +1989,106 @@ def main():
         ],
     )
 
-    force_whisker_span_missing = make_whisker_span_delta_figure(
+    force_whisker_span_missing = make_distribution_figure(
         records=epsilon_records,
         output_dir=args.output_dir,
         figure_name="figure_2_delta_force_whisker_span_by_epsilon",
-        ylabel=r"$\Delta$ force whisker span change (eV/$\AA$)",
-        initial_getter=lambda row: force_delta_values(
-            row["run_dir"],
-            "before_forces.csv",
-            "perturbed_forces.csv",
-        ),
-        final_getter=lambda row: force_delta_values(
-            row["run_dir"],
-            "before_forces.csv",
-            "after_forces.csv",
-        ),
+        ylabel=r"$\Delta$ force (eV/$\AA$)",
+        rows=[
+            (
+                "After attack, before relaxation",
+                lambda: (lambda row: force_delta_values(
+                    row["run_dir"],
+                    "before_forces.csv",
+                    "perturbed_forces.csv",
+                )),
+            ),
+            (
+                "After attack, after relaxation",
+                lambda: (lambda row: force_delta_values(
+                    row["run_dir"],
+                    "before_forces.csv",
+                    "after_forces.csv",
+                )),
+            ),
+        ],
     )
 
-    displacement_whisker_span_missing = make_whisker_span_delta_figure(
+    displacement_whisker_span_missing = make_distribution_figure(
         records=epsilon_records,
         output_dir=args.output_dir,
         figure_name="figure_3_displacement_whisker_span_by_epsilon",
-        ylabel=r"Displacement whisker span change ($\AA$)",
-        initial_getter=lambda row: displacement_values(
-            row["run_dir"],
-            "before_forces.csv",
-            "perturbed_forces.csv",
-        ),
-        final_getter=lambda row: displacement_values(
-            row["run_dir"],
-            "before_forces.csv",
-            "after_forces.csv",
-        ),
+        ylabel=r"Displacement ($\AA$)",
+        rows=[
+            (
+                "After attack, before relaxation",
+                lambda: (lambda row: displacement_values(
+                    row["run_dir"],
+                    "before_forces.csv",
+                    "perturbed_forces.csv",
+                )),
+            ),
+            (
+                "After attack, after relaxation",
+                lambda: (lambda row: displacement_values(
+                    row["run_dir"],
+                    "before_forces.csv",
+                    "after_forces.csv",
+                )),
+            ),
+        ],
     )
 
-    force_by_steps_whisker_span_missing = make_whisker_span_delta_by_steps_figure(
+    force_by_steps_whisker_span_missing = make_distribution_by_steps_figure(
         records=n_step_records,
         output_dir=args.output_dir,
         figure_name="figure_5_delta_force_whisker_span_by_n_steps",
-        ylabel=r"$\Delta$ force whisker span change (eV/$\AA$)",
+        ylabel=r"$\Delta$ force (eV/$\AA$)",
         epsilon=0.1,
-        initial_getter=lambda row: force_delta_values(
-            row["run_dir"],
-            "before_forces.csv",
-            "perturbed_forces.csv",
-        ),
-        final_getter=lambda row: force_delta_values(
-            row["run_dir"],
-            "before_forces.csv",
-            "after_forces.csv",
-        ),
+        rows=[
+            (
+                "After attack, before relaxation",
+                lambda: (lambda row: force_delta_values(
+                    row["run_dir"],
+                    "before_forces.csv",
+                    "perturbed_forces.csv",
+                )),
+            ),
+            (
+                "After attack, after relaxation",
+                lambda: (lambda row: force_delta_values(
+                    row["run_dir"],
+                    "before_forces.csv",
+                    "after_forces.csv",
+                )),
+            ),
+        ],
     )
 
-    displacement_by_steps_whisker_span_missing = make_whisker_span_delta_by_steps_figure(
+    displacement_by_steps_whisker_span_missing = make_distribution_by_steps_figure(
         records=n_step_records,
         output_dir=args.output_dir,
         figure_name="figure_6_displacement_whisker_span_by_n_steps",
-        ylabel=r"Displacement whisker span change ($\AA$)",
+        ylabel=r"Displacement ($\AA$)",
         epsilon=0.1,
-        initial_getter=lambda row: displacement_values(
-            row["run_dir"],
-            "before_forces.csv",
-            "perturbed_forces.csv",
-        ),
-        final_getter=lambda row: displacement_values(
-            row["run_dir"],
-            "before_forces.csv",
-            "after_forces.csv",
-        ),
+        rows=[
+            (
+                "After attack, before relaxation",
+                lambda: (lambda row: displacement_values(
+                    row["run_dir"],
+                    "before_forces.csv",
+                    "perturbed_forces.csv",
+                )),
+            ),
+            (
+                "After attack, after relaxation",
+                lambda: (lambda row: displacement_values(
+                    row["run_dir"],
+                    "before_forces.csv",
+                    "after_forces.csv",
+                )),
+            ),
+        ],
     )
 
     for material_slug, material_records in records.groupby("material_slug"):
@@ -2456,38 +2206,54 @@ def main():
                 ],
             )
 
-            make_whisker_span_delta_figure(
+            make_distribution_figure(
                 records=material_epsilon_records,
                 output_dir=material_output_dir,
                 figure_name="figure_2_delta_force_whisker_span_by_epsilon",
-                ylabel=r"$\Delta$ force whisker span change (eV/$\AA$)",
-                initial_getter=lambda row: force_delta_values(
-                    row["run_dir"],
-                    "before_forces.csv",
-                    "perturbed_forces.csv",
-                ),
-                final_getter=lambda row: force_delta_values(
-                    row["run_dir"],
-                    "before_forces.csv",
-                    "after_forces.csv",
-                ),
+                ylabel=r"$\Delta$ force (eV/$\AA$)",
+                rows=[
+                    (
+                        "After attack, before relaxation",
+                        lambda: (lambda row: force_delta_values(
+                            row["run_dir"],
+                            "before_forces.csv",
+                            "perturbed_forces.csv",
+                        )),
+                    ),
+                    (
+                        "After attack, after relaxation",
+                        lambda: (lambda row: force_delta_values(
+                            row["run_dir"],
+                            "before_forces.csv",
+                            "after_forces.csv",
+                        )),
+                    ),
+                ],
             )
 
-            make_whisker_span_delta_figure(
+            make_distribution_figure(
                 records=material_epsilon_records,
                 output_dir=material_output_dir,
                 figure_name="figure_3_displacement_whisker_span_by_epsilon",
-                ylabel=r"Displacement whisker span change ($\AA$)",
-                initial_getter=lambda row: displacement_values(
-                    row["run_dir"],
-                    "before_forces.csv",
-                    "perturbed_forces.csv",
-                ),
-                final_getter=lambda row: displacement_values(
-                    row["run_dir"],
-                    "before_forces.csv",
-                    "after_forces.csv",
-                ),
+                ylabel=r"Displacement ($\AA$)",
+                rows=[
+                    (
+                        "After attack, before relaxation",
+                        lambda: (lambda row: displacement_values(
+                            row["run_dir"],
+                            "before_forces.csv",
+                            "perturbed_forces.csv",
+                        )),
+                    ),
+                    (
+                        "After attack, after relaxation",
+                        lambda: (lambda row: displacement_values(
+                            row["run_dir"],
+                            "before_forces.csv",
+                            "after_forces.csv",
+                        )),
+                    ),
+                ],
             )
 
             make_parametric_figure_set(

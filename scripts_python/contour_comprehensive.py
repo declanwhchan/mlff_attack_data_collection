@@ -622,8 +622,8 @@ def plot_global_relaxation_state(records, output_dir, displacement_col, force_co
         data=displacement,
         x_col="contour_displacement_p95_a",
         y_col=displacement_col,
-        xlabel=r"Contour p95 ($\AA$)",
-        ylabel=r"Attack median ($\AA$)",
+        xlabel=r"Contour p95 displacement ($\AA$)",
+        ylabel=r"Median displacement ($\AA$)",
         title="Displacement",
     )
 
@@ -632,8 +632,8 @@ def plot_global_relaxation_state(records, output_dir, displacement_col, force_co
         data=force,
         x_col="contour_force_delta_p95_ev_a",
         y_col=force_col,
-        xlabel=r"Contour p95 (eV/$\AA$)",
-        ylabel=r"Attack median (eV/$\AA$)",
+        xlabel=r"Contour p95 $\Delta$ force (eV/$\AA$)",
+        ylabel=r"Median $\Delta$ force (eV/$\AA$)",
         title=r"$\Delta$ force",
     )
 
@@ -813,8 +813,8 @@ def plot_global(records, output_dir):
         x_col="contour_displacement_p95_a",
         before_col="after_attack_before_relaxation_median_displacement_a",
         after_col="after_attack_after_relaxation_median_displacement_a",
-        xlabel=r"Contour p95 ($\AA$)",
-        ylabel=r"Attack median ($\AA$)",
+        xlabel=r"Contour p95 displacement ($\AA$)",
+        ylabel=r"Median displacement ($\AA$)",
         title="Relaxation vs contour exploration by attack type: displacement",
         output_name="global_relaxation_vs_contour_exploration_by_attack_type_displacement.png",
     )
@@ -825,8 +825,8 @@ def plot_global(records, output_dir):
         x_col="contour_force_delta_p95_ev_a",
         before_col="after_attack_before_relaxation_median_force_delta_ev_a",
         after_col="after_attack_after_relaxation_median_force_delta_ev_a",
-        xlabel=r"Contour p95 (eV/$\AA$)",
-        ylabel=r"Attack median (eV/$\AA$)",
+        xlabel=r"Contour p95 $\Delta$ force (eV/$\AA$)",
+        ylabel=r"Median $\Delta$ force (eV/$\AA$)",
         title=r"Relaxation vs contour exploration by attack type: $\Delta$ force",
         output_name="global_relaxation_vs_contour_exploration_by_attack_type_delta_force.png",
     )

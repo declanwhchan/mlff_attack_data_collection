@@ -102,17 +102,17 @@ tail -f slurm-<jobid>.out
 In PowerShell:
 
 ```bash
-ssh -L 8000:localhost:8000 <username>@fir.alliancecan.ca
+ssh -L 8888:localhost:8888 <username>@fir.alliancecan.ca
 ```
 
 Then, open a separate terminal and ensure you are in the same ```login<#>```. If not, then ```ssh login<#>``` and continue on HPC:
 
 ```bash
 cd mlff_attack_data_collection
-python -m http.server 8000
+python -m http.server 8888
 ```
 
-Open http://localhost:8000
+Open http://localhost:8888
 
 
 ### Or Download Main Results
