@@ -618,10 +618,11 @@ def make_parametric_state_figure(
         ("After attack, after relaxation", x_getters[1], y_getters[1]),
     ]
 
+    n_cols = len(attacks_to_plot)
     fig, axes = plt.subplots(
         2,
-        len(attacks_to_plot),
-        figsize=(4.0 * len(attacks_to_plot), 7.0),
+        n_cols,
+        figsize=(4.6 * n_cols, 7.8),
         sharex=False,
         sharey=False,
     )
@@ -657,9 +658,14 @@ def make_parametric_state_figure(
                 show_ylabel=(col_index == 0),
             )
 
+            ax.title.set_fontsize(9)
+            ax.xaxis.label.set_fontsize(8)
+            ax.yaxis.label.set_fontsize(8)
+            ax.tick_params(axis="both", labelsize=7)
+
             if col_index == 0:
                 ax.text(
-                    -0.34,
+                    -0.28,
                     0.5,
                     row_title,
                     transform=ax.transAxes,
@@ -684,13 +690,18 @@ def make_parametric_state_figure(
             labels,
             loc="upper center",
             ncol=4,
-            bbox_to_anchor=(0.5, 1.04),
+            bbox_to_anchor=(0.5, 1.035),
             frameon=False,
             title=f"Bubble size = {bubble_label}",
+            fontsize=8,
+            title_fontsize=8,
+            handlelength=1.8,
+            columnspacing=1.1,
+            handletextpad=0.5,
         )
 
-    fig.suptitle(title, y=1.09, fontsize=11)
-    fig.tight_layout(rect=[0.04, 0, 1, 0.99])
+    fig.suptitle(title, y=1.085, fontsize=11)
+    fig.tight_layout(rect=[0.05, 0.00, 1.00, 0.965])
     save_figure(fig, output_dir / figure_name)
     plt.close(fig)
 
@@ -704,7 +715,7 @@ def make_parametric_figure_set(records, output_dir, suffix, attacks_to_plot, bub
         figure_name=f"figure_7_convergence_vs_displacement_by_{suffix}",
         title=f"Convergence vs displacement by {bubble_label}",
         x_label=r"Median displacement ($\AA$)",
-        y_label="Relaxation steps",
+        y_label="relaxation steps",
         bubble_label=bubble_label,
         attacks_to_plot=attacks_to_plot,
         x_getters=[
@@ -731,7 +742,7 @@ def make_parametric_figure_set(records, output_dir, suffix, attacks_to_plot, bub
         figure_name=f"figure_8_convergence_vs_delta_force_by_{suffix}",
         title=f"Convergence vs delta force by {bubble_label}",
         x_label=r"Median $\Delta$ force (eV/$\AA$)",
-        y_label="Relaxation steps",
+        y_label="relaxation steps",
         bubble_label=bubble_label,
         attacks_to_plot=attacks_to_plot,
         x_getters=[
@@ -872,7 +883,6 @@ def draw_grouped_boxplot(ax, records, attack, value_getter, ylabel, missing_rows
         showfliers=False,
         zorder=2,
         medianprops={"color": "#111111", "linewidth": 1.5},
-        whiskerprops={"color": "#444444", "linewidth": 0.9},
         capprops={"color": "#444444", "linewidth": 0.9},
     )
 
@@ -946,7 +956,7 @@ def plot_convergence_panel(ax, records, attack, step_col, conv_col):
     ax.set_xticklabels([format_epsilon_label(epsilon) for epsilon in epsilons])
     style_epsilon_tick_labels(ax, rotate=len(epsilons) >= 6)
     ax.set_xlabel(r"$\epsilon$ ($\AA$)")
-    ax.set_ylabel("steps until convergence")
+    ax.set_ylabel("relaxation steps")
     ax.grid(True, axis="y")
     ax.grid(False, axis="x")
     ax.margins(x=0.03)
@@ -999,30 +1009,32 @@ def make_convergence_figure(records, output_dir):
     plt.close(fig)
 
 
-def whisker_span(values):
+def bootstrap_median_ci(values, confidence=95, n_bootstrap=1000, seed=12345):
     values = np.asarray(values, dtype=float)
     values = values[np.isfinite(values)]
 
     if len(values) == 0:
         return None
 
-    q1 = np.percentile(values, 25)
-    q3 = np.percentile(values, 75)
-    iqr = q3 - q1
+    median = float(np.median(values))
 
-    lower_limit = q1 - 1.5 * iqr
-    upper_limit = q3 + 1.5 * iqr
+    if len(values) == 1:
+        return median, median, median
 
-    lower_values = values[values >= lower_limit]
-    upper_values = values[values <= upper_limit]
+    rng = np.random.default_rng(seed)
+    boot_medians = []
+    for _ in range(n_bootstrap):
+        sample = rng.choice(values, size=len(values), replace=True)
+        boot_medians.append(np.median(sample))
 
-    if len(lower_values) == 0 or len(upper_values) == 0:
-        return None
+    alpha = (100 - confidence) / 2
+    lower = float(np.percentile(boot_medians, alpha))
+    upper = float(np.percentile(boot_medians, 100 - alpha))
 
-    return float(upper_values.max() - lower_values.min())
+    return median, lower, upper
 
 
-def draw_grouped_whisker_span(ax, records, attack, value_getter, ylabel, missing_rows):
+def draw_grouped_ci(ax, records, attack, value_getter, ylabel, missing_rows):
     epsilons, positions, values, colors, point_x, point_y = collect_box_data(
         records,
         attack,
@@ -1035,13 +1047,17 @@ def draw_grouped_whisker_span(ax, records, attack, value_getter, ylabel, missing
         ax.set_axis_off()
         return False
 
-    series = {"mace": {"x": [], "y": []}, "uma": {"x": [], "y": []}}
+    series = {
+        "mace": {"x": [], "median": [], "lower": [], "upper": []},
+        "uma": {"x": [], "median": [], "lower": [], "upper": []},
+    }
 
     for position, box_values in zip(positions, values):
-        span = whisker_span(box_values)
-        if span is None:
+        ci = bootstrap_median_ci(box_values)
+        if ci is None:
             continue
 
+        median, lower, upper = ci
         center_position = round(position)
         offset = position - center_position
         calculator = min(
@@ -1051,19 +1067,36 @@ def draw_grouped_whisker_span(ax, records, attack, value_getter, ylabel, missing
 
         x_value = round(position - MODEL_OFFSETS[calculator])
         series[calculator]["x"].append(x_value)
-        series[calculator]["y"].append(span)
+        series[calculator]["median"].append(median)
+        series[calculator]["lower"].append(lower)
+        series[calculator]["upper"].append(upper)
 
     for calculator, data in series.items():
         if not data["x"]:
             continue
 
+        x = np.asarray(data["x"], dtype=float)
+        median = np.asarray(data["median"], dtype=float)
+        lower = np.asarray(data["lower"], dtype=float)
+        upper = np.asarray(data["upper"], dtype=float)
+        color = CALCULATOR_COLORS[calculator]
+
+        ax.fill_between(
+            x,
+            lower,
+            upper,
+            color=color,
+            alpha=0.18,
+            linewidth=0,
+        )
+
         ax.plot(
-            data["x"],
-            data["y"],
+            x,
+            median,
             marker="o",
             markersize=4,
             linewidth=1.8,
-            color=CALCULATOR_COLORS[calculator],
+            color=color,
             label=calculator.upper(),
         )
 
@@ -1080,7 +1113,7 @@ def draw_grouped_whisker_span(ax, records, attack, value_getter, ylabel, missing
     return True
 
 
-def make_whisker_span_figure(records, output_dir, figure_name, ylabel, rows):
+def make_ci_figure(records, output_dir, figure_name, ylabel, rows):
     fig, axes = plt.subplots(2, 3, figsize=(8.4, 5.2), sharex=False, sharey=False)
 
     all_missing = []
@@ -1091,7 +1124,7 @@ def make_whisker_span_figure(records, output_dir, figure_name, ylabel, rows):
             ax = axes[row_index, col_index]
             attack_missing = []
 
-            draw_grouped_whisker_span(
+            draw_grouped_ci(
                 ax=ax,
                 records=records,
                 attack=attack,
@@ -1131,7 +1164,8 @@ def make_whisker_span_figure(records, output_dir, figure_name, ylabel, rows):
         bbox_to_anchor=(0.5, 1.03),
     )
 
-    fig.tight_layout(rect=[0.03, 0.00, 1.00, 0.96])
+    fig.suptitle("Line = median, shaded band = 95% bootstrap CI", y=1.02, fontsize=9)
+    fig.tight_layout(rect=[0.03, 0.00, 1.00, 0.94])
     save_figure(fig, output_dir / figure_name)
     plt.close(fig)
 
@@ -1348,7 +1382,6 @@ def draw_grouped_boxplot_by_steps(ax, records, attack, epsilon, value_getter, yl
         showfliers=False,
         zorder=2,
         medianprops={"color": "#111111", "linewidth": 1.5},
-        whiskerprops={"color": "#444444", "linewidth": 0.9},
         capprops={"color": "#444444", "linewidth": 0.9},
     )
 
@@ -1431,7 +1464,7 @@ def plot_convergence_panel_by_steps(ax, records, attack, epsilon, step_col, conv
         label.set_horizontalalignment("right")
 
     ax.set_xlabel("n_steps")
-    ax.set_ylabel("steps until convergence")
+    ax.set_ylabel("relaxation steps")
     ax.grid(True, axis="y")
     ax.grid(False, axis="x")
     ax.margins(x=0.03)
@@ -1485,7 +1518,7 @@ def make_convergence_by_steps_figure(records, output_dir, epsilon=0.1):
     plt.close(fig)
 
 
-def draw_grouped_whisker_span_by_steps(ax, records, attack, epsilon, value_getter, ylabel, missing_rows):
+def draw_grouped_ci_by_steps(ax, records, attack, epsilon, value_getter, ylabel, missing_rows):
     steps, positions, values, colors, point_x, point_y = collect_box_data_by_steps(
         records,
         attack,
@@ -1499,13 +1532,17 @@ def draw_grouped_whisker_span_by_steps(ax, records, attack, epsilon, value_gette
         ax.set_axis_off()
         return False
 
-    series = {"mace": {"x": [], "y": []}, "uma": {"x": [], "y": []}}
+    series = {
+        "mace": {"x": [], "median": [], "lower": [], "upper": []},
+        "uma": {"x": [], "median": [], "lower": [], "upper": []},
+    }
 
     for position, box_values in zip(positions, values):
-        span = whisker_span(box_values)
-        if span is None:
+        ci = bootstrap_median_ci(box_values)
+        if ci is None:
             continue
 
+        median, lower, upper = ci
         center_position = round(position)
         offset = position - center_position
         calculator = min(
@@ -1515,19 +1552,36 @@ def draw_grouped_whisker_span_by_steps(ax, records, attack, epsilon, value_gette
 
         x_value = round(position - MODEL_OFFSETS[calculator])
         series[calculator]["x"].append(x_value)
-        series[calculator]["y"].append(span)
+        series[calculator]["median"].append(median)
+        series[calculator]["lower"].append(lower)
+        series[calculator]["upper"].append(upper)
 
     for calculator, data in series.items():
         if not data["x"]:
             continue
 
+        x = np.asarray(data["x"], dtype=float)
+        median = np.asarray(data["median"], dtype=float)
+        lower = np.asarray(data["lower"], dtype=float)
+        upper = np.asarray(data["upper"], dtype=float)
+        color = CALCULATOR_COLORS[calculator]
+
+        ax.fill_between(
+            x,
+            lower,
+            upper,
+            color=color,
+            alpha=0.18,
+            linewidth=0,
+        )
+
         ax.plot(
-            data["x"],
-            data["y"],
+            x,
+            median,
             marker="o",
             markersize=4,
             linewidth=1.8,
-            color=CALCULATOR_COLORS[calculator],
+            color=color,
             label=calculator.upper(),
         )
 
@@ -1547,7 +1601,7 @@ def draw_grouped_whisker_span_by_steps(ax, records, attack, epsilon, value_gette
     return True
 
 
-def make_whisker_span_by_steps_figure(records, output_dir, figure_name, ylabel, rows, epsilon=0.1):
+def make_ci_by_steps_figure(records, output_dir, figure_name, ylabel, rows, epsilon=0.1):
     fig, axes = plt.subplots(2, 2, figsize=(7.0, 5.2), sharex=False, sharey=False)
 
     all_missing = []
@@ -1558,7 +1612,7 @@ def make_whisker_span_by_steps_figure(records, output_dir, figure_name, ylabel, 
             ax = axes[row_index, col_index]
             attack_missing = []
 
-            draw_grouped_whisker_span_by_steps(
+            draw_grouped_ci_by_steps(
                 ax=ax,
                 records=records,
                 attack=attack,
@@ -1592,6 +1646,7 @@ def make_whisker_span_by_steps_figure(records, output_dir, figure_name, ylabel, 
             add_panel_label(ax, chr(ord("A") + panel_index))
             panel_index += 1
 
+    fig.suptitle(rf"Fixed $\epsilon$ = {epsilon:g} $\AA$; line = median, shaded band = 95% bootstrap CI", y=1.02, fontsize=9)
     fig.legend(
         handles=model_legend_handles(),
         loc="upper center",
@@ -1737,11 +1792,11 @@ def main():
         ],
     )
 
-    force_whisker_missing = make_whisker_span_figure(
+    force_by_epsilon_missing = make_ci_figure(
         records=epsilon_records,
         output_dir=args.output_dir,
-        figure_name="figure_2_delta_force_whisker_span_by_epsilon",
-        ylabel=r"whisker span of $\Delta$ force (eV/$\AA$)",
+        figure_name="figure_2_delta_force_ci_by_epsilon",
+        ylabel=r"median $\Delta$ force with 95% CI (eV/$\AA$)",
         rows=[
             (
                 "After attack, before relaxation",
@@ -1787,11 +1842,11 @@ def main():
         ],
     )
 
-    displacement_whisker_missing = make_whisker_span_figure(
+    displacement_by_epsilon_missing = make_ci_figure(
         records=epsilon_records,
         output_dir=args.output_dir,
-        figure_name="figure_3_displacement_whisker_span_by_epsilon",
-        ylabel=r"whisker span of atomic displacement ($\AA$)",
+        figure_name="figure_3_displacement_ci_by_epsilon",
+        ylabel=r"median atomic displacement with 95% CI ($\AA$)",
         rows=[
             (
                 "After attack, before relaxation",
@@ -1856,11 +1911,11 @@ def main():
         ],
     )
 
-    force_by_steps_whisker_missing = make_whisker_span_by_steps_figure(
+    force_by_steps_ci_missing = make_ci_by_steps_figure(
         records=n_step_records,
         output_dir=args.output_dir,
-        figure_name="figure_5_delta_force_whisker_span_by_n_steps",
-        ylabel=r"whisker span of $\Delta$ force (eV/$\AA$)",
+        figure_name="figure_5_delta_force_ci_by_n_steps",
+        ylabel=r"median $\Delta$ force with 95% CI (eV/$\AA$)",
         epsilon=0.1,
         rows=[
             (
@@ -1908,11 +1963,11 @@ def main():
         ],
     )
 
-    displacement_by_steps_whisker_missing = make_whisker_span_by_steps_figure(
+    displacement_by_steps_ci_missing = make_ci_by_steps_figure(
         records=n_step_records,
         output_dir=args.output_dir,
-        figure_name="figure_6_displacement_whisker_span_by_n_steps",
-        ylabel=r"whisker span of atomic displacement ($\AA$)",
+        figure_name="figure_6_displacement_ci_by_n_steps",
+        ylabel=r"median atomic displacement with 95% CI ($\AA$)",
         epsilon=0.1,
         rows=[
             (
@@ -2071,13 +2126,13 @@ def main():
             )
 
     missing_rows.extend(force_missing)
-    missing_rows.extend(force_whisker_missing)
+    missing_rows.extend(force_by_epsilon_missing)
     missing_rows.extend(displacement_missing)
-    missing_rows.extend(displacement_whisker_missing)
+    missing_rows.extend(displacement_by_epsilon_missing)
     missing_rows.extend(force_by_steps_missing)
-    missing_rows.extend(force_by_steps_whisker_missing)
+    missing_rows.extend(force_by_steps_ci_missing)
     missing_rows.extend(displacement_by_steps_missing)
-    missing_rows.extend(displacement_by_steps_whisker_missing)
+    missing_rows.extend(displacement_by_steps_ci_missing)
     missing_rows.extend(parametric_by_epsilon_missing)
     missing_rows.extend(parametric_by_steps_missing)
 
@@ -2092,14 +2147,14 @@ def main():
     print("Main publication figures:")
     print(f"  {args.output_dir / 'figure_1_convergence_by_epsilon.png'}")
     print(f"  {args.output_dir / 'figure_2_delta_force_by_epsilon.png'}")
-    print(f"  {args.output_dir / 'figure_2_delta_force_whisker_span_by_epsilon.png'}")
+    print(f"  {args.output_dir / 'figure_2_delta_force_ci_by_epsilon.png'}")
     print(f"  {args.output_dir / 'figure_3_displacement_by_epsilon.png'}")
-    print(f"  {args.output_dir / 'figure_3_displacement_whisker_span_by_epsilon.png'}")
+    print(f"  {args.output_dir / 'figure_3_displacement_ci_by_epsilon.png'}")
     print(f"  {args.output_dir / 'figure_4_convergence_by_n_steps.png'}")
     print(f"  {args.output_dir / 'figure_5_delta_force_by_n_steps.png'}")
-    print(f"  {args.output_dir / 'figure_5_delta_force_whisker_span_by_n_steps.png'}")
+    print(f"  {args.output_dir / 'figure_5_delta_force_ci_by_n_steps.png'}")
     print(f"  {args.output_dir / 'figure_6_displacement_by_n_steps.png'}")
-    print(f"  {args.output_dir / 'figure_6_displacement_whisker_span_by_n_steps.png'}")
+    print(f"  {args.output_dir / 'figure_6_displacement_ci_by_n_steps.png'}")
     print(f"  {args.output_dir / 'figure_7_convergence_vs_displacement_by_epsilon.png'}")
     print(f"  {args.output_dir / 'figure_7_convergence_vs_displacement_by_n_steps.png'}")
     print(f"  {args.output_dir / 'figure_8_convergence_vs_delta_force_by_epsilon.png'}")

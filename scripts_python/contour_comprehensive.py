@@ -62,7 +62,7 @@ def apply_style():
         "axes.labelsize": 8,
         "xtick.labelsize": 7,
         "ytick.labelsize": 7,
-        "legend.fontsize": 7,
+        "legend.fontsize": 8,
         "legend.frameon": False,
         "savefig.dpi": 600,
     })
