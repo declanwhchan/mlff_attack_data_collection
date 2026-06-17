@@ -197,7 +197,7 @@ def plot_5x4_structures(loaded, output_path, dpi, rotation, scale, radii_scale):
 def plot_single_structure(row, atoms, output_path, dpi, rotation, scale, radii_scale):
     apply_plot_style()
 
-    fig, ax = plt.subplots(1, 1, figsize=(5.5, 5.5))
+    fig, ax = plt.subplots(1, 1, figsize=(6.8, 5.5))
 
     draw_structure(
         ax=ax,
@@ -208,11 +208,13 @@ def plot_single_structure(row, atoms, output_path, dpi, rotation, scale, radii_s
         radii_scale=radii_scale,
     )
 
-    fig.suptitle(
-        "Before Attack and Before Relaxation",
-        y=0.98,
-        fontsize=16,
-        fontweight="bold",
+    make_element_legend(fig, set(atoms.get_chemical_symbols()))
+
+    fig.subplots_adjust(
+        left=0.03,
+        right=0.72,
+        top=0.88,
+        bottom=0.04,
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
