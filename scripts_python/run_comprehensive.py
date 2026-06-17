@@ -693,7 +693,7 @@ def make_parametric_state_figure(
     fig, axes = plt.subplots(
         2,
         n_cols,
-        figsize=(4.6 * n_cols, 7.8),
+        figsize=(5.2 * n_cols, 9.0),
         sharex=False,
         sharey=False,
     )
@@ -733,21 +733,21 @@ def make_parametric_state_figure(
                 y_limits=y_limits,
             )
 
-            ax.title.set_fontsize(9)
-            ax.xaxis.label.set_fontsize(8)
-            ax.yaxis.label.set_fontsize(8)
-            ax.tick_params(axis="both", labelsize=7)
+            ax.title.set_fontsize(13)
+            ax.xaxis.label.set_fontsize(12)
+            ax.yaxis.label.set_fontsize(12)
+            ax.tick_params(axis="both", labelsize=10)
 
             if col_index == 0:
                 ax.text(
-                    -0.28,
+                    -0.32,
                     0.5,
                     row_title,
                     transform=ax.transAxes,
                     rotation=90,
                     va="center",
                     ha="center",
-                    fontsize=8,
+                    fontsize=12,
                     fontweight="bold",
                 )
 
@@ -765,27 +765,27 @@ def make_parametric_state_figure(
             labels,
             loc="upper center",
             ncol=4,
-            bbox_to_anchor=(0.5, 1.035),
+            bbox_to_anchor=(0.5, 1.045),
             frameon=False,
             title=f"Bubble size = {bubble_label}",
-            fontsize=8,
-            title_fontsize=8,
-            handlelength=1.8,
-            columnspacing=1.1,
-            handletextpad=0.5,
+            fontsize=11,
+            title_fontsize=11,
+            handlelength=1.9,
+            columnspacing=1.25,
+            handletextpad=0.55,
         )
 
-    fig.suptitle(title, y=1.085, fontsize=11)
+    fig.suptitle(title, y=1.095, fontsize=15)
     fig.text(
         0.995,
-        0.006,
+        0.008,
         f"Axes capped at p{PARAMETRIC_AXIS_PERCENTILE} for readability",
         ha="right",
         va="bottom",
-        fontsize=7,
+        fontsize=9,
         color="#555555",
     )
-    fig.tight_layout(rect=[0.05, 0.02, 1.00, 0.965])
+    fig.tight_layout(rect=[0.07, 0.04, 1.00, 0.94])
     save_figure(fig, output_dir / figure_name)
 
     return missing_rows
@@ -1553,12 +1553,25 @@ def draw_whisker_span(ax, records, attack, value_getter, ylabel, missing_rows):
         if not calc_points:
             continue
 
+        calc_points = sorted(calc_points, key=lambda point: point["x"])
+        x_values = [point["x"] for point in calc_points]
+        y_values = [point["y"] for point in calc_points]
+
+        ax.plot(
+            x_values,
+            y_values,
+            color=color,
+            linewidth=1.8,
+            alpha=0.78,
+            zorder=2,
+        )
+
         ax.scatter(
-            [point["x"] for point in calc_points],
-            [point["y"] for point in calc_points],
+            x_values,
+            y_values,
             s=42,
             color=color,
-            alpha=0.85,
+            alpha=0.88,
             edgecolor="white",
             linewidth=0.45,
             label=calculator.upper(),
@@ -1694,12 +1707,25 @@ def draw_whisker_span_by_steps(ax, records, attack, epsilon, value_getter, ylabe
         if not calc_points:
             continue
 
+        calc_points = sorted(calc_points, key=lambda point: point["x"])
+        x_values = [point["x"] for point in calc_points]
+        y_values = [point["y"] for point in calc_points]
+
+        ax.plot(
+            x_values,
+            y_values,
+            color=color,
+            linewidth=1.8,
+            alpha=0.78,
+            zorder=2,
+        )
+
         ax.scatter(
-            [point["x"] for point in calc_points],
-            [point["y"] for point in calc_points],
+            x_values,
+            y_values,
             s=42,
             color=color,
-            alpha=0.85,
+            alpha=0.88,
             edgecolor="white",
             linewidth=0.45,
             label=calculator.upper(),
@@ -2156,7 +2182,7 @@ def main():
         records=epsilon_records,
         output_dir=args.output_dir,
         figure_name="figure_2_delta_force_ci_by_epsilon",
-        ylabel=r"median $\Delta$ force with 95% CI (eV/$\AA$)",
+        ylabel=r"Median $\Delta$ force with 95% CI (eV/$\AA$)",
         rows=[
             (
                 "After attack, before relaxation",
@@ -2206,7 +2232,7 @@ def main():
         records=epsilon_records,
         output_dir=args.output_dir,
         figure_name="figure_3_displacement_ci_by_epsilon",
-        ylabel=r"median atomic displacement with 95% CI ($\AA$)",
+        ylabel=r"Median displacement with 95% CI ($\AA$)",
         rows=[
             (
                 "After attack, before relaxation",
@@ -2275,7 +2301,7 @@ def main():
         records=n_step_records,
         output_dir=args.output_dir,
         figure_name="figure_5_delta_force_ci_by_n_steps",
-        ylabel=r"median $\Delta$ force with 95% CI (eV/$\AA$)",
+        ylabel=r"Median $\Delta$ force with 95% CI (eV/$\AA$)",
         epsilon=0.1,
         rows=[
             (
@@ -2327,7 +2353,7 @@ def main():
         records=n_step_records,
         output_dir=args.output_dir,
         figure_name="figure_6_displacement_ci_by_n_steps",
-        ylabel=r"median atomic displacement with 95% CI ($\AA$)",
+        ylabel=r"Median displacement with 95% CI ($\AA$)",
         epsilon=0.1,
         rows=[
             (
@@ -2545,7 +2571,7 @@ def main():
                 records=material_epsilon_records,
                 output_dir=material_output_dir,
                 figure_name="figure_3_displacement_ci_by_epsilon",
-                ylabel=r"Median atomic displacement with 95% CI ($\AA$)",
+                ylabel=r"Median displacement with 95% CI ($\AA$)",
                 rows=[
                     (
                         "After attack, before relaxation",
@@ -2713,7 +2739,7 @@ def main():
                 records=material_n_step_records,
                 output_dir=material_output_dir,
                 figure_name="figure_6_displacement_ci_by_n_steps",
-                ylabel=r"Median atomic displacement with 95% CI ($\AA$)",
+                ylabel=r"Median displacement with 95% CI ($\AA$)",
                 epsilon=0.1,
                 rows=[
                     (
@@ -2765,7 +2791,7 @@ def main():
                 records=material_n_step_records,
                 output_dir=material_output_dir,
                 figure_name="figure_6_displacement_whisker_span_by_n_steps",
-                ylabel=r"Displacement whisker span ($\AA$)",
+                ylabel=r"displacement whisker span ($\AA$)",
                 epsilon=0.1,
                 rows=[
                     (
