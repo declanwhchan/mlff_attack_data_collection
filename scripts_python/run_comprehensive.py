@@ -478,58 +478,18 @@ def label_axes(axes):
         add_panel_label(ax, chr(ord("A") + index))
 
 
-def finite_xy(data, x_col, y_col):
-    clean = data[[x_col, y_col]].replace([np.inf, -np.inf], np.nan).dropna()
-    return clean[x_col].to_numpy(dtype=float), clean[y_col].to_numpy(dtype=float)
-
-
-def add_std_ellipse(ax, x, y, color, n_std, label=None):
-    if len(x) < 3 or len(y) < 3:
-        return
-
-    covariance = np.cov(x, y)
-    if not np.isfinite(covariance).all():
-        return
-
-    eigenvalues, eigenvectors = np.linalg.eigh(covariance)
-    if np.any(eigenvalues <= 0):
-        return
-
-    order = eigenvalues.argsort()[::-1]
-    eigenvalues = eigenvalues[order]
-    eigenvectors = eigenvectors[:, order]
-
-    angle = np.degrees(np.arctan2(eigenvectors[1, 0], eigenvectors[0, 0]))
-    width, height = 2 * n_std * np.sqrt(eigenvalues)
-
-    ellipse = Ellipse(
-        xy=(float(np.mean(x)), float(np.mean(y))),
-        width=float(width),
-        height=float(height),
-        angle=float(angle),
-        fill=False,
-        edgecolor=color,
-        linewidth=1.0 if n_std == 1 else 0.8,
-        linestyle="-" if n_std == 1 else "--",
-        alpha=0.85 if n_std == 1 else 0.55,
-        label=label,
-    )
-    ax.add_patch(ellipse)
-
-
-def bubble_sizes(values):
+def clean_numeric_array(values):
     values = pd.Series(values).replace([np.inf, -np.inf], np.nan).dropna()
-    if values.empty:
-        return np.array([])
+    return values.to_numpy(dtype=float)
 
-    minimum = float(values.min())
-    maximum = float(values.max())
 
-    if maximum <= minimum:
-        return np.full(len(values), 70.0)
+def variability_radius(values):
+    values = clean_numeric_array(values)
+    if len(values) < 2:
+        return 0.0
 
-    scaled = (values.to_numpy(dtype=float) - minimum) / (maximum - minimum)
-    return 35.0 + 115.0 * scaled
+    q25, q75 = np.percentile(values, [25, 75])
+    return max(float((q75 - q25) / 2.0), 0.0)
 
 
 PARAMETRIC_AXIS_PERCENTILE = 99
@@ -562,29 +522,48 @@ def parametric_axis_limits(data, percentile=PARAMETRIC_AXIS_PERCENTILE):
     return x_limits, y_limits
 
 
-def metric_median(row, getter):
+def minimum_visible_radius(limits):
+    if limits is None:
+        return 0.0
+
+    low, high = limits
+    span = float(high - low)
+    if not np.isfinite(span) or span <= 0:
+        return 0.0
+
+    return 0.012 * span
+
+
+def metric_distribution(row, getter):
     values, reason = getter(row)
     if values is None:
         return None, reason
-    return float(np.median(values)), None
+
+    values = clean_numeric_array(values)
+    if len(values) == 0:
+        return None, "No finite values"
+
+    return (float(np.median(values)), values), None
 
 
-def scalar_metric(row, column):
+def scalar_distribution(row, column):
     value = row.get(column)
     if value is None or pd.isna(value):
         return None, f"Missing {column}"
-    return float(value), None
+
+    value = float(value)
+    return (value, np.array([value], dtype=float)), None
 
 
 def parametric_rows(records, x_getter, y_getter, bubble_col, missing_rows, figure_name):
     rows = []
 
     for _, row in records.iterrows():
-        x_value, x_reason = x_getter(row)
-        y_value, y_reason = y_getter(row)
+        x_result, x_reason = x_getter(row)
+        y_result, y_reason = y_getter(row)
         bubble_value = row.get(bubble_col)
 
-        if x_value is None or y_value is None:
+        if x_result is None or y_result is None:
             missing_rows.append({
                 "figure": figure_name,
                 "run_id": row["run_id"],
@@ -600,13 +579,18 @@ def parametric_rows(records, x_getter, y_getter, bubble_col, missing_rows, figur
             })
             continue
 
+        x_center, x_values = x_result
+        y_center, y_values = y_result
+
         rows.append({
             "run_id": row["run_id"],
             "calculator": row["calculator"],
             "attack_label": row["attack_label"],
             "bubble": float(bubble_value),
-            "x": x_value,
-            "y": y_value,
+            "x": float(x_center),
+            "y": float(y_center),
+            "x_values": x_values,
+            "y_values": y_values,
         })
 
     return pd.DataFrame(rows)
@@ -637,25 +621,59 @@ def draw_parametric_panel(
             ax.set_ylim(*y_limits)
         return
 
+    min_x_radius = minimum_visible_radius(x_limits)
+    min_y_radius = minimum_visible_radius(y_limits)
+
     for calculator, color in CALCULATOR_COLORS.items():
         calc_data = subset[subset["calculator"] == calculator].copy()
         if calc_data.empty:
             continue
 
-        ax.scatter(
-            calc_data["x"],
-            calc_data["y"],
-            s=bubble_sizes(calc_data["bubble"]),
-            color=color,
-            alpha=0.58,
-            edgecolor="white",
-            linewidth=0.45,
-            label=calculator.upper(),
-        )
+        first_label = True
 
-        x, y = finite_xy(calc_data, "x", "y")
-        add_std_ellipse(ax, x, y, color, n_std=1, label=f"{calculator.upper()} 1 std")
-        add_std_ellipse(ax, x, y, color, n_std=2, label=f"{calculator.upper()} 2 std")
+        for _, group in calc_data.groupby("bubble", sort=True):
+            x_values = np.concatenate([
+                clean_numeric_array(values)
+                for values in group["x_values"]
+            ])
+            y_values = np.concatenate([
+                clean_numeric_array(values)
+                for values in group["y_values"]
+            ])
+
+            if len(x_values) == 0 or len(y_values) == 0:
+                continue
+
+            x_center = float(np.median(x_values))
+            y_center = float(np.median(y_values))
+
+            x_radius = max(variability_radius(x_values), min_x_radius)
+            y_radius = max(variability_radius(y_values), min_y_radius)
+
+            ellipse = Ellipse(
+                xy=(x_center, y_center),
+                width=2.0 * x_radius,
+                height=2.0 * y_radius,
+                angle=0.0,
+                facecolor=color,
+                edgecolor=color,
+                linewidth=1.0,
+                alpha=0.24,
+                label=calculator.upper() if first_label else None,
+            )
+            ax.add_patch(ellipse)
+
+            ax.scatter(
+                [x_center],
+                [y_center],
+                s=18,
+                color=color,
+                edgecolor="white",
+                linewidth=0.45,
+                zorder=3,
+            )
+
+            first_label = False
 
     ax.set_title(attack)
     ax.set_xlabel(x_label)
@@ -767,7 +785,7 @@ def make_parametric_state_figure(
             ncol=4,
             bbox_to_anchor=(0.5, 1.045),
             frameon=False,
-            title=f"Bubble size = {bubble_label}",
+            title=f"Grouped by {bubble_label}",
             fontsize=11,
             title_fontsize=11,
             handlelength=1.9,
@@ -803,20 +821,20 @@ def make_parametric_figure_set(records, output_dir, suffix, attacks_to_plot, bub
         bubble_label=bubble_label,
         attacks_to_plot=attacks_to_plot,
         x_getters=[
-            lambda row: metric_median(row, lambda item: displacement_values(
+            lambda row: metric_distribution(row, lambda item: displacement_values(
                 item["run_dir"],
                 "before_forces.csv",
                 "perturbed_forces.csv",
             )),
-            lambda row: metric_median(row, lambda item: displacement_values(
+            lambda row: metric_distribution(row, lambda item: displacement_values(
                 item["run_dir"],
                 "before_forces.csv",
                 "after_forces.csv",
             )),
         ],
         y_getters=[
-            lambda row: scalar_metric(row, "after_relax_steps"),
-            lambda row: scalar_metric(row, "after_relax_steps"),
+            lambda row: scalar_distribution(row, "after_relax_steps"),
+            lambda row: scalar_distribution(row, "after_relax_steps"),
         ],
     )
 
@@ -830,20 +848,20 @@ def make_parametric_figure_set(records, output_dir, suffix, attacks_to_plot, bub
         bubble_label=bubble_label,
         attacks_to_plot=attacks_to_plot,
         x_getters=[
-            lambda row: metric_median(row, lambda item: force_delta_values(
+            lambda row: metric_distribution(row, lambda item: force_delta_values(
                 item["run_dir"],
                 "before_forces.csv",
                 "perturbed_forces.csv",
             )),
-            lambda row: metric_median(row, lambda item: force_delta_values(
+            lambda row: metric_distribution(row, lambda item: force_delta_values(
                 item["run_dir"],
                 "before_forces.csv",
                 "after_forces.csv",
             )),
         ],
         y_getters=[
-            lambda row: scalar_metric(row, "after_relax_steps"),
-            lambda row: scalar_metric(row, "after_relax_steps"),
+            lambda row: scalar_distribution(row, "after_relax_steps"),
+            lambda row: scalar_distribution(row, "after_relax_steps"),
         ],
     )
 
@@ -857,24 +875,24 @@ def make_parametric_figure_set(records, output_dir, suffix, attacks_to_plot, bub
         bubble_label=bubble_label,
         attacks_to_plot=attacks_to_plot,
         x_getters=[
-            lambda row: metric_median(row, lambda item: displacement_values(
+            lambda row: metric_distribution(row, lambda item: displacement_values(
                 item["run_dir"],
                 "before_forces.csv",
                 "perturbed_forces.csv",
             )),
-            lambda row: metric_median(row, lambda item: displacement_values(
+            lambda row: metric_distribution(row, lambda item: displacement_values(
                 item["run_dir"],
                 "before_forces.csv",
                 "after_forces.csv",
             )),
         ],
         y_getters=[
-            lambda row: metric_median(row, lambda item: force_delta_values(
+            lambda row: metric_distribution(row, lambda item: force_delta_values(
                 item["run_dir"],
                 "before_forces.csv",
                 "perturbed_forces.csv",
             )),
-            lambda row: metric_median(row, lambda item: force_delta_values(
+            lambda row: metric_distribution(row, lambda item: force_delta_values(
                 item["run_dir"],
                 "before_forces.csv",
                 "after_forces.csv",
@@ -2623,14 +2641,6 @@ def main():
                 ],
             )
 
-            make_parametric_figure_set(
-                records=material_epsilon_records,
-                output_dir=material_output_dir,
-                suffix="epsilon",
-                attacks_to_plot=ATTACK_ORDER,
-                bubble_label="epsilon",
-            )
-
         if not material_n_step_records.empty:
             make_convergence_by_steps_figure(
                 material_n_step_records,
@@ -2794,26 +2804,20 @@ def main():
                 ],
             )
 
-            make_parametric_figure_set(
-                records=material_n_step_records,
-                output_dir=material_output_dir,
-                suffix="n_steps",
-                attacks_to_plot=STEP_ATTACK_ORDER,
-                bubble_label="n_steps",
-            )
-
     missing_rows.extend(force_missing)
     missing_rows.extend(force_whisker_span_missing)
     missing_rows.extend(force_by_epsilon_missing)
     missing_rows.extend(displacement_missing)
     missing_rows.extend(displacement_whisker_span_missing)
     missing_rows.extend(displacement_by_epsilon_missing)
+    missing_rows.extend(parametric_by_epsilon_missing)
     missing_rows.extend(force_by_steps_missing)
     missing_rows.extend(force_by_steps_whisker_span_missing)
     missing_rows.extend(force_by_steps_ci_missing)
     missing_rows.extend(displacement_by_steps_missing)
     missing_rows.extend(displacement_by_steps_whisker_span_missing)
     missing_rows.extend(displacement_by_steps_ci_missing)
+    missing_rows.extend(parametric_by_steps_missing)
 
     pd.DataFrame(missing_rows).to_csv(
         args.output_dir / "missing_data_report.csv",
