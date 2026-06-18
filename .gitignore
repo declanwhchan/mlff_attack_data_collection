@@ -1,14 +1,16 @@
+# Environments
 .venv*/
-__pycache__/
 .env
 
-outputs*/
-*.png
+# Cache
+__pycache__/
 
-*.out
-*.err
-slurm-*.out
-
+# Inputs
 *.cif
 *.model
 *.pt
+
+# Outputs
+outputs*/
+*.png
+*.tar*
