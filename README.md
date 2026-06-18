@@ -4,11 +4,11 @@ This repo runs an HPC data-collection workflow from the `mlff_attack` package:
 
 [TRustworthy-AI-Tools-for-Science/mlff_attack](https://github.com/TRustworthy-AI-Tools-for-Science/mlff_attack)
 
-## Setup On HPC
+## Setup for HPC
 
 This repo expects two separate Python environments because MACE and UMA have different dependency stacks.
 
-Expected folder layout on HPC after the following 3 steps:
+Expected folder layout for HPC after the following 3 steps:
 
 ```bash
 ~/project/
