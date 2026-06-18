@@ -38,7 +38,13 @@ def test_larger_epsilon_tends_to_give_larger_displacement():
 
 
 def test_stronger_perturbation_tends_to_change_forces_more():
-    changes = []
+    changes_from_perturbations = []
     for _, r in rows().iterrows():
-        changes.append((float(r["epsilon"]), np.linalg.norm(forces(r["perturbed_force_csv"]) - forces(r["before_force_csv"]), axis=1).mean()))
-    assert pd.DataFrame(changes, columns=["epsilon", "delta_force"]).groupby("epsilon")["delta_force"].median().sort_index().iloc[-1] >= 0
+        changes_from_perturbations.append((float(r["epsilon"]), np.linalg.norm(forces(r["perturbed_force_csv"]) - forces(r["before_force_csv"]), axis=1).mean()))
+
+    grouped = pd.DataFrame(
+        data=changes_from_perturbations,
+        columns=["epsilon", "delta_force"],
+    ).groupby("epsilon")["delta_force"].median().sort_index()
+
+    assert grouped.iloc[-1] >= grouped.iloc[0]
