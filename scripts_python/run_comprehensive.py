@@ -787,6 +787,7 @@ def make_parametric_state_figure(
     )
     fig.tight_layout(rect=[0.07, 0.04, 1.00, 0.94])
     save_figure(fig, output_dir / figure_name)
+    plt.close(fig)
 
     return missing_rows
 
@@ -1527,7 +1528,7 @@ def collect_whisker_span_data(records, attack, value_getter, missing_rows):
             span = tukey_whisker_span(values)
             if span is not None:
                 points.append({
-                    "x": i + MODEL_OFFSETS[calculator],
+                    "x": i,
                     "y": span,
                     "calculator": calculator,
                 })
@@ -1670,7 +1671,7 @@ def collect_whisker_span_data_by_steps(records, attack, epsilon, value_getter, m
             span = tukey_whisker_span(values)
             if span is not None:
                 points.append({
-                    "x": i + MODEL_OFFSETS[calculator],
+                    "x": i,
                     "y": span,
                     "calculator": calculator,
                 })

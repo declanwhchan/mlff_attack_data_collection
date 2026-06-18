@@ -402,7 +402,7 @@ def plot_contour_vs_attack(material_slug, calculator, contour_rows, attacks, out
             axes=axes,
             data=step_data,
             x_col="n_steps",
-            x_label="attack steps",
+            x_label="n_steps",
             calculator=calculator,
             contour_rows=contour_rows,
             title=f"{material_slug} {calculator.upper()}: attacks vs contour baseline by n_steps",
