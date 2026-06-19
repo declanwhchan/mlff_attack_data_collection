@@ -7,6 +7,7 @@ import re
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
+from matplotlib.ticker import MaxNLocator, ScalarFormatter
 import numpy as np
 import pandas as pd
 from ase.io import read as read_structure
@@ -534,6 +535,18 @@ def minimum_visible_radius(limits):
     return 0.012 * span
 
 
+def style_numeric_axis(ax, xbins=4, ybins=5):
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=xbins, prune=None))
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=ybins, prune=None))
+
+    for axis in [ax.xaxis, ax.yaxis]:
+        formatter = ScalarFormatter(useMathText=True)
+        formatter.set_powerlimits((-3, 3))
+        axis.set_major_formatter(formatter)
+
+    ax.tick_params(axis="both", labelsize=8, pad=2)
+
+
 def metric_distribution(row, getter):
     values, reason = getter(row)
     if values is None:
@@ -593,7 +606,19 @@ def parametric_rows(records, x_getter, y_getter, bubble_col, missing_rows, figur
             "y_values": y_values,
         })
 
-    return pd.DataFrame(rows)
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "run_id",
+            "calculator",
+            "attack_label",
+            "bubble",
+            "x",
+            "y",
+            "x_values",
+            "y_values",
+        ],
+    )
 
 
 def draw_parametric_panel(
@@ -614,11 +639,12 @@ def draw_parametric_panel(
         ax.set_xlabel(x_label)
         if show_ylabel:
             ax.set_ylabel(y_label)
-        ax.grid(True, alpha=0.35)
         if x_limits is not None:
             ax.set_xlim(*x_limits)
         if y_limits is not None:
             ax.set_ylim(*y_limits)
+        style_numeric_axis(ax)
+        ax.grid(True, alpha=0.35)
         return
 
     min_x_radius = minimum_visible_radius(x_limits)
@@ -647,30 +673,41 @@ def draw_parametric_panel(
             x_center = float(np.median(x_values))
             y_center = float(np.median(y_values))
 
-            x_radius = max(variability_radius(x_values), min_x_radius)
-            y_radius = max(variability_radius(y_values), min_y_radius)
+            # Draw variability shapes only when there are multiple independent
+            # runs/materials in the group. Sample_1 has atom-level spread but
+            # not enough independent runs for a meaningful ellipse.
+            if len(group) >= 3:
+                x_radius = max(variability_radius(x_values), min_x_radius)
+                y_radius = max(variability_radius(y_values), min_y_radius)
 
-            ellipse = Ellipse(
-                xy=(x_center, y_center),
-                width=2.0 * x_radius,
-                height=2.0 * y_radius,
-                angle=0.0,
-                facecolor=color,
-                edgecolor=color,
-                linewidth=1.0,
-                alpha=0.24,
-                label=calculator.upper() if first_label else None,
-            )
-            ax.add_patch(ellipse)
+                if x_limits is not None:
+                    x_radius = min(x_radius, 0.20 * (x_limits[1] - x_limits[0]))
+                if y_limits is not None:
+                    y_radius = min(y_radius, 0.20 * (y_limits[1] - y_limits[0]))
+
+                ellipse = Ellipse(
+                    xy=(x_center, y_center),
+                    width=2.0 * x_radius,
+                    height=2.0 * y_radius,
+                    angle=0.0,
+                    facecolor=color,
+                    edgecolor=color,
+                    linewidth=0.9,
+                    alpha=0.18,
+                    clip_on=True,
+                    zorder=1,
+                )
+                ax.add_patch(ellipse)
 
             ax.scatter(
                 [x_center],
                 [y_center],
-                s=18,
+                s=24,
                 color=color,
                 edgecolor="white",
                 linewidth=0.45,
                 zorder=3,
+                label=calculator.upper() if first_label else None,
             )
 
             first_label = False
@@ -685,6 +722,7 @@ def draw_parametric_panel(
     if y_limits is not None:
         ax.set_ylim(*y_limits)
 
+    style_numeric_axis(ax)
     ax.grid(True, alpha=0.35)
     ax.margins(x=0.04, y=0.06)
 
@@ -754,7 +792,7 @@ def make_parametric_state_figure(
             ax.title.set_fontsize(13)
             ax.xaxis.label.set_fontsize(12)
             ax.yaxis.label.set_fontsize(12)
-            ax.tick_params(axis="both", labelsize=10)
+            style_numeric_axis(ax, xbins=4, ybins=5)
 
             if col_index == 0:
                 ax.text(

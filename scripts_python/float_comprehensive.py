@@ -3,6 +3,7 @@ from pathlib import Path
 import argparse
 
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator, ScalarFormatter
 import numpy as np
 import pandas as pd
 
@@ -47,6 +48,18 @@ def available_metrics(float32, float64):
 
 def clean_numeric(series):
     return pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan)
+
+
+def style_numeric_axis(ax, xbins=5, ybins=5):
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=xbins))
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=ybins))
+
+    for axis in [ax.xaxis, ax.yaxis]:
+        formatter = ScalarFormatter(useMathText=True)
+        formatter.set_powerlimits((-3, 3))
+        axis.set_major_formatter(formatter)
+
+    ax.tick_params(axis="both", labelsize=8, pad=2)
 
 
 def save_metric_plot(data, metric, output_dir):
@@ -96,6 +109,7 @@ def save_metric_plot(data, metric, output_dir):
     ax.set_xlabel(f"{metric} float64")
     ax.set_ylabel(f"{metric} float32")
     ax.set_title(f"float32 vs float64: {metric}")
+    style_numeric_axis(ax)
     ax.grid(True, alpha=0.35)
     ax.legend(frameon=False)
 
