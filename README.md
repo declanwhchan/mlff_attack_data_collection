@@ -123,6 +123,6 @@ Login using SFTP:
 cd mlff_attack_data_collection
 get -r outputs_comprehensive
 get -r outputs_visuals
-get -r outputs_mace
-get -r outputs_uma
+get -r outputs_float32
+get -r outputs_float64
 ```
