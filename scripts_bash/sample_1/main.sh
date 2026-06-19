@@ -2,9 +2,9 @@
 #SBATCH --account=rrg-j3goals
 #SBATCH --time=04:00:00
 #SBATCH --mem=16G
-#SBATCH --cpus-per-task=8
-#SBATCH --array=1-2
-#SBATCH --output=main-1-%j.out
+#SBATCH --cpus-per-task=4
+#SBATCH --array=1-4
+#SBATCH --output=sample-1-main-%j.out
 
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
@@ -29,7 +29,7 @@ fi
 module load gcc/12.3 python/3.11 arrow
 
 if [ ! -f generated_material_tests.csv ]; then
-  echo "ERROR: generated_material_tests.csv missing. Run setup_1.sh first."
+  echo "ERROR: generated_material_tests.csv missing. Run scripts_bash/sample_1/setup.sh first."
   exit 1
 fi
 
@@ -46,36 +46,38 @@ with open("generated_material_tests.csv", newline="", encoding="utf-8-sig") as h
 
 materials = []
 seen = set()
-
 for row in rows:
     slug = row["material_slug"]
     if slug not in seen:
         seen.add(slug)
         materials.append(slug)
 
+dtypes = ["float32", "float64"]
+calculators = ["mace", "uma"]
 n_materials = len(materials)
-max_task_id = n_materials * 2
+max_task_id = n_materials * len(dtypes) * len(calculators)
 
 if task_id < 1 or task_id > max_task_id:
     raise SystemExit(f"ERROR: SLURM_ARRAY_TASK_ID must be 1..{max_task_id}, got {task_id}")
 
-if task_id <= n_materials:
-    calculator = "mace"
-    material_slug = materials[task_id - 1]
-else:
-    calculator = "uma"
-    material_slug = materials[task_id - n_materials - 1]
+index = task_id - 1
+dtype_str = dtypes[index // (n_materials * len(calculators))]
+within_dtype = index % (n_materials * len(calculators))
+calculator = calculators[within_dtype // n_materials]
+material_slug = materials[within_dtype % n_materials]
 
-print(f"{calculator} {material_slug}")
+print(f"{dtype_str} {calculator} {material_slug}")
 PY
 )
 
-CALCULATOR=$(echo "$TASK_INFO" | awk '{print $1}')
-MATERIAL_SLUG=$(echo "$TASK_INFO" | awk '{print $2}')
+MLFF_DTYPE=$(echo "$TASK_INFO" | awk '{print $1}')
+CALCULATOR=$(echo "$TASK_INFO" | awk '{print $2}')
+MATERIAL_SLUG=$(echo "$TASK_INFO" | awk '{print $3}')
+export MLFF_DTYPE
 
+echo "Selected dtype: $MLFF_DTYPE"
 echo "Selected material: $MATERIAL_SLUG"
 echo "Calculator: $CALCULATOR"
-echo "CPU threads per task: $SLURM_CPUS_PER_TASK"
 
 if [ "$CALCULATOR" = "uma" ] && [ -z "${HF_TOKEN:-}" ] && [ -z "${HUGGINGFACE_HUB_TOKEN:-}" ]; then
   echo "ERROR: UMA requires HF_TOKEN in .env or HUGGINGFACE_HUB_TOKEN in the environment."
@@ -99,35 +101,42 @@ from pathlib import Path
 
 material_slug = "$MATERIAL_SLUG"
 calculator = "$CALCULATOR"
+dtype_str = "$MLFF_DTYPE"
 
 with open("generated_material_tests.csv", newline="", encoding="utf-8-sig") as handle:
     rows = list(csv.DictReader(handle))
 
 selected = [
-    row for row in rows
+    dict(row, dtype_str=dtype_str)
+    for row in rows
     if row["material_slug"] == material_slug
     and row["model_path"].lower().startswith(calculator)
 ]
 
 if not selected:
-    raise SystemExit(f"ERROR: no rows selected for {calculator} {material_slug}")
+    raise SystemExit(f"ERROR: no rows selected for {dtype_str} {calculator} {material_slug}")
 
-Path("material_tests").mkdir(exist_ok=True)
+fieldnames = list(rows[0].keys())
+if "dtype_str" not in fieldnames:
+    fieldnames.append("dtype_str")
 
-output = Path("material_tests") / f"{calculator}_{material_slug}.csv"
+output_dir = Path("material_tests") / dtype_str
+output_dir.mkdir(parents=True, exist_ok=True)
+
+output = output_dir / f"{calculator}_{material_slug}.csv"
 with output.open("w", newline="", encoding="utf-8") as handle:
-    writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
+    writer = csv.DictWriter(handle, fieldnames=fieldnames)
     writer.writeheader()
     writer.writerows(selected)
 
 print(f"Wrote {len(selected)} rows to {output}", flush=True)
 PY
 
-echo "Running $CALCULATOR for $MATERIAL_SLUG"
+echo "Running $MLFF_DTYPE $CALCULATOR for $MATERIAL_SLUG"
 
-SUMMARY_FILE="array_summaries/${CALCULATOR}_${MATERIAL_SLUG}_summary.csv" \
-  python -u scripts_python/run_tests.py --tests "material_tests/${CALCULATOR}_${MATERIAL_SLUG}.csv"
+SUMMARY_FILE="array_summaries/${MLFF_DTYPE}_${CALCULATOR}_${MATERIAL_SLUG}_summary.csv" \
+  python -u scripts_python/run_tests.py --tests "material_tests/${MLFF_DTYPE}/${CALCULATOR}_${MATERIAL_SLUG}.csv"
 
 deactivate
 
-echo "Finished $CALCULATOR for $MATERIAL_SLUG"
+echo "Finished $MLFF_DTYPE $CALCULATOR for $MATERIAL_SLUG"
