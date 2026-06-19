@@ -24,36 +24,44 @@ import pandas as pd
 
 summary_dir = Path("array_summaries")
 
-for calculator, output_dir in [
-    ("mace", Path("outputs_mace")),
-    ("uma", Path("outputs_uma")),
-]:
-    files = sorted(summary_dir.glob(f"{calculator}_*_summary.csv"))
+for dtype_str in ["float32", "float64"]:
+    for calculator in ["mace", "uma"]:
+        files = sorted(summary_dir.glob(f"{dtype_str}_{calculator}_*_summary.csv"))
 
-    if not files:
-        raise SystemExit(f"ERROR: no {calculator} summary files found in {summary_dir}")
+        if not files:
+            raise SystemExit(f"ERROR: no {dtype_str} {calculator} summary files found in {summary_dir}")
 
-    frames = [pd.read_csv(path) for path in files]
-    combined = pd.concat(frames, ignore_index=True)
+        combined = pd.concat([pd.read_csv(path) for path in files], ignore_index=True)
 
-    output_dir.mkdir(exist_ok=True)
-    output_path = output_dir / "summary.csv"
-    combined.to_csv(output_path, index=False)
+        output_dir = Path(f"outputs_{dtype_str}") / calculator
+        output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Wrote {len(combined)} rows to {output_path}", flush=True)
+        output_path = output_dir / "summary.csv"
+        combined.to_csv(output_path, index=False)
+        print(f"Wrote {len(combined)} rows to {output_path}", flush=True)
 PY
 
-python -u scripts_python/run_comprehensive.py --output-dir outputs_comprehensive
+for dtype_str in float32 float64; do
+  python -u scripts_python/run_comprehensive.py \
+    --mace-dir "outputs_${dtype_str}/mace" \
+    --uma-dir "outputs_${dtype_str}/uma" \
+    --output-dir "outputs_comprehensive/float/${dtype_str}"
 
-if [ -f outputs_mace/contour/summary.csv ] || [ -f outputs_uma/contour/summary.csv ]; then
-  python -u scripts_python/contour_comprehensive.py \
-    --mace-contour-dir outputs_mace/contour \
-    --uma-contour-dir outputs_uma/contour \
-    --comprehensive-dir outputs_comprehensive \
-    --output-dir outputs_comprehensive/contour
-else
-  echo "No contour summaries found; skipping contour comparison plots."
-fi
+  if [ -f "outputs_${dtype_str}/mace/contour/summary.csv" ] || [ -f "outputs_${dtype_str}/uma/contour/summary.csv" ]; then
+    python -u scripts_python/contour_comprehensive.py \
+      --mace-contour-dir "outputs_${dtype_str}/mace/contour" \
+      --uma-contour-dir "outputs_${dtype_str}/uma/contour" \
+      --comprehensive-dir "outputs_comprehensive/float/${dtype_str}" \
+      --output-dir "outputs_comprehensive/float/${dtype_str}/contour"
+  else
+    echo "No ${dtype_str} contour summaries found; skipping ${dtype_str} contour comparison plots."
+  fi
+done
+
+python -u scripts_python/float_comprehensive.py \
+  --float32-dir outputs_comprehensive/float/float32 \
+  --float64-dir outputs_comprehensive/float/float64 \
+  --output-dir outputs_comprehensive/float/comparison
 
 deactivate
 

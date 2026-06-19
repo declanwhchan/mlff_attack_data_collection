@@ -112,7 +112,7 @@ def select_jobs(jobs, calculator=None, material_slug=None):
     return selected
 
 
-def setup_job_calculator(atoms, job):
+def setup_job_calculator(atoms, job, dtype_str):
     calculator = job["calculator"]
     model_path = BASE_DIR / job["model_path"] if calculator == "mace" else Path(job["model_path"]).stem
 
@@ -120,6 +120,7 @@ def setup_job_calculator(atoms, job):
         atoms,
         model_path,
         device=job["device"],
+        dtype_str=dtype_str,
         calculator=calculator,
         mace_head=job["mace_head"] or None,
         uma_task=job["uma_task"] or None,
@@ -214,11 +215,12 @@ def relax_if_requested(atoms, fmax, max_steps):
 def run_contour(job, beta, config, args):
     calculator = job["calculator"]
     material_slug = job["material_slug"]
-    outdir = BASE_DIR / f"outputs_{calculator}" / "contour" / material_slug / beta_tag(beta)
+    dtype_str = args.dtype_str
+    outdir = BASE_DIR / f"outputs_{dtype_str}" / calculator / "contour" / material_slug / beta_tag(beta)
     outdir.mkdir(parents=True, exist_ok=True)
 
     atoms = read(BASE_DIR / job["input_path"])
-    atoms = setup_job_calculator(atoms, job)
+    atoms = setup_job_calculator(atoms, job, dtype_str)
 
     pre_relax_fmax = as_float(config.get("contour_pre_relax_fmax"), None)
     pre_relax_steps = as_int(config.get("contour_pre_relax_max_steps"), 0)
@@ -293,6 +295,7 @@ def run_contour(job, beta, config, args):
     return {
         "status": "success",
         "calculator": calculator,
+        "dtype_str": dtype_str,
         "material_label": job["material_label"],
         "material_slug": material_slug,
         "beta": float(beta),
@@ -313,13 +316,13 @@ def run_contour(job, beta, config, args):
     }
 
 
-def append_summary(calculator, rows):
-    summary_path = BASE_DIR / f"outputs_{calculator}" / "contour" / "summary.csv"
+def append_summary(dtype_str, calculator, rows):
+    summary_path = BASE_DIR / f"outputs_{dtype_str}" / calculator / "contour" / "summary.csv"
     summary_path.parent.mkdir(parents=True, exist_ok=True)
 
     existing = pd.read_csv(summary_path) if summary_path.exists() else pd.DataFrame()
     combined = pd.concat([existing, pd.DataFrame(rows)], ignore_index=True)
-    combined = combined.drop_duplicates(["calculator", "material_slug", "beta"], keep="last")
+    combined = combined.drop_duplicates(["dtype_str", "calculator", "material_slug", "beta"], keep="last")
     combined.to_csv(summary_path, index=False)
 
 
@@ -328,6 +331,11 @@ def main():
     parser.add_argument("--tests", default="generated_material_tests.csv")
     parser.add_argument("--config", default="tests_comprehensive.json")
     parser.add_argument("--calculator", choices=["mace", "uma"])
+    parser.add_argument(
+        "--dtype-str",
+        choices=["float32", "float64"],
+        default=os.environ.get("MLFF_DTYPE", "float64"),
+    )
     parser.add_argument("--material-slug")
     parser.add_argument("--betas")
     parser.add_argument("--steps", type=int)
@@ -376,7 +384,7 @@ def main():
 
     for calculator, rows in summaries_by_calculator.items():
         if rows:
-            append_summary(calculator, rows)
+            append_summary(args.dtype_str, calculator, rows)
 
 
 if __name__ == "__main__":

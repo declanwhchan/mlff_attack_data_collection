@@ -28,6 +28,16 @@ def active_environment():
     return None
 
 
+def dtype_for_row(row):
+    value = summary_text(row, "dtype_str")
+    if value is None:
+        value = os.environ.get("MLFF_DTYPE", "float64")
+    value = str(value).strip().lower()
+    if value not in {"float32", "float64"}:
+        raise RuntimeError(f"dtype_str must be float32 or float64, got {value!r}")
+    return value
+
+
 def infer_calculator(model_path):
     model_name = Path(str(model_path)).name.lower()
 
@@ -42,14 +52,14 @@ def infer_calculator(model_path):
     )
 
 
-def output_base_for(calculator):
+def output_base_for(calculator, dtype_str):
     calculator = str(calculator).strip().lower()
 
     if calculator == "mace":
-        return outputs_mace_DIR
+        return BASE_DIR / f"outputs_{dtype_str}" / "mace"
 
     if calculator == "uma":
-        return outputs_uma_DIR
+        return BASE_DIR / f"outputs_{dtype_str}" / "uma"
 
     raise RuntimeError(f"Unknown calculator for output folder: {calculator}")
 
@@ -307,6 +317,7 @@ def run_one(row):
     validate_row(row)
 
     run_id = str(row["run_id"])
+    dtype_str = dtype_for_row(row)
     calculator = infer_calculator(row["model_path"])
     material_slug = summary_text(row, "material_slug")
     if material_slug is None:
@@ -316,7 +327,7 @@ def run_one(row):
     if run_folder is None:
         run_folder = run_id
 
-    output_dir = output_base_for(calculator) / material_slug / run_folder
+    output_dir = output_base_for(calculator, dtype_str) / material_slug / run_folder
     output_dir.mkdir(parents=True, exist_ok=True)
 
     logging.basicConfig(
@@ -351,6 +362,7 @@ def run_one(row):
         relaxed_atoms,
         model_path,
         device=row["device"],
+        dtype_str=dtype_str,
         calculator=calculator,
         mace_head=as_none(row["mace_head"]),
         uma_task=as_none(row["uma_task"]),
@@ -377,6 +389,7 @@ def run_one(row):
         atoms=relaxed_atoms,
         model_path=model_path,
         device=row["device"],
+        dtype_str=dtype_str,
         output_cif=output_cif,
         attack_type=str(row["attack_type"]).lower(),
         epsilon=float(row["epsilon"]),
@@ -470,6 +483,7 @@ def run_one(row):
         "input_path": row["input_path"],
         "model_path": row["model_path"],
         "calculator": calculator,
+        "dtype_str": dtype_str,
         "attack_type": row["attack_type"],
         "epsilon": float(row["epsilon"]),
         "n_steps": int(row["n_steps"]),
@@ -519,9 +533,6 @@ def main(test_file=TEST_FILE):
     test_file = Path(test_file)
     experiments = pd.read_csv(test_file, keep_default_na=False)
     summaries = []
-
-    outputs_mace_DIR.mkdir(exist_ok=True)
-    outputs_uma_DIR.mkdir(exist_ok=True)
 
     summary_override = os.environ.get("SUMMARY_FILE")
     if summary_override:
