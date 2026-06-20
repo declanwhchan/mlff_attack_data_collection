@@ -1,8 +1,8 @@
 ## MLFF Attack Data Collection
 
-This repo runs an HPC data-collection workflow from the `mlff_attack` package:
+This repo runs an HPC data-collection workflow from the `mlff_attack` package: [TRustworthy-AI-Tools-for-Science/mlff_attack](https://github.com/TRustworthy-AI-Tools-for-Science/mlff_attack).
 
-[TRustworthy-AI-Tools-for-Science/mlff_attack](https://github.com/TRustworthy-AI-Tools-for-Science/mlff_attack)
+The 20 Materials Project structures used in the comprehensive workflow are listed in `tests_materials.csv`. Practical-use context and literature sources are summarized in [materials_practical_uses.md](materials_practical_uses.md).
 
 ## Setup On HPC
 
