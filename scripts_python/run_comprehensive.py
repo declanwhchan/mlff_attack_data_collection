@@ -33,6 +33,58 @@ MODEL_OFFSETS = {
     "uma": 0.18,
 }
 
+EPSILON_POSITION_FACTORS = {
+    "mace": 10 ** (-0.035),
+    "uma": 10 ** (0.035),
+}
+
+EPSILON_BOX_WIDTH_LOG10 = 0.020
+
+
+def positive_finite_values(values):
+    values = np.asarray(values, dtype=float)
+    return values[np.isfinite(values) & (values > 0)]
+
+
+def decade_ticks(values):
+    values = positive_finite_values(values)
+    if len(values) == 0:
+        return []
+
+    min_power = int(np.floor(np.log10(np.min(values))))
+    max_power = int(np.ceil(np.log10(np.max(values))))
+
+    return [10.0 ** power for power in range(min_power, max_power + 1)]
+
+
+def epsilon_plot_position(epsilon, calculator=None):
+    epsilon = float(epsilon)
+    if calculator is None:
+        return epsilon
+    return epsilon * EPSILON_POSITION_FACTORS[calculator]
+
+
+def epsilon_box_widths(positions):
+    widths = []
+    for position in positions:
+        lower = position / (10 ** EPSILON_BOX_WIDTH_LOG10)
+        upper = position * (10 ** EPSILON_BOX_WIDTH_LOG10)
+        widths.append(upper - lower)
+    return widths
+
+
+def apply_epsilon_axis(ax, epsilons):
+    ticks = decade_ticks(epsilons)
+    ax.set_xscale("log")
+
+    if ticks:
+        ax.set_xticks(ticks)
+        ax.set_xticklabels([format_epsilon_label(tick) for tick in ticks])
+        ax.set_xlim(ticks[0] / 1.18, ticks[-1] * 1.18)
+
+    ax.tick_params(axis="x", labelrotation=0, pad=2)
+    ax.set_xlabel(r"$\epsilon$ ($\AA$)")
+
 
 def apply_plot_style():
     plt.rcParams.update({
@@ -1194,6 +1246,7 @@ def collect_box_data(records, attack, value_getter, missing_rows):
     positions = []
     values = []
     colors = []
+    calculators = []
     point_x = []
     point_y = []
 
@@ -1221,20 +1274,21 @@ def collect_box_data(records, attack, value_getter, missing_rows):
                     box_values.extend(row_values.tolist())
 
             if box_values:
-                position = epsilon_plot_position(epsilon) * (10 ** MODEL_OFFSETS[calculator] / 10)
+                position = epsilon_plot_position(epsilon, calculator)
                 positions.append(position)
                 values.append(box_values)
                 colors.append(CALCULATOR_COLORS[calculator])
+                calculators.append(calculator)
 
                 jitter = 10 ** rng.normal(loc=0.0, scale=0.004, size=len(box_values))
                 point_x.extend((position * jitter).tolist())
                 point_y.extend(box_values)
 
-    return epsilons, positions, values, colors, point_x, point_y
+    return epsilons, positions, values, colors, calculators, point_x, point_y
 
 
 def draw_grouped_boxplot(ax, records, attack, value_getter, ylabel, missing_rows):
-    epsilons, positions, values, colors, point_x, point_y = collect_box_data(
+    epsilons, positions, values, colors, calculators, point_x, point_y = collect_box_data(
         records,
         attack,
         value_getter,
@@ -1260,7 +1314,7 @@ def draw_grouped_boxplot(ax, records, attack, value_getter, ylabel, missing_rows
     box = ax.boxplot(
         values,
         positions=positions,
-        widths=0.30,
+        widths=epsilon_box_widths(positions),
         patch_artist=True,
         showfliers=False,
         zorder=2,
@@ -1386,7 +1440,7 @@ def bootstrap_median_ci(values, confidence=95, n_bootstrap=1000, seed=12345):
 
 
 def draw_grouped_ci(ax, records, attack, value_getter, ylabel, missing_rows):
-    epsilons, positions, values, colors, point_x, point_y = collect_box_data(
+    epsilons, positions, values, colors, calculators, point_x, point_y = collect_box_data(
         records,
         attack,
         value_getter,
@@ -1403,18 +1457,12 @@ def draw_grouped_ci(ax, records, attack, value_getter, ylabel, missing_rows):
         "uma": {"x": [], "median": [], "lower": [], "upper": []},
     }
 
-    for position, box_values in zip(positions, values):
+    for position, box_values, calculator in zip(positions, values, calculators):
         ci = bootstrap_median_ci(box_values)
         if ci is None:
             continue
 
         median, lower, upper = ci
-        center_position = round(position)
-        offset = position - center_position
-        calculator = min(
-            MODEL_OFFSETS,
-            key=lambda name: abs(offset - MODEL_OFFSETS[name]),
-        )
 
         x_value = position
         series[calculator]["x"].append(x_value)
@@ -2298,6 +2346,48 @@ def save_topology_summary(records, output_dir):
     pd.DataFrame(rows).to_csv(output_dir / "topology_summary.csv", index=False)
 
 
+def normalized_topology_data(records):
+    data = records.copy()
+    for column in TOPOLOGY_METRICS + ["mean_displacement", "epsilon", "n_steps"]:
+        if column in data.columns:
+            data[column] = pd.to_numeric(data[column], errors="coerce")
+
+    components = {
+        "jaccard_norm": "neighbor_jaccard_distance",
+        "rdf_norm": "rdf_l1_distance",
+        "coord_norm": "coordination_change_max",
+    }
+
+    for norm_col, raw_col in components.items():
+        values = data[raw_col].replace([np.inf, -np.inf], np.nan)
+        max_value = values.max(skipna=True)
+        if pd.isna(max_value) or max_value <= 0:
+            data[norm_col] = 0.0
+        else:
+            data[norm_col] = values / max_value
+
+    data["topology_score"] = data[
+        ["jaccard_norm", "rdf_norm", "coord_norm"]
+    ].mean(axis=1)
+
+    return data
+
+
+def topology_metric_axes(ax, xlabel=None, ylabel=None, title=None):
+    if xlabel:
+        ax.set_xlabel(xlabel)
+    if ylabel:
+        ax.set_ylabel(ylabel)
+    if title:
+        ax.set_title(title)
+    ax.grid(True, alpha=0.28)
+
+
+def finite_metric_data(data, columns):
+    clean = data.replace([np.inf, -np.inf], np.nan).dropna(subset=columns)
+    return clean.copy()
+
+
 def topology_scatter(ax, data, x_col, y_col, xlabel, ylabel, title):
     plotted = False
 
@@ -2359,32 +2449,6 @@ def topology_scatter(ax, data, x_col, y_col, xlabel, ylabel, title):
 
     if not plotted:
         ax.text(0.5, 0.5, "No topology data", transform=ax.transAxes, ha="center", va="center")
-
-
-def make_topology_vs_displacement(records, output_dir):
-    data = records[
-        records["neighbor_jaccard_distance"].notna()
-        & records["mean_displacement"].notna()
-    ].copy()
-
-    if data.empty:
-        return
-
-    fig, ax = plt.subplots(figsize=(7.2, 4.4))
-    topology_scatter(
-        ax=ax,
-        data=data,
-        x_col="mean_displacement",
-        y_col="neighbor_jaccard_distance",
-        xlabel=r"Mean displacement ($\AA$)",
-        ylabel="Neighbor-graph Jaccard distance",
-        title="Topology change vs displacement",
-    )
-    ax.legend(frameon=False, ncol=2, fontsize=7)
-    tighten_axes_for_publication(fig)
-    fig.tight_layout()
-    fig.savefig(output_dir / "figure_topology_vs_displacement.png", dpi=300, bbox_inches="tight")
-    plt.close(fig)
 
 
 def make_topology_by_attack_type(records, output_dir):
@@ -2452,33 +2516,253 @@ def make_topology_by_attack_type(records, output_dir):
         ax.set_ylim(0, min(100.0, max(5.0, max_rate * 1.25)))
 
     fig.tight_layout()
-    fig.savefig(output_dir / "figure_topology_by_attack_type.png", dpi=300, bbox_inches="tight")
+    fig.savefig(output_dir / "topology_by_attack_type.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
 
 
-def make_rdf_vs_coordination_change(records, output_dir):
-    data = records[
-        records["rdf_l1_distance"].notna()
-        & records["coordination_change_max"].notna()
-    ].copy()
+def make_topology_mechanism_map(records, output_dir):
+    data = finite_metric_data(
+        normalized_topology_data(records),
+        [
+            "neighbor_jaccard_distance",
+            "rdf_l1_distance",
+            "coordination_change_max",
+            "attack_label",
+            "calculator",
+        ],
+    )
 
     if data.empty:
         return
 
-    fig, ax = plt.subplots(figsize=(7.2, 4.4))
-    topology_scatter(
-        ax=ax,
-        data=data,
-        x_col="rdf_l1_distance",
-        y_col="coordination_change_max",
-        xlabel="RDF L1 distance",
-        ylabel="Max coordination change",
-        title="RDF change vs coordination change",
+    attacks = [attack for attack in ATTACK_ORDER if attack in set(data["attack_label"])]
+    if not attacks:
+        return
+
+    fig, axes = plt.subplots(1, len(attacks), figsize=(4.2 * len(attacks), 3.8), sharex=False, sharey=False)
+    axes = np.atleast_1d(axes)
+
+    size_max = data["coordination_change_max"].max()
+    if pd.isna(size_max) or size_max <= 0:
+        data["_size"] = 28.0
+    else:
+        data["_size"] = 28.0 + 170.0 * (data["coordination_change_max"] / size_max)
+
+    for ax, attack in zip(axes, attacks):
+        subset = data[data["attack_label"] == attack]
+
+        for calculator, color in CALCULATOR_COLORS.items():
+            calc_subset = subset[subset["calculator"] == calculator]
+            if calc_subset.empty:
+                continue
+
+            ax.scatter(
+                calc_subset["neighbor_jaccard_distance"],
+                calc_subset["rdf_l1_distance"],
+                s=calc_subset["_size"],
+                color=color,
+                alpha=0.52,
+                edgecolor="white",
+                linewidth=0.45,
+                label=calculator.upper(),
+            )
+
+        topology_metric_axes(
+            ax,
+            xlabel="Neighbor-graph Jaccard distance",
+            ylabel="RDF L1 distance",
+            title=attack,
+        )
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    if handles:
+        fig.legend(handles, labels, loc="upper center", ncol=2, frameon=False)
+
+    fig.suptitle("Topology mechanism map: size = max coordination change", y=1.05)
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    fig.savefig(output_dir / "topology_mechanism_map.png", dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def make_topology_material_ranking(records, output_dir, max_materials=20):
+    data = finite_metric_data(
+        normalized_topology_data(records),
+        ["material_slug", "jaccard_norm", "rdf_norm", "coord_norm", "topology_score"],
     )
-    ax.legend(frameon=False, ncol=2, fontsize=7)
-    tighten_axes_for_publication(fig)
+
+    if data.empty:
+        return
+
+    ranked = (
+        data.groupby("material_slug", as_index=False)
+        .agg(
+            jaccard_norm=("jaccard_norm", "mean"),
+            rdf_norm=("rdf_norm", "mean"),
+            coord_norm=("coord_norm", "mean"),
+            topology_score=("topology_score", "mean"),
+        )
+        .sort_values("topology_score", ascending=False)
+        .head(max_materials)
+        .sort_values("topology_score", ascending=True)
+    )
+
+    if ranked.empty:
+        return
+
+    fig_height = max(4.0, 0.30 * len(ranked) + 1.5)
+    fig, ax = plt.subplots(figsize=(7.4, fig_height))
+
+    y = np.arange(len(ranked))
+    left = np.zeros(len(ranked))
+
+    components = [
+        ("jaccard_norm", "Jaccard", "#0072B2"),
+        ("rdf_norm", "RDF", "#009E73"),
+        ("coord_norm", "Coordination", "#D55E00"),
+    ]
+
+    for column, label, color in components:
+        values = ranked[column].to_numpy(dtype=float)
+        ax.barh(y, values, left=left, color=color, alpha=0.78, label=label)
+        left += values
+
+    ax.set_yticks(y)
+    ax.set_yticklabels(ranked["material_slug"])
+    topology_metric_axes(
+        ax,
+        xlabel="Mean normalized topology contribution",
+        ylabel="Material",
+        title="Most topology-sensitive materials",
+    )
+    ax.legend(frameon=False, ncol=3, loc="lower right")
+
     fig.tight_layout()
-    fig.savefig(output_dir / "figure_rdf_vs_coordination_change.png", dpi=300, bbox_inches="tight")
+    fig.savefig(output_dir / "topology_material_ranking.png", dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def make_topology_model_disagreement(records, output_dir, max_rows=24):
+    data = finite_metric_data(
+        normalized_topology_data(records),
+        ["material_slug", "attack_label", "calculator", "topology_score"],
+    )
+
+    if data.empty:
+        return
+
+    grouped = (
+        data.groupby(["material_slug", "attack_label", "calculator"], as_index=False)
+        .agg(topology_score=("topology_score", "mean"))
+    )
+
+    pivot = grouped.pivot_table(
+        index=["material_slug", "attack_label"],
+        columns="calculator",
+        values="topology_score",
+        aggfunc="mean",
+    ).reset_index()
+
+    if "mace" not in pivot.columns or "uma" not in pivot.columns:
+        return
+
+    pivot = pivot.dropna(subset=["mace", "uma"]).copy()
+    if pivot.empty:
+        return
+
+    pivot["disagreement"] = (pivot["mace"] - pivot["uma"]).abs()
+    pivot = pivot.sort_values("disagreement", ascending=False).head(max_rows)
+    pivot = pivot.sort_values("disagreement", ascending=True)
+    pivot["label"] = pivot["material_slug"].astype(str) + " / " + pivot["attack_label"].astype(str)
+
+    fig_height = max(4.0, 0.32 * len(pivot) + 1.5)
+    fig, ax = plt.subplots(figsize=(7.4, fig_height))
+
+    y = np.arange(len(pivot))
+
+    for index, row in enumerate(pivot.itertuples()):
+        ax.plot(
+            [row.mace, row.uma],
+            [index, index],
+            color="#999999",
+            linewidth=1.2,
+            zorder=1,
+        )
+
+    ax.scatter(pivot["mace"], y, color=CALCULATOR_COLORS["mace"], s=34, label="MACE", zorder=3)
+    ax.scatter(pivot["uma"], y, color=CALCULATOR_COLORS["uma"], s=34, label="UMA", zorder=3)
+
+    ax.set_yticks(y)
+    ax.set_yticklabels(pivot["label"])
+    topology_metric_axes(
+        ax,
+        xlabel="Mean normalized topology score",
+        ylabel="Material / attack",
+        title="Largest MACE-UMA topology-score disagreements",
+    )
+    ax.legend(frameon=False, ncol=2, loc="lower right")
+
+    fig.tight_layout()
+    fig.savefig(output_dir / "topology_model_disagreement.png", dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def make_topology_metric_coupling(records, output_dir):
+    columns = [
+        "neighbor_jaccard_distance",
+        "rdf_l1_distance",
+        "coordination_change_max",
+        "mean_displacement",
+        "epsilon",
+        "n_steps",
+    ]
+
+    available = [column for column in columns if column in records.columns]
+    data = finite_metric_data(records, available)
+
+    if data.empty or len(available) < 2:
+        return
+
+    corr = data[available].corr(method="spearman")
+
+    labels = {
+        "neighbor_jaccard_distance": "Jaccard",
+        "rdf_l1_distance": "RDF L1",
+        "coordination_change_max": "Max coord.",
+        "mean_displacement": "Mean disp.",
+        "epsilon": "epsilon",
+        "n_steps": "n_steps",
+    }
+
+    fig, ax = plt.subplots(figsize=(6.2, 5.2))
+    image = ax.imshow(corr.to_numpy(dtype=float), vmin=-1, vmax=1, cmap="coolwarm")
+
+    ax.set_xticks(np.arange(len(available)))
+    ax.set_yticks(np.arange(len(available)))
+    ax.set_xticklabels([labels[column] for column in available], rotation=35, ha="right")
+    ax.set_yticklabels([labels[column] for column in available])
+
+    for i in range(len(available)):
+        for j in range(len(available)):
+            value = corr.iloc[i, j]
+            if pd.isna(value):
+                text = "NA"
+            else:
+                text = f"{value:.2f}"
+            ax.text(
+                j,
+                i,
+                text,
+                ha="center",
+                va="center",
+                fontsize=7,
+                color="white" if pd.notna(value) and abs(value) > 0.55 else "#222222",
+            )
+
+    ax.set_title("Spearman coupling among topology and attack metrics")
+    fig.colorbar(image, ax=ax, label="Spearman rho", shrink=0.82)
+
+    fig.tight_layout()
+    fig.savefig(output_dir / "topology_metric_coupling.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -2490,22 +2774,25 @@ def make_topology_figures(records, output_dir):
     output_dir.mkdir(parents=True, exist_ok=True)
 
     clean = records.copy()
-    for column in TOPOLOGY_METRICS + ["mean_displacement"]:
+    for column in TOPOLOGY_METRICS + ["mean_displacement", "epsilon", "n_steps"]:
         if column in clean.columns:
             clean[column] = pd.to_numeric(clean[column], errors="coerce")
 
     save_topology_summary(clean, output_dir)
-    make_topology_vs_displacement(clean, output_dir)
     make_topology_by_attack_type(clean, output_dir)
-    make_rdf_vs_coordination_change(clean, output_dir)
+    make_topology_mechanism_map(clean, output_dir)
+    make_topology_material_ranking(clean, output_dir)
+    make_topology_model_disagreement(clean, output_dir)
+    make_topology_metric_coupling(clean, output_dir)
 
     for material_slug, material_records in clean.groupby("material_slug"):
         material_output_dir = output_dir / str(material_slug)
         material_output_dir.mkdir(parents=True, exist_ok=True)
         save_topology_summary(material_records, material_output_dir)
-        make_topology_vs_displacement(material_records, material_output_dir)
         make_topology_by_attack_type(material_records, material_output_dir)
-        make_rdf_vs_coordination_change(material_records, material_output_dir)
+        make_topology_mechanism_map(material_records, material_output_dir)
+        make_topology_model_disagreement(material_records, material_output_dir)
+        make_topology_metric_coupling(material_records, material_output_dir)
 
 
 def main():

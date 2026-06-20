@@ -113,6 +113,21 @@ def decade_ticks(values):
     return [10.0 ** power for power in range(min_power, max_power + 1)]
 
 
+def apply_log_decade_xaxis(ax, values, xlabel=None):
+    ticks = decade_ticks(values)
+    ax.set_xscale("log")
+
+    if ticks:
+        ax.set_xticks(ticks)
+        ax.set_xticklabels([f"{tick:g}" for tick in ticks])
+        ax.set_xlim(ticks[0] / 1.18, ticks[-1] * 1.18)
+
+    if xlabel is not None:
+        ax.set_xlabel(xlabel)
+
+    ax.tick_params(axis="x", labelrotation=0, pad=2)
+
+
 def clean_axis_values(ax, axis_name):
     values = []
 
@@ -431,15 +446,9 @@ def draw_attack_panels(fig, axes, data, x_col, x_label, calculator, contour_rows
 
         if x_col == "epsilon":
             epsilon_values = data[x_col].to_numpy(dtype=float)
-            ticks = decade_ticks(epsilon_values)
 
             for axis in [ax_disp, ax_force]:
-                axis.set_xscale("log")
-                if ticks:
-                    axis.set_xticks(ticks)
-                    axis.set_xticklabels([f"{tick:g}" for tick in ticks])
-                    axis.set_xlim(ticks[0] / 1.18, ticks[-1] * 1.18)
-                axis.tick_params(axis="x", labelrotation=0, pad=2)
+                apply_log_decade_xaxis(axis, epsilon_values)
 
         for ax in [ax_disp, ax_force]:
             style_numeric_axis(ax)
