@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH --account=rrg-j3goals
-#SBATCH --time=01:00:00
+#SBATCH --time=00:30:00
 #SBATCH --mem=16G
-#SBATCH --cpus-per-task=8
-#SBATCH --output=plot-%j.out
+#SBATCH --cpus-per-task=4
+#SBATCH --output=sample-1-plot-%j.out
 
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
@@ -27,7 +27,6 @@ summary_dir = Path("array_summaries")
 for dtype_str in ["float32", "float64"]:
     for calculator in ["mace", "uma"]:
         files = sorted(summary_dir.glob(f"{dtype_str}_{calculator}_*_summary.csv"))
-
         if not files:
             raise SystemExit(f"ERROR: no {dtype_str} {calculator} summary files found in {summary_dir}")
 
@@ -54,7 +53,7 @@ for dtype_str in float32 float64; do
       --comprehensive-dir "outputs_comprehensive/float/${dtype_str}" \
       --output-dir "outputs_comprehensive/float/${dtype_str}/contour"
   else
-    echo "No ${dtype_str} contour summaries found; skipping ${dtype_str} contour comparison plots."
+    echo "No ${dtype_str} contour summaries found; skipping ${dtype_str} contour plots."
   fi
 done
 
@@ -65,4 +64,4 @@ python -u scripts_python/float_comprehensive.py \
 
 deactivate
 
-echo "Plotting complete."
+echo "Smoke-test plotting complete."

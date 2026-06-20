@@ -7,6 +7,7 @@ import re
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
+from matplotlib.ticker import MaxNLocator, ScalarFormatter
 import numpy as np
 import pandas as pd
 from ase.io import read as read_structure
@@ -350,6 +351,16 @@ def load_summary(summary_path, base_dir, calculator):
             "mean_displacement": as_float(row.get("mean_displacement")),
             "max_displacement": as_float(row.get("max_displacement")),
             "final_energy": as_float(row.get("final_energy")),
+            "topology_edge_changes_csv": clean_value(row.get("topology_edge_changes_csv")),
+            "neighbor_edges_before": as_float(row.get("neighbor_edges_before")),
+            "neighbor_edges_after": as_float(row.get("neighbor_edges_after")),
+            "neighbor_edges_added": as_float(row.get("neighbor_edges_added")),
+            "neighbor_edges_removed": as_float(row.get("neighbor_edges_removed")),
+            "neighbor_edge_change_count": as_float(row.get("neighbor_edge_change_count")),
+            "neighbor_jaccard_distance": as_float(row.get("neighbor_jaccard_distance")),
+            "coordination_change_mean": as_float(row.get("coordination_change_mean")),
+            "coordination_change_max": as_float(row.get("coordination_change_max")),
+            "rdf_l1_distance": as_float(row.get("rdf_l1_distance")),
         })
 
     return records, missing
@@ -478,78 +489,51 @@ def label_axes(axes):
         add_panel_label(ax, chr(ord("A") + index))
 
 
-def finite_xy(data, x_col, y_col):
-    clean = data[[x_col, y_col]].replace([np.inf, -np.inf], np.nan).dropna()
-    return clean[x_col].to_numpy(dtype=float), clean[y_col].to_numpy(dtype=float)
-
-
-def add_std_ellipse(ax, x, y, color, n_std, label=None):
-    if len(x) < 3 or len(y) < 3:
-        return
-
-    covariance = np.cov(x, y)
-    if not np.isfinite(covariance).all():
-        return
-
-    eigenvalues, eigenvectors = np.linalg.eigh(covariance)
-    if np.any(eigenvalues <= 0):
-        return
-
-    order = eigenvalues.argsort()[::-1]
-    eigenvalues = eigenvalues[order]
-    eigenvectors = eigenvectors[:, order]
-
-    angle = np.degrees(np.arctan2(eigenvectors[1, 0], eigenvectors[0, 0]))
-    width, height = 2 * n_std * np.sqrt(eigenvalues)
-
-    ellipse = Ellipse(
-        xy=(float(np.mean(x)), float(np.mean(y))),
-        width=float(width),
-        height=float(height),
-        angle=float(angle),
-        fill=False,
-        edgecolor=color,
-        linewidth=1.0 if n_std == 1 else 0.8,
-        linestyle="-" if n_std == 1 else "--",
-        alpha=0.85 if n_std == 1 else 0.55,
-        label=label,
-    )
-    ax.add_patch(ellipse)
-
-
-def bubble_sizes(values):
+def clean_numeric_array(values):
     values = pd.Series(values).replace([np.inf, -np.inf], np.nan).dropna()
-    if values.empty:
-        return np.array([])
-
-    minimum = float(values.min())
-    maximum = float(values.max())
-
-    if maximum <= minimum:
-        return np.full(len(values), 70.0)
-
-    scaled = (values.to_numpy(dtype=float) - minimum) / (maximum - minimum)
-    return 35.0 + 115.0 * scaled
+    return values.to_numpy(dtype=float)
 
 
-PARAMETRIC_AXIS_PERCENTILE = 99
+def variability_radius(values):
+    values = clean_numeric_array(values)
+    if len(values) < 2:
+        return 0.0
+
+    q25, q75 = np.percentile(values, [25, 75])
+    return max(float((q75 - q25) / 2.0), 0.0)
 
 
-def percentile_axis_limit(values, percentile=PARAMETRIC_AXIS_PERCENTILE, pad=0.08):
+PARAMETRIC_AXIS_PERCENTILE = 95
+
+
+def percentile_axis_limit(values, percentile=PARAMETRIC_AXIS_PERCENTILE, pad=0.12):
     values = pd.Series(values).replace([np.inf, -np.inf], np.nan).dropna()
     values = values[values >= 0]
 
     if values.empty:
         return None
 
-    cap = float(np.percentile(values.to_numpy(dtype=float), percentile))
-    if cap <= 0:
-        cap = float(values.max())
+    data = values.to_numpy(dtype=float)
+    upper = float(np.percentile(data, percentile))
+    lower = float(np.min(data))
 
-    if cap <= 0:
+    if upper <= 0:
+        upper = float(np.max(data))
+
+    if upper <= 0:
         return None
 
-    return 0.0, cap * (1.0 + pad)
+    span = upper - lower
+    if span <= 0:
+        span = upper if upper > 0 else 1.0
+
+    low = max(0.0, lower - pad * span)
+    high = upper + pad * span
+
+    if high <= low:
+        high = low + max(abs(low) * 0.1, 1e-12)
+
+    return low, high
 
 
 def parametric_axis_limits(data, percentile=PARAMETRIC_AXIS_PERCENTILE):
@@ -562,29 +546,60 @@ def parametric_axis_limits(data, percentile=PARAMETRIC_AXIS_PERCENTILE):
     return x_limits, y_limits
 
 
-def metric_median(row, getter):
+def minimum_visible_radius(limits):
+    if limits is None:
+        return 0.0
+
+    low, high = limits
+    span = float(high - low)
+    if not np.isfinite(span) or span <= 0:
+        return 0.0
+
+    return 0.004 * span
+
+
+def style_numeric_axis(ax, xbins=4, ybins=5):
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=xbins, prune=None))
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=ybins, prune=None))
+
+    for axis in [ax.xaxis, ax.yaxis]:
+        formatter = ScalarFormatter(useMathText=True)
+        formatter.set_powerlimits((-3, 3))
+        axis.set_major_formatter(formatter)
+
+    ax.tick_params(axis="both", labelsize=8, pad=2)
+
+
+def metric_distribution(row, getter):
     values, reason = getter(row)
     if values is None:
         return None, reason
-    return float(np.median(values)), None
+
+    values = clean_numeric_array(values)
+    if len(values) == 0:
+        return None, "No finite values"
+
+    return (float(np.median(values)), values), None
 
 
-def scalar_metric(row, column):
+def scalar_distribution(row, column):
     value = row.get(column)
     if value is None or pd.isna(value):
         return None, f"Missing {column}"
-    return float(value), None
+
+    value = float(value)
+    return (value, np.array([value], dtype=float)), None
 
 
 def parametric_rows(records, x_getter, y_getter, bubble_col, missing_rows, figure_name):
     rows = []
 
     for _, row in records.iterrows():
-        x_value, x_reason = x_getter(row)
-        y_value, y_reason = y_getter(row)
+        x_result, x_reason = x_getter(row)
+        y_result, y_reason = y_getter(row)
         bubble_value = row.get(bubble_col)
 
-        if x_value is None or y_value is None:
+        if x_result is None or y_result is None:
             missing_rows.append({
                 "figure": figure_name,
                 "run_id": row["run_id"],
@@ -600,16 +615,33 @@ def parametric_rows(records, x_getter, y_getter, bubble_col, missing_rows, figur
             })
             continue
 
+        x_center, x_values = x_result
+        y_center, y_values = y_result
+
         rows.append({
             "run_id": row["run_id"],
             "calculator": row["calculator"],
             "attack_label": row["attack_label"],
             "bubble": float(bubble_value),
-            "x": x_value,
-            "y": y_value,
+            "x": float(x_center),
+            "y": float(y_center),
+            "x_values": x_values,
+            "y_values": y_values,
         })
 
-    return pd.DataFrame(rows)
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "run_id",
+            "calculator",
+            "attack_label",
+            "bubble",
+            "x",
+            "y",
+            "x_values",
+            "y_values",
+        ],
+    )
 
 
 def draw_parametric_panel(
@@ -624,38 +656,91 @@ def draw_parametric_panel(
 ):
     subset = data[data["attack_label"] == attack].copy()
 
+    if not subset.empty:
+        panel_x_limits, panel_y_limits = parametric_axis_limits(subset)
+        if x_limits is None:
+            x_limits = panel_x_limits
+        if y_limits is None:
+            y_limits = panel_y_limits
+
     if subset.empty:
         ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha="center", va="center")
         ax.set_title(attack)
         ax.set_xlabel(x_label)
         if show_ylabel:
             ax.set_ylabel(y_label)
-        ax.grid(True, alpha=0.35)
         if x_limits is not None:
             ax.set_xlim(*x_limits)
         if y_limits is not None:
             ax.set_ylim(*y_limits)
+        style_numeric_axis(ax)
+        ax.grid(True, alpha=0.35)
         return
+
+    min_x_radius = minimum_visible_radius(x_limits)
+    min_y_radius = minimum_visible_radius(y_limits)
+
+    x_span = None if x_limits is None else float(x_limits[1] - x_limits[0])
+    y_span = None if y_limits is None else float(y_limits[1] - y_limits[0])
 
     for calculator, color in CALCULATOR_COLORS.items():
         calc_data = subset[subset["calculator"] == calculator].copy()
         if calc_data.empty:
             continue
 
-        ax.scatter(
-            calc_data["x"],
-            calc_data["y"],
-            s=bubble_sizes(calc_data["bubble"]),
-            color=color,
-            alpha=0.58,
-            edgecolor="white",
-            linewidth=0.45,
-            label=calculator.upper(),
-        )
+        first_label = True
 
-        x, y = finite_xy(calc_data, "x", "y")
-        add_std_ellipse(ax, x, y, color, n_std=1, label=f"{calculator.upper()} 1 std")
-        add_std_ellipse(ax, x, y, color, n_std=2, label=f"{calculator.upper()} 2 std")
+        for _, group in calc_data.groupby("bubble", sort=True):
+            x_values = np.concatenate([
+                clean_numeric_array(values)
+                for values in group["x_values"]
+            ])
+            y_values = np.concatenate([
+                clean_numeric_array(values)
+                for values in group["y_values"]
+            ])
+
+            if len(x_values) == 0 or len(y_values) == 0:
+                continue
+
+            x_center = float(np.median(x_values))
+            y_center = float(np.median(y_values))
+
+            if len(group) >= 3:
+                x_radius = max(variability_radius(x_values), min_x_radius)
+                y_radius = max(variability_radius(y_values), min_y_radius)
+
+                if x_span is not None and x_span > 0:
+                    x_radius = min(x_radius, 0.055 * x_span)
+                if y_span is not None and y_span > 0:
+                    y_radius = min(y_radius, 0.055 * y_span)
+
+                ellipse = Ellipse(
+                    xy=(x_center, y_center),
+                    width=2.0 * x_radius,
+                    height=2.0 * y_radius,
+                    angle=0.0,
+                    facecolor=color,
+                    edgecolor=color,
+                    linewidth=0.8,
+                    alpha=0.11,
+                    clip_on=True,
+                    zorder=1,
+                )
+                ax.add_patch(ellipse)
+
+            ax.scatter(
+                [x_center],
+                [y_center],
+                s=24,
+                color=color,
+                edgecolor="white",
+                linewidth=0.45,
+                zorder=3,
+                label=calculator.upper() if first_label else None,
+            )
+
+            first_label = False
 
     ax.set_title(attack)
     ax.set_xlabel(x_label)
@@ -667,8 +752,9 @@ def draw_parametric_panel(
     if y_limits is not None:
         ax.set_ylim(*y_limits)
 
+    style_numeric_axis(ax)
     ax.grid(True, alpha=0.35)
-    ax.margins(x=0.04, y=0.06)
+    ax.margins(x=0.03, y=0.05)
 
 
 def make_parametric_state_figure(
@@ -718,7 +804,7 @@ def make_parametric_state_figure(
         if not data.empty:
             any_data = True
 
-        x_limits, y_limits = parametric_axis_limits(data)
+        x_limits, y_limits = None, None
 
         for col_index, attack in enumerate(attacks_to_plot):
             ax = axes[row_index, col_index]
@@ -736,7 +822,7 @@ def make_parametric_state_figure(
             ax.title.set_fontsize(13)
             ax.xaxis.label.set_fontsize(12)
             ax.yaxis.label.set_fontsize(12)
-            ax.tick_params(axis="both", labelsize=10)
+            style_numeric_axis(ax, xbins=4, ybins=5)
 
             if col_index == 0:
                 ax.text(
@@ -767,7 +853,7 @@ def make_parametric_state_figure(
             ncol=4,
             bbox_to_anchor=(0.5, 1.045),
             frameon=False,
-            title=f"Bubble size = {bubble_label}",
+            title=f"Grouped by {bubble_label}",
             fontsize=11,
             title_fontsize=11,
             handlelength=1.9,
@@ -803,20 +889,20 @@ def make_parametric_figure_set(records, output_dir, suffix, attacks_to_plot, bub
         bubble_label=bubble_label,
         attacks_to_plot=attacks_to_plot,
         x_getters=[
-            lambda row: metric_median(row, lambda item: displacement_values(
+            lambda row: metric_distribution(row, lambda item: displacement_values(
                 item["run_dir"],
                 "before_forces.csv",
                 "perturbed_forces.csv",
             )),
-            lambda row: metric_median(row, lambda item: displacement_values(
+            lambda row: metric_distribution(row, lambda item: displacement_values(
                 item["run_dir"],
                 "before_forces.csv",
                 "after_forces.csv",
             )),
         ],
         y_getters=[
-            lambda row: scalar_metric(row, "after_relax_steps"),
-            lambda row: scalar_metric(row, "after_relax_steps"),
+            lambda row: scalar_distribution(row, "after_relax_steps"),
+            lambda row: scalar_distribution(row, "after_relax_steps"),
         ],
     )
 
@@ -830,20 +916,20 @@ def make_parametric_figure_set(records, output_dir, suffix, attacks_to_plot, bub
         bubble_label=bubble_label,
         attacks_to_plot=attacks_to_plot,
         x_getters=[
-            lambda row: metric_median(row, lambda item: force_delta_values(
+            lambda row: metric_distribution(row, lambda item: force_delta_values(
                 item["run_dir"],
                 "before_forces.csv",
                 "perturbed_forces.csv",
             )),
-            lambda row: metric_median(row, lambda item: force_delta_values(
+            lambda row: metric_distribution(row, lambda item: force_delta_values(
                 item["run_dir"],
                 "before_forces.csv",
                 "after_forces.csv",
             )),
         ],
         y_getters=[
-            lambda row: scalar_metric(row, "after_relax_steps"),
-            lambda row: scalar_metric(row, "after_relax_steps"),
+            lambda row: scalar_distribution(row, "after_relax_steps"),
+            lambda row: scalar_distribution(row, "after_relax_steps"),
         ],
     )
 
@@ -857,24 +943,24 @@ def make_parametric_figure_set(records, output_dir, suffix, attacks_to_plot, bub
         bubble_label=bubble_label,
         attacks_to_plot=attacks_to_plot,
         x_getters=[
-            lambda row: metric_median(row, lambda item: displacement_values(
+            lambda row: metric_distribution(row, lambda item: displacement_values(
                 item["run_dir"],
                 "before_forces.csv",
                 "perturbed_forces.csv",
             )),
-            lambda row: metric_median(row, lambda item: displacement_values(
+            lambda row: metric_distribution(row, lambda item: displacement_values(
                 item["run_dir"],
                 "before_forces.csv",
                 "after_forces.csv",
             )),
         ],
         y_getters=[
-            lambda row: metric_median(row, lambda item: force_delta_values(
+            lambda row: metric_distribution(row, lambda item: force_delta_values(
                 item["run_dir"],
                 "before_forces.csv",
                 "perturbed_forces.csv",
             )),
-            lambda row: metric_median(row, lambda item: force_delta_values(
+            lambda row: metric_distribution(row, lambda item: force_delta_values(
                 item["run_dir"],
                 "before_forces.csv",
                 "after_forces.csv",
@@ -2084,6 +2170,208 @@ def make_distribution_by_steps_figure(records, output_dir, figure_name, ylabel, 
     return all_missing
 
 
+TOPOLOGY_METRICS = [
+    "neighbor_jaccard_distance",
+    "coordination_change_mean",
+    "coordination_change_max",
+    "rdf_l1_distance",
+]
+
+
+def topology_ready(records):
+    required = ["neighbor_jaccard_distance", "coordination_change_max", "rdf_l1_distance"]
+    return all(column in records.columns for column in required)
+
+
+def save_topology_summary(records, output_dir):
+    rows = []
+
+    for (calculator, attack_label), group in records.groupby(["calculator", "attack_label"]):
+        clean = group.replace([np.inf, -np.inf], np.nan)
+
+        rows.append({
+            "calculator": calculator,
+            "attack_label": attack_label,
+            "n_runs": int(len(clean)),
+            "mean_neighbor_jaccard_distance": float(clean["neighbor_jaccard_distance"].mean()),
+            "median_neighbor_jaccard_distance": float(clean["neighbor_jaccard_distance"].median()),
+            "max_neighbor_jaccard_distance": float(clean["neighbor_jaccard_distance"].max()),
+            "mean_coordination_change_max": float(clean["coordination_change_max"].mean()),
+            "max_coordination_change_max": float(clean["coordination_change_max"].max()),
+            "mean_rdf_l1_distance": float(clean["rdf_l1_distance"].mean()),
+            "max_rdf_l1_distance": float(clean["rdf_l1_distance"].max()),
+        })
+
+    pd.DataFrame(rows).to_csv(output_dir / "topology_summary.csv", index=False)
+
+
+def topology_scatter(ax, data, x_col, y_col, xlabel, ylabel, title):
+    for calculator, color in CALCULATOR_COLORS.items():
+        subset = data[data["calculator"] == calculator].copy()
+        subset = subset[[x_col, y_col, "attack_label"]].replace([np.inf, -np.inf], np.nan).dropna()
+        if subset.empty:
+            continue
+
+        for attack_label, marker in [("FGSM", "o"), ("I-FGSM", "s"), ("PGD", "^")]:
+            attack_subset = subset[subset["attack_label"] == attack_label]
+            if attack_subset.empty:
+                continue
+
+            ax.scatter(
+                attack_subset[x_col],
+                attack_subset[y_col],
+                s=24,
+                alpha=0.72,
+                color=color,
+                marker=marker,
+                edgecolor="white",
+                linewidth=0.35,
+                label=f"{calculator.upper()} {attack_label}",
+            )
+
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.grid(True, alpha=0.35)
+
+
+def make_topology_vs_displacement(records, output_dir):
+    data = records[
+        records["neighbor_jaccard_distance"].notna()
+        & records["mean_displacement"].notna()
+    ].copy()
+
+    if data.empty:
+        return
+
+    fig, ax = plt.subplots(figsize=(7.2, 4.8))
+    topology_scatter(
+        ax=ax,
+        data=data,
+        x_col="mean_displacement",
+        y_col="neighbor_jaccard_distance",
+        xlabel=r"Mean displacement ($\AA$)",
+        ylabel="Neighbor-graph Jaccard distance",
+        title="Topology change vs displacement",
+    )
+    ax.legend(frameon=False, ncol=2, fontsize=7)
+    fig.tight_layout()
+    fig.savefig(output_dir / "figure_topology_vs_displacement.png", dpi=300)
+    plt.close(fig)
+
+
+def make_topology_by_attack_type(records, output_dir):
+    data = records[
+        records["neighbor_jaccard_distance"].notna()
+        & records["attack_label"].notna()
+    ].copy()
+
+    if data.empty:
+        return
+
+    attacks = [attack for attack in ATTACK_ORDER if attack in set(data["attack_label"])]
+    positions = np.arange(len(attacks))
+
+    fig, ax = plt.subplots(figsize=(7.2, 4.8))
+
+    for offset, calculator in [(-0.18, "mace"), (0.18, "uma")]:
+        calc_data = data[data["calculator"] == calculator]
+        values = [
+            calc_data[calc_data["attack_label"] == attack]["neighbor_jaccard_distance"].dropna().to_numpy()
+            for attack in attacks
+        ]
+
+        nonempty_positions = []
+        nonempty_values = []
+        for position, value in zip(positions + offset, values):
+            if len(value):
+                nonempty_positions.append(position)
+                nonempty_values.append(value)
+
+        if nonempty_values:
+            box = ax.boxplot(
+                nonempty_values,
+                positions=nonempty_positions,
+                widths=0.28,
+                patch_artist=True,
+                showfliers=False,
+            )
+            for patch in box["boxes"]:
+                patch.set_facecolor(CALCULATOR_COLORS[calculator])
+                patch.set_alpha(0.35)
+                patch.set_edgecolor(CALCULATOR_COLORS[calculator])
+            for median in box["medians"]:
+                median.set_color(CALCULATOR_COLORS[calculator])
+
+    ax.set_xticks(positions)
+    ax.set_xticklabels(attacks)
+    ax.set_xlabel("Attack type")
+    ax.set_ylabel("Neighbor-graph Jaccard distance")
+    ax.set_title("Topology change by attack type")
+    ax.grid(True, axis="y", alpha=0.35)
+
+    handles = [
+        plt.Line2D([0], [0], color=CALCULATOR_COLORS["mace"], lw=7, alpha=0.35, label="MACE"),
+        plt.Line2D([0], [0], color=CALCULATOR_COLORS["uma"], lw=7, alpha=0.35, label="UMA"),
+    ]
+    ax.legend(handles=handles, frameon=False)
+
+    fig.tight_layout()
+    fig.savefig(output_dir / "figure_topology_by_attack_type.png", dpi=300)
+    plt.close(fig)
+
+
+def make_rdf_vs_coordination_change(records, output_dir):
+    data = records[
+        records["rdf_l1_distance"].notna()
+        & records["coordination_change_max"].notna()
+    ].copy()
+
+    if data.empty:
+        return
+
+    fig, ax = plt.subplots(figsize=(7.2, 4.8))
+    topology_scatter(
+        ax=ax,
+        data=data,
+        x_col="rdf_l1_distance",
+        y_col="coordination_change_max",
+        xlabel="RDF L1 distance",
+        ylabel="Max coordination change",
+        title="RDF change vs coordination change",
+    )
+    ax.legend(frameon=False, ncol=2, fontsize=7)
+    fig.tight_layout()
+    fig.savefig(output_dir / "figure_rdf_vs_coordination_change.png", dpi=300)
+    plt.close(fig)
+
+
+def make_topology_figures(records, output_dir):
+    if records.empty or not topology_ready(records):
+        return
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    clean = records.copy()
+    for column in TOPOLOGY_METRICS + ["mean_displacement"]:
+        if column in clean.columns:
+            clean[column] = pd.to_numeric(clean[column], errors="coerce")
+
+    save_topology_summary(clean, output_dir)
+    make_topology_vs_displacement(clean, output_dir)
+    make_topology_by_attack_type(clean, output_dir)
+    make_rdf_vs_coordination_change(clean, output_dir)
+
+    for material_slug, material_records in clean.groupby("material_slug"):
+        material_output_dir = output_dir / str(material_slug)
+        material_output_dir.mkdir(parents=True, exist_ok=True)
+        save_topology_summary(material_records, material_output_dir)
+        make_topology_vs_displacement(material_records, material_output_dir)
+        make_topology_by_attack_type(material_records, material_output_dir)
+        make_rdf_vs_coordination_change(material_records, material_output_dir)
+
+
 def main():
     apply_plot_style()
 
@@ -2123,6 +2411,8 @@ def main():
         raise SystemExit("No successful runs found in outputs_mace or outputs_uma.")
 
     records.to_csv(args.output_dir / "combined_dataset.csv", index=False)
+
+    make_topology_figures(records, args.output_dir / "topology")
 
     epsilon_records = records[
         ~records["run_id"].str.contains("_steps", regex=False)
@@ -2623,14 +2913,6 @@ def main():
                 ],
             )
 
-            make_parametric_figure_set(
-                records=material_epsilon_records,
-                output_dir=material_output_dir,
-                suffix="epsilon",
-                attacks_to_plot=ATTACK_ORDER,
-                bubble_label="epsilon",
-            )
-
         if not material_n_step_records.empty:
             make_convergence_by_steps_figure(
                 material_n_step_records,
@@ -2794,26 +3076,20 @@ def main():
                 ],
             )
 
-            make_parametric_figure_set(
-                records=material_n_step_records,
-                output_dir=material_output_dir,
-                suffix="n_steps",
-                attacks_to_plot=STEP_ATTACK_ORDER,
-                bubble_label="n_steps",
-            )
-
     missing_rows.extend(force_missing)
     missing_rows.extend(force_whisker_span_missing)
     missing_rows.extend(force_by_epsilon_missing)
     missing_rows.extend(displacement_missing)
     missing_rows.extend(displacement_whisker_span_missing)
     missing_rows.extend(displacement_by_epsilon_missing)
+    missing_rows.extend(parametric_by_epsilon_missing)
     missing_rows.extend(force_by_steps_missing)
     missing_rows.extend(force_by_steps_whisker_span_missing)
     missing_rows.extend(force_by_steps_ci_missing)
     missing_rows.extend(displacement_by_steps_missing)
     missing_rows.extend(displacement_by_steps_whisker_span_missing)
     missing_rows.extend(displacement_by_steps_ci_missing)
+    missing_rows.extend(parametric_by_steps_missing)
 
     pd.DataFrame(missing_rows).to_csv(
         args.output_dir / "missing_data_report.csv",

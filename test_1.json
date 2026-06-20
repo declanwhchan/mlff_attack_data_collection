@@ -1,9 +1,17 @@
 {
   "device": "cpu",
-  "epsilons": [0.001],
-  "relax_fmax": 0.01,
-  "relax_max_steps": 10,
+  "epsilons": [0.0001],
+  "relax_fmax": 0.05,
+  "relax_max_steps": 1,
   "relax_optimizer": "LBFGS",
+  "contour_pre_relax_fmax": 0.05,
+  "contour_pre_relax_max_steps": 1,
+  "contour_betas": [0.0],
+  "contour_steps": 2,
+  "contour_maxstep": 0.005,
+  "contour_angle_limit": 20,
+  "contour_seed": 12345,
+  "contour_energy_target": null,
   "models": [
     {
       "calculator": "mace",
@@ -25,6 +33,14 @@
       "n_steps": 1,
       "alpha": null,
       "clip": null
+    },
+    {
+      "name": "pgd",
+      "attack_type": "pgd",
+      "n_steps": 1,
+      "alpha_ratio": 0.1,
+      "clip": null
     }
-  ]
+  ],
+  "n_step_sweeps": []
 }

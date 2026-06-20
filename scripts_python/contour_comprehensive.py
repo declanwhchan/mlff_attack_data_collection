@@ -3,6 +3,7 @@ import argparse
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator, ScalarFormatter
 import numpy as np
 import pandas as pd
 
@@ -66,6 +67,18 @@ def apply_style():
         "legend.frameon": False,
         "savefig.dpi": 600,
     })
+
+
+def style_numeric_axis(ax, xbins=5, ybins=5):
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=xbins))
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=ybins))
+
+    for axis in [ax.xaxis, ax.yaxis]:
+        formatter = ScalarFormatter(useMathText=True)
+        formatter.set_powerlimits((-3, 3))
+        axis.set_major_formatter(formatter)
+
+    ax.tick_params(axis="both", labelsize=8, pad=2)
 
 
 def read_csv(path):
@@ -333,6 +346,7 @@ def draw_attack_panels(fig, axes, data, x_col, x_label, calculator, contour_rows
             ax_force.set_xscale("log")
 
         for ax in [ax_disp, ax_force]:
+            style_numeric_axis(ax)
             ax.grid(True, axis="y")
             ax.margins(x=0.04)
             if subset.empty:
@@ -598,6 +612,7 @@ def plot_one_global_panel(ax, data, x_col, y_col, xlabel, ylabel, title):
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     ax.set_title(title)
+    style_numeric_axis(ax)
     ax.grid(True, alpha=0.35)
 
 
@@ -715,6 +730,7 @@ def plot_relaxation_attack_grid_panel(
     ax.set_title(attack_label)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel if row_label else "")
+    style_numeric_axis(ax)
     ax.grid(True, alpha=0.35)
 
 

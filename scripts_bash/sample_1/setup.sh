@@ -2,8 +2,8 @@
 #SBATCH --account=rrg-j3goals
 #SBATCH --time=00:30:00
 #SBATCH --mem=8G
-#SBATCH --cpus-per-task=1
-#SBATCH --output=setup-1-%j.out
+#SBATCH --cpus-per-task=2
+#SBATCH --output=sample-1-setup-%j.out
 
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
@@ -32,4 +32,4 @@ python -u scripts_python/run_material_mpids.py \
 
 deactivate
 
-echo "Setup test complete."
+echo "Setup smoke test complete."

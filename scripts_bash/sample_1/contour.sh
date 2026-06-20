@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH --account=rrg-j3goals
-#SBATCH --time=10:00:00
+#SBATCH --time=02:00:00
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=4
-#SBATCH --array=1-80%20
-#SBATCH --output=contour-%A_%a.out
+#SBATCH --array=1-4
+#SBATCH --output=sample-1-contour-%j.out
 
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
@@ -29,12 +29,12 @@ fi
 module load gcc/12.3 python/3.11 arrow
 
 if [ ! -f generated_material_tests.csv ]; then
-  echo "ERROR: generated_material_tests.csv missing. Run setup.sh first."
+  echo "ERROR: generated_material_tests.csv missing. Run scripts_bash/sample_1/setup.sh first."
   exit 1
 fi
 
 source ~/project/.venv-mace/bin/activate
-mapfile -t CONTOUR_JOBS < <(env -u SLURM_ARRAY_TASK_ID python -u scripts_python/contour.py --list-jobs)
+mapfile -t CONTOUR_JOBS < <(env -u SLURM_ARRAY_TASK_ID python -u scripts_python/contour.py --tests generated_material_tests.csv --config test_1.json --list-jobs)
 deactivate
 
 JOB_COUNT="${#CONTOUR_JOBS[@]}"
@@ -64,16 +64,9 @@ export MLFF_DTYPE
 JOB_LINE="${CONTOUR_JOBS[$JOB_INDEX]}"
 IFS=',' read -r JOB_NUMBER CALCULATOR MATERIAL_SLUG INPUT_PATH <<< "$JOB_LINE"
 
-if [ -z "${CALCULATOR:-}" ] || [ -z "${MATERIAL_SLUG:-}" ]; then
-  echo "ERROR: could not parse contour job line: $JOB_LINE"
-  exit 1
-fi
-
 echo "Selected dtype: $MLFF_DTYPE"
 echo "Selected contour material: $MATERIAL_SLUG"
 echo "Calculator: $CALCULATOR"
-echo "Input path: ${INPUT_PATH:-}"
-echo "CPU threads per task: $SLURM_CPUS_PER_TASK"
 
 if [ "$CALCULATOR" = "uma" ] && [ -z "${HF_TOKEN:-}" ] && [ -z "${HUGGINGFACE_HUB_TOKEN:-}" ]; then
   echo "ERROR: UMA requires HF_TOKEN in .env or HUGGINGFACE_HUB_TOKEN in the environment."
@@ -89,13 +82,13 @@ else
   exit 1
 fi
 
-which python
-
 python -u scripts_python/contour.py \
+  --tests generated_material_tests.csv \
+  --config test_1.json \
   --calculator "$CALCULATOR" \
   --material-slug "$MATERIAL_SLUG" \
   --dtype-str "$MLFF_DTYPE"
 
 deactivate
 
-echo "Finished $MLFF_DTYPE contour exploration for $CALCULATOR $MATERIAL_SLUG"
+echo "Finished $MLFF_DTYPE contour smoke test for $CALCULATOR $MATERIAL_SLUG"

@@ -53,7 +53,7 @@ chmod 600 .env
 
 # Workflow
 
-Scripts ending in `_1.sh` are the single-test versions of the same workflow, so you can run `setup_1.sh` and `main_1.sh` for a quick check before running the full collection. **Reminder to sync local changes to HPC:** Before running or submitting jobs on the HPC, in SFTP, push/sync all local changes from this computer so the HPC copy is up to date.
+Scripts in `scripts_bash/sample_1/` are the single-test versions of the same workflow, so you can run them for a quick check before running the full collection. **Reminder to sync local changes to HPC:** Before running or submitting jobs on the HPC, in SFTP, push/sync all local changes from this computer so the HPC copy is up to date.
 
 ## Data Collection Jobs
 
@@ -123,6 +123,6 @@ Login using SFTP:
 cd mlff_attack_data_collection
 get -r outputs_comprehensive
 get -r outputs_visuals
-get -r outputs_mace
-get -r outputs_uma
+get -r outputs_float32
+get -r outputs_float64
 ```
