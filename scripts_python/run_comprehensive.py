@@ -61,6 +61,7 @@ def apply_plot_style():
 
 def save_figure(fig, output_base):
     output_base = Path(output_base)
+    tighten_axes_for_publication(fig)
     fig.savefig(output_base.with_suffix(".png"), dpi=600, bbox_inches="tight")
 
 
@@ -68,13 +69,21 @@ def format_epsilon_label(value):
     return f"{float(value):g}"
 
 
-def style_epsilon_tick_labels(ax, rotate=False):
-    if rotate:
-        ax.tick_params(axis="x", labelrotation=35, pad=2)
-        for label in ax.get_xticklabels():
-            label.set_horizontalalignment("right")
-    else:
-        ax.tick_params(axis="x", labelrotation=0, pad=2)
+def sparse_tick_indices(count, max_labels=6):
+    if count <= max_labels:
+        return set(range(count))
+    return set(np.linspace(0, count - 1, max_labels, dtype=int).tolist())
+
+
+def style_epsilon_tick_labels(ax, rotate=False, max_labels=6):
+    labels = ax.get_xticklabels()
+    keep = sparse_tick_indices(len(labels), max_labels=max_labels)
+
+    for index, label in enumerate(labels):
+        label.set_visible(index in keep)
+        label.set_horizontalalignment("center")
+
+    ax.tick_params(axis="x", labelrotation=0, pad=2)
 
 
 def read_csv(path):
@@ -484,11 +493,6 @@ def add_panel_label(ax, label):
     )
 
 
-def label_axes(axes):
-    for index, ax in enumerate(np.asarray(axes).ravel()):
-        add_panel_label(ax, chr(ord("A") + index))
-
-
 def clean_numeric_array(values):
     values = pd.Series(values).replace([np.inf, -np.inf], np.nan).dropna()
     return values.to_numpy(dtype=float)
@@ -506,32 +510,41 @@ def variability_radius(values):
 PARAMETRIC_AXIS_PERCENTILE = 95
 
 
-def percentile_axis_limit(values, percentile=PARAMETRIC_AXIS_PERCENTILE, pad=0.12):
+def percentile_axis_limit(values, percentile=PARAMETRIC_AXIS_PERCENTILE, pad=0.16):
     values = pd.Series(values).replace([np.inf, -np.inf], np.nan).dropna()
-    values = values[values >= 0]
+    values = values[np.isfinite(values)]
 
     if values.empty:
         return None
 
     data = values.to_numpy(dtype=float)
+
+    if len(data) == 1:
+        center = float(data[0])
+        span = max(abs(center) * 0.20, 1e-9)
+        if center >= 0 and center - span < 0:
+            return 0.0, center + span
+        return center - span, center + span
+
+    lower = float(np.percentile(data, 2))
     upper = float(np.percentile(data, percentile))
-    lower = float(np.min(data))
 
-    if upper <= 0:
-        upper = float(np.max(data))
-
-    if upper <= 0:
+    if not np.isfinite(lower) or not np.isfinite(upper):
         return None
 
-    span = upper - lower
-    if span <= 0:
-        span = upper if upper > 0 else 1.0
+    if upper <= lower:
+        center = float(np.median(data))
+        span = max(abs(center) * 0.20, float(np.std(data)) * 2.0, 1e-9)
+        if center >= 0 and center - span < 0:
+            return 0.0, center + span
+        return center - span, center + span
 
-    low = max(0.0, lower - pad * span)
+    span = upper - lower
+    low = lower - pad * span
     high = upper + pad * span
 
-    if high <= low:
-        high = low + max(abs(low) * 0.1, 1e-12)
+    if np.nanmin(data) >= 0 and low < 0:
+        low = 0.0 if np.nanmin(data) < 0.08 * span else max(0.0, low)
 
     return low, high
 
@@ -568,6 +581,75 @@ def style_numeric_axis(ax, xbins=4, ybins=5):
         axis.set_major_formatter(formatter)
 
     ax.tick_params(axis="both", labelsize=8, pad=2)
+
+
+def _artist_values_for_axis(ax, axis_name):
+    values = []
+
+    for line in ax.lines:
+        raw = line.get_xdata(orig=False) if axis_name == "x" else line.get_ydata(orig=False)
+        try:
+            values.extend(np.asarray(raw, dtype=float).ravel().tolist())
+        except Exception:
+            pass
+
+    for collection in ax.collections:
+        try:
+            offsets = collection.get_offsets()
+            if len(offsets):
+                column = 0 if axis_name == "x" else 1
+                values.extend(np.asarray(offsets[:, column], dtype=float).ravel().tolist())
+        except Exception:
+            pass
+
+    cleaned = pd.Series(values).replace([np.inf, -np.inf], np.nan).dropna()
+    if cleaned.empty:
+        return np.array([], dtype=float)
+    return cleaned.to_numpy(dtype=float)
+
+
+def _tight_limit(values, pad=0.14, lower_percentile=5, upper_percentile=95):
+    values = clean_numeric_array(values)
+    if len(values) == 0:
+        return None
+
+    if np.allclose(values, values[0]):
+        center = float(values[0])
+        span = max(abs(center) * 0.20, 1e-9)
+        if center >= 0 and center - span < 0:
+            return 0.0, center + span
+        return center - span, center + span
+
+    low = float(np.percentile(values, lower_percentile))
+    high = float(np.percentile(values, upper_percentile))
+    span = high - low
+
+    if span <= 0 or not np.isfinite(span):
+        return None
+
+    low -= pad * span
+    high += pad * span
+
+    if np.nanmin(values) >= 0 and low < 0:
+        low = 0.0 if np.nanmin(values) < 0.08 * span else max(0.0, low)
+
+    return low, high
+
+
+def tighten_axes_for_publication(fig):
+    for ax in fig.axes:
+        if not ax.has_data():
+            continue
+
+        y_limits = _tight_limit(_artist_values_for_axis(ax, "y"))
+        if y_limits is not None:
+            ax.set_ylim(*y_limits)
+
+        xlabel = ax.get_xlabel().lower()
+        if "displacement" in xlabel or "rdf" in xlabel:
+            x_limits = _tight_limit(_artist_values_for_axis(ax, "x"))
+            if x_limits is not None:
+                ax.set_xlim(*x_limits)
 
 
 def metric_distribution(row, getter):
@@ -1378,79 +1460,6 @@ def make_distribution_figure(records, output_dir, figure_name, ylabel, rows):
     return all_missing
 
 
-def make_per_attack_figures(records, output_dir):
-    missing_rows = []
-
-    for attack in ATTACK_ORDER:
-        attack_dir = output_dir / ATTACK_FOLDER[attack]
-        attack_dir.mkdir(parents=True, exist_ok=True)
-
-        fig, ax = plt.subplots(figsize=(4.8, 3.2))
-        plot_convergence_panel(
-            ax,
-            records,
-            attack,
-            "after_relax_steps",
-            "after_relax_converged",
-        )
-        ax.set_title(f"{attack}: convergence after perturbation")
-        ax.legend(handles=model_legend_handles())
-        fig.tight_layout()
-        save_figure(fig, attack_dir / "convergence_steps_vs_epsilon")
-        plt.close(fig)
-
-        plots = [
-            (
-                "delta_force_after_perturb_before_relax",
-                r"$\Delta$ force (eV/$\AA$)",
-                lambda row: force_delta_values(row["run_dir"], "before_forces.csv", "perturbed_forces.csv"),
-                f"{attack}: force change before relaxation",
-            ),
-            (
-                "delta_force_after_perturb_after_relax",
-                r"$\Delta$ force (eV/$\AA$)",
-                lambda row: force_delta_values(row["run_dir"], "before_forces.csv", "after_forces.csv"),
-                f"{attack}: force change after relaxation",
-            ),
-            (
-                "displacement_after_perturb_before_relax",
-                r"Displacement ($\AA$)",
-                lambda row: displacement_values(row["run_dir"], "before_forces.csv", "perturbed_forces.csv"),
-                f"{attack}: displacement before relaxation",
-            ),
-            (
-                "displacement_after_perturb_after_relax",
-                r"Displacement ($\AA$)",
-                lambda row: displacement_values(row["run_dir"], "before_forces.csv", "after_forces.csv"),
-                f"{attack}: displacement after relaxation",
-            ),
-        ]
-
-        for filename, ylabel, getter, title in plots:
-            fig, ax = plt.subplots(figsize=(5.4, 3.5))
-            attack_missing = []
-            draw_grouped_boxplot(
-                ax=ax,
-                records=records,
-                attack=attack,
-                value_getter=getter,
-                ylabel=ylabel,
-                missing_rows=attack_missing,
-            )
-            ax.set_title(title)
-            fig.tight_layout()
-            save_figure(fig, attack_dir / filename)
-            plt.close(fig)
-            missing_rows.extend(attack_missing)
-
-        pd.DataFrame(missing_rows).to_csv(
-            attack_dir / "missing_data_report.csv",
-            index=False,
-        )
-
-    return missing_rows
-
-
 def collect_box_data_by_steps(records, attack, epsilon, value_getter, missing_rows):
     attack_records = records[
         (records["attack_label"] == attack)
@@ -2206,33 +2215,66 @@ def save_topology_summary(records, output_dir):
 
 
 def topology_scatter(ax, data, x_col, y_col, xlabel, ylabel, title):
+    plotted = False
+
     for calculator, color in CALCULATOR_COLORS.items():
         subset = data[data["calculator"] == calculator].copy()
         subset = subset[[x_col, y_col, "attack_label"]].replace([np.inf, -np.inf], np.nan).dropna()
         if subset.empty:
             continue
 
-        for attack_label, marker in [("FGSM", "o"), ("I-FGSM", "s"), ("PGD", "^")]:
-            attack_subset = subset[subset["attack_label"] == attack_label]
-            if attack_subset.empty:
-                continue
+        ax.scatter(
+            subset[x_col],
+            subset[y_col],
+            s=18,
+            alpha=0.28,
+            color=color,
+            edgecolor="none",
+            label=f"{calculator.upper()} runs",
+        )
+        plotted = True
 
-            ax.scatter(
-                attack_subset[x_col],
-                attack_subset[y_col],
-                s=24,
-                alpha=0.72,
-                color=color,
-                marker=marker,
-                edgecolor="white",
-                linewidth=0.35,
-                label=f"{calculator.upper()} {attack_label}",
-            )
+        if len(subset) >= 6 and subset[x_col].nunique() >= 3:
+            ordered = subset.sort_values(x_col)
+            bins = min(8, max(3, int(np.sqrt(len(ordered)))))
+            ordered["_bin"] = pd.qcut(ordered[x_col], q=bins, duplicates="drop")
+            trend = ordered.groupby("_bin", observed=True).agg(
+                x=(x_col, "median"),
+                y=(y_col, "median"),
+            ).dropna()
+
+            if len(trend) >= 2:
+                ax.plot(
+                    trend["x"],
+                    trend["y"],
+                    color=color,
+                    linewidth=2.0,
+                    marker="o",
+                    markersize=4,
+                    label=f"{calculator.upper()} median trend",
+                )
 
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     ax.set_title(title)
-    ax.grid(True, alpha=0.35)
+    ax.grid(True, alpha=0.28)
+
+    y_values = _artist_values_for_axis(ax, "y")
+    if len(y_values) and np.nanmax(np.abs(y_values)) <= 1e-12:
+        ax.set_ylim(-0.0005, 0.0005)
+        ax.text(
+            0.5,
+            0.88,
+            "No measurable topology change in this subset",
+            transform=ax.transAxes,
+            ha="center",
+            va="center",
+            fontsize=8,
+            color="#555555",
+        )
+
+    if not plotted:
+        ax.text(0.5, 0.5, "No topology data", transform=ax.transAxes, ha="center", va="center")
 
 
 def make_topology_vs_displacement(records, output_dir):
@@ -2244,7 +2286,7 @@ def make_topology_vs_displacement(records, output_dir):
     if data.empty:
         return
 
-    fig, ax = plt.subplots(figsize=(7.2, 4.8))
+    fig, ax = plt.subplots(figsize=(7.2, 4.4))
     topology_scatter(
         ax=ax,
         data=data,
@@ -2255,69 +2297,78 @@ def make_topology_vs_displacement(records, output_dir):
         title="Topology change vs displacement",
     )
     ax.legend(frameon=False, ncol=2, fontsize=7)
+    tighten_axes_for_publication(fig)
     fig.tight_layout()
-    fig.savefig(output_dir / "figure_topology_vs_displacement.png", dpi=300)
+    fig.savefig(output_dir / "figure_topology_vs_displacement.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
 
 
 def make_topology_by_attack_type(records, output_dir):
     data = records[
-        records["neighbor_jaccard_distance"].notna()
-        & records["attack_label"].notna()
+        records["attack_label"].notna()
+        & records["neighbor_jaccard_distance"].notna()
+        & records["coordination_change_max"].notna()
+        & records["rdf_l1_distance"].notna()
     ].copy()
 
     if data.empty:
         return
 
+    data["has_topology_change"] = (
+        (data["neighbor_jaccard_distance"].abs() > 1e-12)
+        | (data["coordination_change_max"].abs() > 1e-12)
+        | (data["rdf_l1_distance"].abs() > 1e-12)
+    )
+
     attacks = [attack for attack in ATTACK_ORDER if attack in set(data["attack_label"])]
     positions = np.arange(len(attacks))
 
-    fig, ax = plt.subplots(figsize=(7.2, 4.8))
+    fig, ax = plt.subplots(figsize=(7.2, 4.2))
+    width = 0.34
 
-    for offset, calculator in [(-0.18, "mace"), (0.18, "uma")]:
+    for offset, calculator in [(-width / 2, "mace"), (width / 2, "uma")]:
         calc_data = data[data["calculator"] == calculator]
-        values = [
-            calc_data[calc_data["attack_label"] == attack]["neighbor_jaccard_distance"].dropna().to_numpy()
-            for attack in attacks
-        ]
+        rates = []
 
-        nonempty_positions = []
-        nonempty_values = []
-        for position, value in zip(positions + offset, values):
-            if len(value):
-                nonempty_positions.append(position)
-                nonempty_values.append(value)
+        for attack in attacks:
+            group = calc_data[calc_data["attack_label"] == attack]
+            rates.append(np.nan if group.empty else 100.0 * float(group["has_topology_change"].mean()))
 
-        if nonempty_values:
-            box = ax.boxplot(
-                nonempty_values,
-                positions=nonempty_positions,
-                widths=0.28,
-                patch_artist=True,
-                showfliers=False,
-            )
-            for patch in box["boxes"]:
-                patch.set_facecolor(CALCULATOR_COLORS[calculator])
-                patch.set_alpha(0.35)
-                patch.set_edgecolor(CALCULATOR_COLORS[calculator])
-            for median in box["medians"]:
-                median.set_color(CALCULATOR_COLORS[calculator])
+        ax.bar(
+            positions + offset,
+            rates,
+            width=width,
+            color=CALCULATOR_COLORS[calculator],
+            alpha=0.78,
+            label=calculator.upper(),
+        )
 
     ax.set_xticks(positions)
     ax.set_xticklabels(attacks)
     ax.set_xlabel("Attack type")
-    ax.set_ylabel("Neighbor-graph Jaccard distance")
-    ax.set_title("Topology change by attack type")
-    ax.grid(True, axis="y", alpha=0.35)
+    ax.set_ylabel("Runs with topology change (%)")
+    ax.set_title("Topology-change rate by attack type")
+    ax.grid(True, axis="y", alpha=0.28)
+    ax.legend(frameon=False, ncol=2)
 
-    handles = [
-        plt.Line2D([0], [0], color=CALCULATOR_COLORS["mace"], lw=7, alpha=0.35, label="MACE"),
-        plt.Line2D([0], [0], color=CALCULATOR_COLORS["uma"], lw=7, alpha=0.35, label="UMA"),
-    ]
-    ax.legend(handles=handles, frameon=False)
+    if data["has_topology_change"].sum() == 0:
+        ax.set_ylim(0, 5)
+        ax.text(
+            0.5,
+            0.82,
+            "No neighbor, coordination, or RDF topology changes detected",
+            transform=ax.transAxes,
+            ha="center",
+            va="center",
+            fontsize=8,
+            color="#555555",
+        )
+    else:
+        max_rate = data.groupby(["calculator", "attack_label"])["has_topology_change"].mean().max() * 100.0
+        ax.set_ylim(0, min(100.0, max(5.0, max_rate * 1.25)))
 
     fig.tight_layout()
-    fig.savefig(output_dir / "figure_topology_by_attack_type.png", dpi=300)
+    fig.savefig(output_dir / "figure_topology_by_attack_type.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -2330,7 +2381,7 @@ def make_rdf_vs_coordination_change(records, output_dir):
     if data.empty:
         return
 
-    fig, ax = plt.subplots(figsize=(7.2, 4.8))
+    fig, ax = plt.subplots(figsize=(7.2, 4.4))
     topology_scatter(
         ax=ax,
         data=data,
@@ -2341,8 +2392,9 @@ def make_rdf_vs_coordination_change(records, output_dir):
         title="RDF change vs coordination change",
     )
     ax.legend(frameon=False, ncol=2, fontsize=7)
+    tighten_axes_for_publication(fig)
     fig.tight_layout()
-    fig.savefig(output_dir / "figure_rdf_vs_coordination_change.png", dpi=300)
+    fig.savefig(output_dir / "figure_rdf_vs_coordination_change.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -2913,6 +2965,14 @@ def main():
                 ],
             )
 
+            make_parametric_figure_set(
+                records=material_epsilon_records,
+                output_dir=material_output_dir,
+                suffix="epsilon",
+                attacks_to_plot=ATTACK_ORDER,
+                bubble_label="epsilon",
+            )
+
         if not material_n_step_records.empty:
             make_convergence_by_steps_figure(
                 material_n_step_records,
@@ -3074,6 +3134,14 @@ def main():
                         )),
                     ),
                 ],
+            )
+
+            make_parametric_figure_set(
+                records=material_n_step_records,
+                output_dir=material_output_dir,
+                suffix="n_steps",
+                attacks_to_plot=STEP_ATTACK_ORDER,
+                bubble_label="n_steps",
             )
 
     missing_rows.extend(force_missing)

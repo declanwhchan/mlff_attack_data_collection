@@ -81,6 +81,78 @@ def style_numeric_axis(ax, xbins=5, ybins=5):
     ax.tick_params(axis="both", labelsize=8, pad=2)
 
 
+def sparse_numeric_ticks(values, max_ticks=6):
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values) & (values > 0)]
+
+    if len(values) == 0:
+        return []
+
+    values = sorted(set(float(value) for value in values))
+
+    if len(values) <= max_ticks:
+        return values
+
+    indices = np.linspace(0, len(values) - 1, max_ticks, dtype=int)
+    return [values[index] for index in indices]
+
+
+def clean_axis_values(ax, axis_name):
+    values = []
+
+    for line in ax.lines:
+        raw = line.get_xdata(orig=False) if axis_name == "x" else line.get_ydata(orig=False)
+        try:
+            values.extend(np.asarray(raw, dtype=float).ravel().tolist())
+        except Exception:
+            pass
+
+    series = pd.Series(values).replace([np.inf, -np.inf], np.nan).dropna()
+    if series.empty:
+        return np.array([], dtype=float)
+    return series.to_numpy(dtype=float)
+
+
+def tight_axis_limits(values, pad=0.14):
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+
+    if len(values) == 0:
+        return None
+
+    if np.allclose(values, values[0]):
+        center = float(values[0])
+        span = max(abs(center) * 0.20, 1e-9)
+        if center >= 0 and center - span < 0:
+            return 0.0, center + span
+        return center - span, center + span
+
+    low = float(np.percentile(values, 0.5))
+    high = float(np.percentile(values, 99.5))
+    span = high - low
+
+    if span <= 0 or not np.isfinite(span):
+        return None
+
+    low -= pad * span
+    high += pad * span
+
+    if np.nanmin(values) >= 0 and low < 0:
+        low = 0.0 if np.nanmin(values) < 0.08 * span else max(0.0, low)
+
+    return low, high
+
+
+def tighten_contour_axes(fig):
+    for ax in fig.axes:
+        if not ax.has_data():
+            continue
+
+        limits = tight_axis_limits(clean_axis_values(ax, "y"))
+        if limits is not None:
+            ax.set_ylim(*limits)
+
+
 def read_csv(path):
     path = Path(path)
     if not path.exists():
@@ -342,8 +414,16 @@ def draw_attack_panels(fig, axes, data, x_col, x_label, calculator, contour_rows
         ax_force.set_xlabel(x_label)
 
         if x_col == "epsilon":
-            ax_disp.set_xscale("log")
-            ax_force.set_xscale("log")
+            epsilon_values = subset[x_col].to_numpy(dtype=float) if not subset.empty else data[x_col].to_numpy(dtype=float)
+            ticks = sparse_numeric_ticks(epsilon_values, max_ticks=6)
+
+            for axis in [ax_disp, ax_force]:
+                axis.set_xscale("log")
+                if ticks:
+                    axis.set_xticks(ticks)
+                    axis.set_xticklabels([f"{tick:g}" for tick in ticks])
+                    axis.set_xlim(min(ticks) / 1.18, max(ticks) * 1.18)
+                axis.tick_params(axis="x", labelrotation=0, pad=2)
 
         for ax in [ax_disp, ax_force]:
             style_numeric_axis(ax)
@@ -358,6 +438,8 @@ def draw_attack_panels(fig, axes, data, x_col, x_label, calculator, contour_rows
                     ha="center",
                     va="center",
                 )
+
+    tighten_contour_axes(fig)
 
     handles, labels = axes[0, 0].get_legend_handles_labels()
     if handles:
