@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --account=rrg-j3goals
-#SBATCH --time=10:00:00
+#SBATCH --time=48:00:00
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=4
 #SBATCH --array=1-80%20
