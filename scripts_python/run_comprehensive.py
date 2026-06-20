@@ -69,6 +69,39 @@ def format_epsilon_label(value):
     return f"{float(value):g}"
 
 
+def positive_finite_values(values):
+    values = np.asarray(values, dtype=float)
+    return values[np.isfinite(values) & (values > 0)]
+
+
+def decade_ticks(values):
+    values = positive_finite_values(values)
+    if len(values) == 0:
+        return []
+
+    min_power = int(np.floor(np.log10(np.min(values))))
+    max_power = int(np.ceil(np.log10(np.max(values))))
+
+    return [10.0 ** power for power in range(min_power, max_power + 1)]
+
+
+def epsilon_plot_position(epsilon):
+    return float(epsilon)
+
+
+def apply_epsilon_axis(ax, epsilons):
+    ticks = decade_ticks(epsilons)
+    ax.set_xscale("log")
+
+    if ticks:
+        ax.set_xticks(ticks)
+        ax.set_xticklabels([format_epsilon_label(tick) for tick in ticks])
+        ax.set_xlim(ticks[0] / 1.18, ticks[-1] * 1.18)
+
+    ax.tick_params(axis="x", labelrotation=0, pad=2)
+    ax.set_xlabel(r"$\epsilon$ ($\AA$)")
+
+
 def sparse_tick_indices(count, max_labels=6):
     if count <= max_labels:
         return set(range(count))
@@ -571,6 +604,59 @@ def minimum_visible_radius(limits):
     return 0.004 * span
 
 
+def limits_from_bubble_extents(extents, pad=0.12, nonnegative=True):
+    if not extents:
+        return None, None
+
+    xmins = np.asarray([item[0] for item in extents], dtype=float)
+    xmaxs = np.asarray([item[1] for item in extents], dtype=float)
+    ymins = np.asarray([item[2] for item in extents], dtype=float)
+    ymaxs = np.asarray([item[3] for item in extents], dtype=float)
+
+    finite = (
+        np.isfinite(xmins)
+        & np.isfinite(xmaxs)
+        & np.isfinite(ymins)
+        & np.isfinite(ymaxs)
+    )
+    if not np.any(finite):
+        return None, None
+
+    xmin = float(np.min(xmins[finite]))
+    xmax = float(np.max(xmaxs[finite]))
+    ymin = float(np.min(ymins[finite]))
+    ymax = float(np.max(ymaxs[finite]))
+
+    xspan = xmax - xmin
+    yspan = ymax - ymin
+
+    if xspan <= 0 or not np.isfinite(xspan):
+        xspan = max(abs(xmax) * 0.20, 1e-9)
+        xmin -= 0.5 * xspan
+        xmax += 0.5 * xspan
+
+    if yspan <= 0 or not np.isfinite(yspan):
+        yspan = max(abs(ymax) * 0.20, 1e-9)
+        ymin -= 0.5 * yspan
+        ymax += 0.5 * yspan
+
+    xpad = max(pad * (xmax - xmin), 1e-9)
+    ypad = max(pad * (ymax - ymin), 1e-9)
+
+    xmin -= xpad
+    xmax += xpad
+    ymin -= ypad
+    ymax += ypad
+
+    if nonnegative:
+        if xmin < 0 and np.min(xmins[finite]) >= 0:
+            xmin = 0.0
+        if ymin < 0 and np.min(ymins[finite]) >= 0:
+            ymin = 0.0
+
+    return (xmin, xmax), (ymin, ymax)
+
+
 def style_numeric_axis(ax, xbins=4, ybins=5):
     ax.xaxis.set_major_locator(MaxNLocator(nbins=xbins, prune=None))
     ax.yaxis.set_major_locator(MaxNLocator(nbins=ybins, prune=None))
@@ -581,6 +667,19 @@ def style_numeric_axis(ax, xbins=4, ybins=5):
         axis.set_major_formatter(formatter)
 
     ax.tick_params(axis="both", labelsize=8, pad=2)
+
+
+def apply_displacement_symlog_axis(ax, linthresh=0.05):
+    xlabel = ax.get_xlabel().lower()
+    if "displacement" not in xlabel:
+        return
+
+    ax.set_xscale("symlog", linthresh=linthresh)
+
+    ticks = [0, 0.01, 0.1, 1, 10]
+    ax.set_xticks(ticks)
+    ax.set_xticklabels(["0", "0.01", "0.1", "1", "10"])
+    ax.tick_params(axis="x", labelrotation=0, pad=2)
 
 
 def _artist_values_for_axis(ax, axis_name):
@@ -639,6 +738,9 @@ def _tight_limit(values, pad=0.14, lower_percentile=5, upper_percentile=95):
 def tighten_axes_for_publication(fig):
     for ax in fig.axes:
         if not ax.has_data():
+            continue
+
+        if getattr(ax, "_preserve_parametric_limits", False):
             continue
 
         y_limits = _tight_limit(_artist_values_for_axis(ax, "y"))
@@ -737,6 +839,7 @@ def draw_parametric_panel(
     y_limits=None,
 ):
     subset = data[data["attack_label"] == attack].copy()
+    ax._preserve_parametric_limits = True
 
     if not subset.empty:
         panel_x_limits, panel_y_limits = parametric_axis_limits(subset)
@@ -765,6 +868,8 @@ def draw_parametric_panel(
     x_span = None if x_limits is None else float(x_limits[1] - x_limits[0])
     y_span = None if y_limits is None else float(y_limits[1] - y_limits[0])
 
+    bubble_extents = []
+
     for calculator, color in CALCULATOR_COLORS.items():
         calc_data = subset[subset["calculator"] == calculator].copy()
         if calc_data.empty:
@@ -788,6 +893,9 @@ def draw_parametric_panel(
             x_center = float(np.median(x_values))
             y_center = float(np.median(y_values))
 
+            x_radius_for_extent = max(min_x_radius, 1e-9)
+            y_radius_for_extent = max(min_y_radius, 1e-9)
+
             if len(group) >= 3:
                 x_radius = max(variability_radius(x_values), min_x_radius)
                 y_radius = max(variability_radius(y_values), min_y_radius)
@@ -796,6 +904,9 @@ def draw_parametric_panel(
                     x_radius = min(x_radius, 0.055 * x_span)
                 if y_span is not None and y_span > 0:
                     y_radius = min(y_radius, 0.055 * y_span)
+
+                x_radius_for_extent = max(x_radius, x_radius_for_extent)
+                y_radius_for_extent = max(y_radius, y_radius_for_extent)
 
                 ellipse = Ellipse(
                     xy=(x_center, y_center),
@@ -810,6 +921,13 @@ def draw_parametric_panel(
                     zorder=1,
                 )
                 ax.add_patch(ellipse)
+
+            bubble_extents.append((
+                x_center - x_radius_for_extent,
+                x_center + x_radius_for_extent,
+                y_center - y_radius_for_extent,
+                y_center + y_radius_for_extent,
+            ))
 
             ax.scatter(
                 [x_center],
@@ -829,12 +947,24 @@ def draw_parametric_panel(
     if show_ylabel:
         ax.set_ylabel(y_label)
 
-    if x_limits is not None:
+    fitted_x_limits, fitted_y_limits = limits_from_bubble_extents(
+        bubble_extents,
+        pad=0.12,
+        nonnegative=True,
+    )
+
+    if fitted_x_limits is not None:
+        ax.set_xlim(*fitted_x_limits)
+    elif x_limits is not None:
         ax.set_xlim(*x_limits)
-    if y_limits is not None:
+
+    if fitted_y_limits is not None:
+        ax.set_ylim(*fitted_y_limits)
+    elif y_limits is not None:
         ax.set_ylim(*y_limits)
 
     style_numeric_axis(ax)
+    apply_displacement_symlog_axis(ax, linthresh=0.05)
     ax.grid(True, alpha=0.35)
     ax.margins(x=0.03, y=0.05)
 
@@ -1069,7 +1199,7 @@ def collect_box_data(records, attack, value_getter, missing_rows):
 
     rng = np.random.default_rng(12345)
 
-    for i, epsilon in enumerate(epsilons, start=1):
+    for epsilon in epsilons:
         for calculator in ["mace", "uma"]:
             rowset = attack_records[
                 (attack_records["epsilon"] == epsilon)
@@ -1091,13 +1221,13 @@ def collect_box_data(records, attack, value_getter, missing_rows):
                     box_values.extend(row_values.tolist())
 
             if box_values:
-                position = i + MODEL_OFFSETS[calculator]
+                position = epsilon_plot_position(epsilon) * (10 ** MODEL_OFFSETS[calculator] / 10)
                 positions.append(position)
                 values.append(box_values)
                 colors.append(CALCULATOR_COLORS[calculator])
 
-                jitter = rng.normal(loc=0.0, scale=0.010, size=len(box_values))
-                point_x.extend((position + jitter).tolist())
+                jitter = 10 ** rng.normal(loc=0.0, scale=0.004, size=len(box_values))
+                point_x.extend((position * jitter).tolist())
                 point_y.extend(box_values)
 
     return epsilons, positions, values, colors, point_x, point_y
@@ -1144,11 +1274,7 @@ def draw_grouped_boxplot(ax, records, attack, value_getter, ylabel, missing_rows
         patch.set_edgecolor(color)
         patch.set_linewidth(1.2)
 
-    tick_positions = list(range(1, len(epsilons) + 1))
-    ax.set_xticks(tick_positions)
-    ax.set_xticklabels([format_epsilon_label(epsilon) for epsilon in epsilons])
-    style_epsilon_tick_labels(ax, rotate=len(epsilons) >= 6)
-    ax.set_xlabel(r"$\epsilon$ ($\AA$)")
+    apply_epsilon_axis(ax, epsilons)
     ax.set_ylabel(ylabel)
     ax.grid(True, axis="y")
     ax.grid(False, axis="x")
@@ -1165,7 +1291,6 @@ def plot_convergence_panel(ax, records, attack, step_col, conv_col):
         return False
 
     epsilons = sorted(attack_records["epsilon"].dropna().unique())
-    epsilon_positions = {epsilon: index + 1 for index, epsilon in enumerate(epsilons)}
 
     for calculator, color in CALCULATOR_COLORS.items():
         data = attack_records[
@@ -1177,10 +1302,9 @@ def plot_convergence_panel(ax, records, attack, step_col, conv_col):
             continue
 
         grouped = data.groupby("epsilon", as_index=False)[step_col].mean()
-        grouped["epsilon_position"] = grouped["epsilon"].map(epsilon_positions)
 
         ax.plot(
-            grouped["epsilon_position"],
+            grouped["epsilon"],
             grouped[step_col],
             marker="o",
             markersize=4,
@@ -1189,25 +1313,7 @@ def plot_convergence_panel(ax, records, attack, step_col, conv_col):
             label=calculator.upper(),
         )
 
-        not_converged = data[data[conv_col] == False].copy()
-        if not not_converged.empty:
-            not_converged["epsilon_position"] = not_converged["epsilon"].map(epsilon_positions)
-
-            ax.scatter(
-                not_converged["epsilon_position"],
-                not_converged[step_col],
-                s=45,
-                facecolors="none",
-                edgecolors=color,
-                linewidths=1.4,
-                zorder=3,
-            )
-
-    tick_positions = list(range(1, len(epsilons) + 1))
-    ax.set_xticks(tick_positions)
-    ax.set_xticklabels([format_epsilon_label(epsilon) for epsilon in epsilons])
-    style_epsilon_tick_labels(ax, rotate=len(epsilons) >= 6)
-    ax.set_xlabel(r"$\epsilon$ ($\AA$)")
+    apply_epsilon_axis(ax, epsilons)
     ax.set_ylabel("Relaxation steps")
     ax.grid(True, axis="y")
     ax.grid(False, axis="x")
@@ -1310,7 +1416,7 @@ def draw_grouped_ci(ax, records, attack, value_getter, ylabel, missing_rows):
             key=lambda name: abs(offset - MODEL_OFFSETS[name]),
         )
 
-        x_value = round(position - MODEL_OFFSETS[calculator])
+        x_value = position
         series[calculator]["x"].append(x_value)
         series[calculator]["median"].append(median)
         series[calculator]["lower"].append(lower)
@@ -1345,11 +1451,7 @@ def draw_grouped_ci(ax, records, attack, value_getter, ylabel, missing_rows):
             label=calculator.upper(),
         )
 
-    tick_positions = list(range(1, len(epsilons) + 1))
-    ax.set_xticks(tick_positions)
-    ax.set_xticklabels([format_epsilon_label(epsilon) for epsilon in epsilons])
-    style_epsilon_tick_labels(ax, rotate=len(epsilons) >= 6)
-    ax.set_xlabel(r"$\epsilon$ ($\AA$)")
+    apply_epsilon_axis(ax, epsilons)
     ax.set_ylabel(ylabel)
     ax.grid(True, axis="y")
     ax.grid(False, axis="x")
@@ -1623,7 +1725,7 @@ def collect_whisker_span_data(records, attack, value_getter, missing_rows):
             span = tukey_whisker_span(values)
             if span is not None:
                 points.append({
-                    "x": i,
+                    "x": epsilon_plot_position(epsilon) * (10 ** MODEL_OFFSETS[calculator] / 10),
                     "y": span,
                     "calculator": calculator,
                 })
@@ -1664,11 +1766,7 @@ def draw_whisker_span(ax, records, attack, value_getter, ylabel, missing_rows):
             zorder=3,
         )
 
-    tick_positions = list(range(1, len(epsilons) + 1))
-    ax.set_xticks(tick_positions)
-    ax.set_xticklabels([format_epsilon_label(epsilon) for epsilon in epsilons])
-    style_epsilon_tick_labels(ax, rotate=len(epsilons) >= 6)
-    ax.set_xlabel(r"$\epsilon$ ($\AA$)")
+    apply_epsilon_axis(ax, epsilons)
     ax.set_ylabel(ylabel)
     ax.grid(True, axis="y")
     ax.grid(False, axis="x")
@@ -1915,20 +2013,6 @@ def plot_convergence_panel_by_steps(ax, records, attack, epsilon, step_col, conv
             color=color,
             label=calculator.upper(),
         )
-
-        not_converged = data[data[conv_col] == False].copy()
-        if not not_converged.empty:
-            not_converged["step_position"] = not_converged["n_steps"].map(step_positions)
-
-            ax.scatter(
-                not_converged["step_position"],
-                not_converged[step_col],
-                s=45,
-                facecolors="none",
-                edgecolors=color,
-                linewidths=1.4,
-                zorder=3,
-            )
 
     tick_positions = list(range(1, len(steps) + 1))
     ax.set_xticks(tick_positions)

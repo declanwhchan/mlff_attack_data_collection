@@ -97,6 +97,22 @@ def sparse_numeric_ticks(values, max_ticks=6):
     return [values[index] for index in indices]
 
 
+def positive_finite_values(values):
+    values = np.asarray(values, dtype=float)
+    return values[np.isfinite(values) & (values > 0)]
+
+
+def decade_ticks(values):
+    values = positive_finite_values(values)
+    if len(values) == 0:
+        return []
+
+    min_power = int(np.floor(np.log10(np.min(values))))
+    max_power = int(np.ceil(np.log10(np.max(values))))
+
+    return [10.0 ** power for power in range(min_power, max_power + 1)]
+
+
 def clean_axis_values(ax, axis_name):
     values = []
 
@@ -414,15 +430,15 @@ def draw_attack_panels(fig, axes, data, x_col, x_label, calculator, contour_rows
         ax_force.set_xlabel(x_label)
 
         if x_col == "epsilon":
-            epsilon_values = subset[x_col].to_numpy(dtype=float) if not subset.empty else data[x_col].to_numpy(dtype=float)
-            ticks = sparse_numeric_ticks(epsilon_values, max_ticks=6)
+            epsilon_values = data[x_col].to_numpy(dtype=float)
+            ticks = decade_ticks(epsilon_values)
 
             for axis in [ax_disp, ax_force]:
                 axis.set_xscale("log")
                 if ticks:
                     axis.set_xticks(ticks)
                     axis.set_xticklabels([f"{tick:g}" for tick in ticks])
-                    axis.set_xlim(min(ticks) / 1.18, max(ticks) * 1.18)
+                    axis.set_xlim(ticks[0] / 1.18, ticks[-1] * 1.18)
                 axis.tick_params(axis="x", labelrotation=0, pad=2)
 
         for ax in [ax_disp, ax_force]:
