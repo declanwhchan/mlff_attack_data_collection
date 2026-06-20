@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --account=rrg-j3goals
-#SBATCH --time=01:00:00
+#SBATCH --time=05:00:00
 #SBATCH --mem=16G
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=16
 #SBATCH --output=plot-%j.out
 
 set -euo pipefail
