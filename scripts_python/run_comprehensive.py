@@ -351,6 +351,16 @@ def load_summary(summary_path, base_dir, calculator):
             "mean_displacement": as_float(row.get("mean_displacement")),
             "max_displacement": as_float(row.get("max_displacement")),
             "final_energy": as_float(row.get("final_energy")),
+            "topology_edge_changes_csv": clean_value(row.get("topology_edge_changes_csv")),
+            "neighbor_edges_before": as_float(row.get("neighbor_edges_before")),
+            "neighbor_edges_after": as_float(row.get("neighbor_edges_after")),
+            "neighbor_edges_added": as_float(row.get("neighbor_edges_added")),
+            "neighbor_edges_removed": as_float(row.get("neighbor_edges_removed")),
+            "neighbor_edge_change_count": as_float(row.get("neighbor_edge_change_count")),
+            "neighbor_jaccard_distance": as_float(row.get("neighbor_jaccard_distance")),
+            "coordination_change_mean": as_float(row.get("coordination_change_mean")),
+            "coordination_change_max": as_float(row.get("coordination_change_max")),
+            "rdf_l1_distance": as_float(row.get("rdf_l1_distance")),
         })
 
     return records, missing
@@ -2160,6 +2170,208 @@ def make_distribution_by_steps_figure(records, output_dir, figure_name, ylabel, 
     return all_missing
 
 
+TOPOLOGY_METRICS = [
+    "neighbor_jaccard_distance",
+    "coordination_change_mean",
+    "coordination_change_max",
+    "rdf_l1_distance",
+]
+
+
+def topology_ready(records):
+    required = ["neighbor_jaccard_distance", "coordination_change_max", "rdf_l1_distance"]
+    return all(column in records.columns for column in required)
+
+
+def save_topology_summary(records, output_dir):
+    rows = []
+
+    for (calculator, attack_label), group in records.groupby(["calculator", "attack_label"]):
+        clean = group.replace([np.inf, -np.inf], np.nan)
+
+        rows.append({
+            "calculator": calculator,
+            "attack_label": attack_label,
+            "n_runs": int(len(clean)),
+            "mean_neighbor_jaccard_distance": float(clean["neighbor_jaccard_distance"].mean()),
+            "median_neighbor_jaccard_distance": float(clean["neighbor_jaccard_distance"].median()),
+            "max_neighbor_jaccard_distance": float(clean["neighbor_jaccard_distance"].max()),
+            "mean_coordination_change_max": float(clean["coordination_change_max"].mean()),
+            "max_coordination_change_max": float(clean["coordination_change_max"].max()),
+            "mean_rdf_l1_distance": float(clean["rdf_l1_distance"].mean()),
+            "max_rdf_l1_distance": float(clean["rdf_l1_distance"].max()),
+        })
+
+    pd.DataFrame(rows).to_csv(output_dir / "topology_summary.csv", index=False)
+
+
+def topology_scatter(ax, data, x_col, y_col, xlabel, ylabel, title):
+    for calculator, color in CALCULATOR_COLORS.items():
+        subset = data[data["calculator"] == calculator].copy()
+        subset = subset[[x_col, y_col, "attack_label"]].replace([np.inf, -np.inf], np.nan).dropna()
+        if subset.empty:
+            continue
+
+        for attack_label, marker in [("FGSM", "o"), ("I-FGSM", "s"), ("PGD", "^")]:
+            attack_subset = subset[subset["attack_label"] == attack_label]
+            if attack_subset.empty:
+                continue
+
+            ax.scatter(
+                attack_subset[x_col],
+                attack_subset[y_col],
+                s=24,
+                alpha=0.72,
+                color=color,
+                marker=marker,
+                edgecolor="white",
+                linewidth=0.35,
+                label=f"{calculator.upper()} {attack_label}",
+            )
+
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.grid(True, alpha=0.35)
+
+
+def make_topology_vs_displacement(records, output_dir):
+    data = records[
+        records["neighbor_jaccard_distance"].notna()
+        & records["mean_displacement"].notna()
+    ].copy()
+
+    if data.empty:
+        return
+
+    fig, ax = plt.subplots(figsize=(7.2, 4.8))
+    topology_scatter(
+        ax=ax,
+        data=data,
+        x_col="mean_displacement",
+        y_col="neighbor_jaccard_distance",
+        xlabel=r"Mean displacement ($\AA$)",
+        ylabel="Neighbor-graph Jaccard distance",
+        title="Topology change vs displacement",
+    )
+    ax.legend(frameon=False, ncol=2, fontsize=7)
+    fig.tight_layout()
+    fig.savefig(output_dir / "figure_topology_vs_displacement.png", dpi=300)
+    plt.close(fig)
+
+
+def make_topology_by_attack_type(records, output_dir):
+    data = records[
+        records["neighbor_jaccard_distance"].notna()
+        & records["attack_label"].notna()
+    ].copy()
+
+    if data.empty:
+        return
+
+    attacks = [attack for attack in ATTACK_ORDER if attack in set(data["attack_label"])]
+    positions = np.arange(len(attacks))
+
+    fig, ax = plt.subplots(figsize=(7.2, 4.8))
+
+    for offset, calculator in [(-0.18, "mace"), (0.18, "uma")]:
+        calc_data = data[data["calculator"] == calculator]
+        values = [
+            calc_data[calc_data["attack_label"] == attack]["neighbor_jaccard_distance"].dropna().to_numpy()
+            for attack in attacks
+        ]
+
+        nonempty_positions = []
+        nonempty_values = []
+        for position, value in zip(positions + offset, values):
+            if len(value):
+                nonempty_positions.append(position)
+                nonempty_values.append(value)
+
+        if nonempty_values:
+            box = ax.boxplot(
+                nonempty_values,
+                positions=nonempty_positions,
+                widths=0.28,
+                patch_artist=True,
+                showfliers=False,
+            )
+            for patch in box["boxes"]:
+                patch.set_facecolor(CALCULATOR_COLORS[calculator])
+                patch.set_alpha(0.35)
+                patch.set_edgecolor(CALCULATOR_COLORS[calculator])
+            for median in box["medians"]:
+                median.set_color(CALCULATOR_COLORS[calculator])
+
+    ax.set_xticks(positions)
+    ax.set_xticklabels(attacks)
+    ax.set_xlabel("Attack type")
+    ax.set_ylabel("Neighbor-graph Jaccard distance")
+    ax.set_title("Topology change by attack type")
+    ax.grid(True, axis="y", alpha=0.35)
+
+    handles = [
+        plt.Line2D([0], [0], color=CALCULATOR_COLORS["mace"], lw=7, alpha=0.35, label="MACE"),
+        plt.Line2D([0], [0], color=CALCULATOR_COLORS["uma"], lw=7, alpha=0.35, label="UMA"),
+    ]
+    ax.legend(handles=handles, frameon=False)
+
+    fig.tight_layout()
+    fig.savefig(output_dir / "figure_topology_by_attack_type.png", dpi=300)
+    plt.close(fig)
+
+
+def make_rdf_vs_coordination_change(records, output_dir):
+    data = records[
+        records["rdf_l1_distance"].notna()
+        & records["coordination_change_max"].notna()
+    ].copy()
+
+    if data.empty:
+        return
+
+    fig, ax = plt.subplots(figsize=(7.2, 4.8))
+    topology_scatter(
+        ax=ax,
+        data=data,
+        x_col="rdf_l1_distance",
+        y_col="coordination_change_max",
+        xlabel="RDF L1 distance",
+        ylabel="Max coordination change",
+        title="RDF change vs coordination change",
+    )
+    ax.legend(frameon=False, ncol=2, fontsize=7)
+    fig.tight_layout()
+    fig.savefig(output_dir / "figure_rdf_vs_coordination_change.png", dpi=300)
+    plt.close(fig)
+
+
+def make_topology_figures(records, output_dir):
+    if records.empty or not topology_ready(records):
+        return
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    clean = records.copy()
+    for column in TOPOLOGY_METRICS + ["mean_displacement"]:
+        if column in clean.columns:
+            clean[column] = pd.to_numeric(clean[column], errors="coerce")
+
+    save_topology_summary(clean, output_dir)
+    make_topology_vs_displacement(clean, output_dir)
+    make_topology_by_attack_type(clean, output_dir)
+    make_rdf_vs_coordination_change(clean, output_dir)
+
+    for material_slug, material_records in clean.groupby("material_slug"):
+        material_output_dir = output_dir / str(material_slug)
+        material_output_dir.mkdir(parents=True, exist_ok=True)
+        save_topology_summary(material_records, material_output_dir)
+        make_topology_vs_displacement(material_records, material_output_dir)
+        make_topology_by_attack_type(material_records, material_output_dir)
+        make_rdf_vs_coordination_change(material_records, material_output_dir)
+
+
 def main():
     apply_plot_style()
 
@@ -2199,6 +2411,8 @@ def main():
         raise SystemExit("No successful runs found in outputs_mace or outputs_uma.")
 
     records.to_csv(args.output_dir / "combined_dataset.csv", index=False)
+
+    make_topology_figures(records, args.output_dir / "topology")
 
     epsilon_records = records[
         ~records["run_id"].str.contains("_steps", regex=False)

@@ -11,6 +11,8 @@ import pandas as pd
 from mlff_attack.attacks import make_attack, visualize_perturbation
 from mlff_attack.relaxation import load_structure, run_relaxation, setup_calculator
 from mlff_attack.visualization import load_trajectory, create_visualization
+from ase.neighborlist import neighbor_list
+from ase.data import covalent_radii
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -266,6 +268,115 @@ def save_force_plot(atoms, output_dir, label, title):
     return force_png
 
 
+def atom_signature(symbols, index):
+    return f"{symbols[index]}{index}"
+
+
+def neighbor_edge_set(atoms, scale=1.25, min_cutoff=1.2, max_cutoff=3.2):
+    symbols = atoms.get_chemical_symbols()
+
+    cutoffs = []
+    for atom in atoms:
+        radius = float(covalent_radii[atom.number])
+        if not np.isfinite(radius) or radius <= 0:
+            radius = 0.8
+        cutoffs.append(max(min_cutoff, min(max_cutoff, radius * scale)))
+
+    try:
+        i_list, j_list = neighbor_list("ij", atoms, cutoffs)
+    except Exception:
+        i_list, j_list = [], []
+
+    edges = set()
+    for i, j in zip(i_list, j_list):
+        i = int(i)
+        j = int(j)
+        if i == j:
+            continue
+        a, b = sorted([i, j])
+        edges.add((atom_signature(symbols, a), atom_signature(symbols, b)))
+
+    return edges
+
+
+def coordination_by_atom(edges, atoms):
+    symbols = atoms.get_chemical_symbols()
+    counts = {atom_signature(symbols, index): 0 for index in range(len(atoms))}
+
+    for a, b in edges:
+        counts[a] = counts.get(a, 0) + 1
+        counts[b] = counts.get(b, 0) + 1
+
+    return counts
+
+
+def rdf_histogram(atoms, r_max=6.0, bins=60):
+    distances = atoms.get_all_distances(mic=True)
+    values = []
+
+    for i in range(len(atoms)):
+        for j in range(i + 1, len(atoms)):
+            distance = float(distances[i, j])
+            if 0 < distance <= r_max:
+                values.append(distance)
+
+    hist, edges = np.histogram(values, bins=bins, range=(0.0, r_max), density=False)
+    hist = hist.astype(float)
+
+    total = hist.sum()
+    if total > 0:
+        hist /= total
+
+    return hist
+
+
+def topology_change_metrics(before_atoms, after_atoms, output_dir):
+    before_edges = neighbor_edge_set(before_atoms)
+    after_edges = neighbor_edge_set(after_atoms)
+
+    added_edges = after_edges - before_edges
+    removed_edges = before_edges - after_edges
+    union_edges = before_edges | after_edges
+
+    if union_edges:
+        neighbor_jaccard_distance = 1.0 - (len(before_edges & after_edges) / len(union_edges))
+    else:
+        neighbor_jaccard_distance = 0.0
+
+    before_coord = coordination_by_atom(before_edges, before_atoms)
+    after_coord = coordination_by_atom(after_edges, after_atoms)
+
+    coord_delta = []
+    for atom in sorted(set(before_coord) | set(after_coord)):
+        coord_delta.append(abs(after_coord.get(atom, 0) - before_coord.get(atom, 0)))
+
+    before_rdf = rdf_histogram(before_atoms)
+    after_rdf = rdf_histogram(after_atoms)
+    rdf_l1_distance = float(np.sum(np.abs(before_rdf - after_rdf)))
+
+    edge_rows = []
+    for edge in sorted(added_edges):
+        edge_rows.append({"change": "added", "edge": "-".join(edge)})
+    for edge in sorted(removed_edges):
+        edge_rows.append({"change": "removed", "edge": "-".join(edge)})
+
+    edge_changes_csv = output_dir / "topology_edge_changes.csv"
+    pd.DataFrame(edge_rows, columns=["change", "edge"]).to_csv(edge_changes_csv, index=False)
+
+    return {
+        "topology_edge_changes_csv": str(edge_changes_csv),
+        "neighbor_edges_before": len(before_edges),
+        "neighbor_edges_after": len(after_edges),
+        "neighbor_edges_added": len(added_edges),
+        "neighbor_edges_removed": len(removed_edges),
+        "neighbor_edge_change_count": len(added_edges) + len(removed_edges),
+        "neighbor_jaccard_distance": float(neighbor_jaccard_distance),
+        "coordination_change_mean": float(np.mean(coord_delta)) if coord_delta else 0.0,
+        "coordination_change_max": float(np.max(coord_delta)) if coord_delta else 0.0,
+        "rdf_l1_distance": rdf_l1_distance,
+    }
+
+
 def validate_row(row):
     if "C:\\path\\to\\" in str(row["model_path"]):
         raise RuntimeError(
@@ -473,6 +584,11 @@ def run_one(row):
     perturbed_positions = attack_relaxed_atoms.get_positions()
     displacement = perturbed_positions - original_positions
     displacement_magnitudes = np.linalg.norm(displacement, axis=1)
+    topology_metrics = topology_change_metrics(
+        relaxed_atoms,
+        attack_relaxed_atoms,
+        output_dir,
+    )
 
     summary = {
         "run_id": run_id,
@@ -523,6 +639,7 @@ def run_one(row):
         "mean_displacement": float(displacement_magnitudes.mean()),
         "max_displacement": float(displacement_magnitudes.max()),
         "final_energy": float(attack_relaxed_atoms.get_potential_energy()),
+        **topology_metrics,
     }
 
     return summary
