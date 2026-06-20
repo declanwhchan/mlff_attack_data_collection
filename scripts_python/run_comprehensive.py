@@ -493,24 +493,37 @@ def variability_radius(values):
     return max(float((q75 - q25) / 2.0), 0.0)
 
 
-PARAMETRIC_AXIS_PERCENTILE = 99
+PARAMETRIC_AXIS_PERCENTILE = 95
 
 
-def percentile_axis_limit(values, percentile=PARAMETRIC_AXIS_PERCENTILE, pad=0.08):
+def percentile_axis_limit(values, percentile=PARAMETRIC_AXIS_PERCENTILE, pad=0.12):
     values = pd.Series(values).replace([np.inf, -np.inf], np.nan).dropna()
     values = values[values >= 0]
 
     if values.empty:
         return None
 
-    cap = float(np.percentile(values.to_numpy(dtype=float), percentile))
-    if cap <= 0:
-        cap = float(values.max())
+    data = values.to_numpy(dtype=float)
+    upper = float(np.percentile(data, percentile))
+    lower = float(np.min(data))
 
-    if cap <= 0:
+    if upper <= 0:
+        upper = float(np.max(data))
+
+    if upper <= 0:
         return None
 
-    return 0.0, cap * (1.0 + pad)
+    span = upper - lower
+    if span <= 0:
+        span = upper if upper > 0 else 1.0
+
+    low = max(0.0, lower - pad * span)
+    high = upper + pad * span
+
+    if high <= low:
+        high = low + max(abs(low) * 0.1, 1e-12)
+
+    return low, high
 
 
 def parametric_axis_limits(data, percentile=PARAMETRIC_AXIS_PERCENTILE):
@@ -532,7 +545,7 @@ def minimum_visible_radius(limits):
     if not np.isfinite(span) or span <= 0:
         return 0.0
 
-    return 0.012 * span
+    return 0.004 * span
 
 
 def style_numeric_axis(ax, xbins=4, ybins=5):
@@ -633,6 +646,13 @@ def draw_parametric_panel(
 ):
     subset = data[data["attack_label"] == attack].copy()
 
+    if not subset.empty:
+        panel_x_limits, panel_y_limits = parametric_axis_limits(subset)
+        if x_limits is None:
+            x_limits = panel_x_limits
+        if y_limits is None:
+            y_limits = panel_y_limits
+
     if subset.empty:
         ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha="center", va="center")
         ax.set_title(attack)
@@ -649,6 +669,9 @@ def draw_parametric_panel(
 
     min_x_radius = minimum_visible_radius(x_limits)
     min_y_radius = minimum_visible_radius(y_limits)
+
+    x_span = None if x_limits is None else float(x_limits[1] - x_limits[0])
+    y_span = None if y_limits is None else float(y_limits[1] - y_limits[0])
 
     for calculator, color in CALCULATOR_COLORS.items():
         calc_data = subset[subset["calculator"] == calculator].copy()
@@ -673,17 +696,14 @@ def draw_parametric_panel(
             x_center = float(np.median(x_values))
             y_center = float(np.median(y_values))
 
-            # Draw variability shapes only when there are multiple independent
-            # runs/materials in the group. Sample_1 has atom-level spread but
-            # not enough independent runs for a meaningful ellipse.
             if len(group) >= 3:
                 x_radius = max(variability_radius(x_values), min_x_radius)
                 y_radius = max(variability_radius(y_values), min_y_radius)
 
-                if x_limits is not None:
-                    x_radius = min(x_radius, 0.20 * (x_limits[1] - x_limits[0]))
-                if y_limits is not None:
-                    y_radius = min(y_radius, 0.20 * (y_limits[1] - y_limits[0]))
+                if x_span is not None and x_span > 0:
+                    x_radius = min(x_radius, 0.055 * x_span)
+                if y_span is not None and y_span > 0:
+                    y_radius = min(y_radius, 0.055 * y_span)
 
                 ellipse = Ellipse(
                     xy=(x_center, y_center),
@@ -692,8 +712,8 @@ def draw_parametric_panel(
                     angle=0.0,
                     facecolor=color,
                     edgecolor=color,
-                    linewidth=0.9,
-                    alpha=0.18,
+                    linewidth=0.8,
+                    alpha=0.11,
                     clip_on=True,
                     zorder=1,
                 )
@@ -724,7 +744,7 @@ def draw_parametric_panel(
 
     style_numeric_axis(ax)
     ax.grid(True, alpha=0.35)
-    ax.margins(x=0.04, y=0.06)
+    ax.margins(x=0.03, y=0.05)
 
 
 def make_parametric_state_figure(
@@ -774,7 +794,7 @@ def make_parametric_state_figure(
         if not data.empty:
             any_data = True
 
-        x_limits, y_limits = parametric_axis_limits(data)
+        x_limits, y_limits = None, None
 
         for col_index, attack in enumerate(attacks_to_plot):
             ax = axes[row_index, col_index]
