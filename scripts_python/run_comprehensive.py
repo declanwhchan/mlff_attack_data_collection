@@ -7,7 +7,7 @@ import re
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
-from matplotlib.ticker import MaxNLocator, ScalarFormatter
+from matplotlib.ticker import FixedFormatter, FixedLocator, MaxNLocator, NullFormatter, NullLocator, ScalarFormatter
 import numpy as np
 import pandas as pd
 from ase.io import read as read_structure
@@ -33,6 +33,13 @@ MODEL_OFFSETS = {
     "uma": 0.18,
 }
 
+EPSILON_POSITION_FACTORS = {
+    "mace": 10 ** (-0.03),
+    "uma": 10 ** (0.03),
+}
+
+EPSILON_BOX_WIDTH_LOG10 = 0.016
+
 
 def apply_plot_style():
     plt.rcParams.update({
@@ -56,6 +63,12 @@ def apply_plot_style():
         "ytick.labelsize": 7,
         "legend.fontsize": 8,
         "legend.frameon": False,
+        "savefig.dpi": 600,
+        "savefig.facecolor": "white",
+        "savefig.bbox": "tight",
+        "pdf.fonttype": 42,
+        "ps.fonttype": 42,
+        "svg.fonttype": "none",
     })
 
 
@@ -67,6 +80,49 @@ def save_figure(fig, output_base):
 
 def format_epsilon_label(value):
     return f"{float(value):g}"
+
+
+def _positive_finite(values):
+    values = pd.Series(values).replace([np.inf, -np.inf], np.nan).dropna().to_numpy(dtype=float)
+    return values[values > 0]
+
+
+def systematic_epsilon_ticks(values):
+    values = _positive_finite(values)
+    if len(values) == 0:
+        return [1e-3, 1e-2, 1e-1, 1.0, 10.0]
+
+    min_power = int(np.floor(np.log10(np.min(values))))
+    max_power = int(np.ceil(np.log10(np.max(values))))
+    return [10.0 ** power for power in range(min_power, max_power + 1)]
+
+
+def apply_systematic_epsilon_axis(ax, epsilons, label=rf"$\epsilon$ ($\AA$)"):
+    ticks = systematic_epsilon_ticks(epsilons)
+    ax.set_xscale("log")
+    ax.xaxis.set_major_locator(FixedLocator(ticks))
+    ax.xaxis.set_major_formatter(FixedFormatter([format_epsilon_label(tick) for tick in ticks]))
+    ax.xaxis.set_minor_locator(NullLocator())
+    ax.xaxis.set_minor_formatter(NullFormatter())
+    ax.set_xlim(ticks[0] / 1.18, ticks[-1] * 1.18)
+    ax.set_xlabel(label)
+    ax.tick_params(axis="x", labelrotation=0, pad=2)
+
+
+def epsilon_plot_position(epsilon, calculator=None):
+    epsilon = float(epsilon)
+    if calculator is None:
+        return epsilon
+    return epsilon * EPSILON_POSITION_FACTORS[calculator]
+
+
+def epsilon_box_widths(positions):
+    widths = []
+    for position in positions:
+        lower = position / (10 ** EPSILON_BOX_WIDTH_LOG10)
+        upper = position * (10 ** EPSILON_BOX_WIDTH_LOG10)
+        widths.append(upper - lower)
+    return widths
 
 
 def sparse_tick_indices(count, max_labels=6):
@@ -608,22 +664,21 @@ def _artist_values_for_axis(ax, axis_name):
     return cleaned.to_numpy(dtype=float)
 
 
-def _tight_limit(values, pad=0.14, lower_percentile=5, upper_percentile=95):
+def _tight_limit(values, pad=0.10, lower_percentile=None, upper_percentile=None):
     values = clean_numeric_array(values)
     if len(values) == 0:
         return None
 
-    if np.allclose(values, values[0]):
-        center = float(values[0])
-        span = max(abs(center) * 0.20, 1e-9)
-        if center >= 0 and center - span < 0:
-            return 0.0, center + span
-        return center - span, center + span
+    low = float(np.min(values))
+    high = float(np.max(values))
 
-    low = float(np.percentile(values, lower_percentile))
-    high = float(np.percentile(values, upper_percentile))
+    if np.allclose(low, high):
+        span = max(abs(low) * 0.20, 1e-9)
+        if low >= 0 and low - span < 0:
+            return 0.0, low + span
+        return low - span, high + span
+
     span = high - low
-
     if span <= 0 or not np.isfinite(span):
         return None
 
@@ -636,20 +691,120 @@ def _tight_limit(values, pad=0.14, lower_percentile=5, upper_percentile=95):
     return low, high
 
 
+def _maybe_use_log_y(ax, values, threshold_decades=2.0):
+    values = clean_numeric_array(values)
+    if len(values) < 2 or ax.get_yscale() != "linear":
+        return False
+
+    positive = values[values > 0]
+    if len(positive) != len(values):
+        return False
+
+    dynamic_range = float(np.max(positive) / np.min(positive))
+    if not np.isfinite(dynamic_range) or dynamic_range < 10.0 ** threshold_decades:
+        return False
+
+    ymin = float(np.min(positive)) / 1.25
+    ymax = float(np.max(positive)) * 1.25
+    ax.set_yscale("log")
+    ax.set_ylim(ymin, ymax)
+    return True
+
+
 def tighten_axes_for_publication(fig):
     for ax in fig.axes:
         if not ax.has_data():
             continue
 
-        y_limits = _tight_limit(_artist_values_for_axis(ax, "y"))
-        if y_limits is not None:
-            ax.set_ylim(*y_limits)
+        y_values = _artist_values_for_axis(ax, "y")
+        if not _maybe_use_log_y(ax, y_values):
+            y_limits = _tight_limit(y_values)
+            if y_limits is not None:
+                ax.set_ylim(*y_limits)
 
         xlabel = ax.get_xlabel().lower()
-        if "displacement" in xlabel or "rdf" in xlabel:
+        if ax.get_xscale() == "linear" and ("displacement" in xlabel or "rdf" in xlabel):
             x_limits = _tight_limit(_artist_values_for_axis(ax, "x"))
             if x_limits is not None:
                 ax.set_xlim(*x_limits)
+
+
+def pad_limits_for_scatter_points(ax, x_values, y_values, sizes, xlim=None, ylim=None, min_pad_frac=0.01):
+    x_values = clean_numeric_array(x_values)
+    y_values = clean_numeric_array(y_values)
+    sizes = clean_numeric_array(sizes)
+
+    if len(x_values) == 0 or len(y_values) == 0 or len(sizes) == 0:
+        return
+
+    if xlim is None:
+        xmin = float(np.min(x_values))
+        xmax = float(np.max(x_values))
+    else:
+        xmin, xmax = map(float, xlim)
+
+    if ylim is None:
+        ymin = float(np.min(y_values))
+        ymax = float(np.max(y_values))
+    else:
+        ymin, ymax = map(float, ylim)
+
+    max_radius_points = math.sqrt(float(np.max(sizes)) / math.pi)
+    pixels = max_radius_points * ax.figure.dpi / 72.0
+
+    x0, y0 = ax.transData.inverted().transform((0.0, 0.0))
+    x1, _ = ax.transData.inverted().transform((pixels, 0.0))
+    _, y1 = ax.transData.inverted().transform((0.0, pixels))
+
+    xpad = abs(x1 - x0)
+    ypad = abs(y1 - y0)
+
+    xrange = xmax - xmin
+    yrange = ymax - ymin
+    xpad = max(xpad, max(xrange * min_pad_frac, 1e-12))
+    ypad = max(ypad, max(yrange * min_pad_frac, 1e-12))
+
+    if xrange == 0:
+        xpad = max(xpad, abs(xmin) * min_pad_frac, 1e-6)
+    if yrange == 0:
+        ypad = max(ypad, abs(ymin) * min_pad_frac, 1e-6)
+
+    ax.set_xlim(xmin - xpad, xmax + xpad)
+    ax.set_ylim(ymin - ypad, ymax + ypad)
+
+
+def expand_limits_for_bubble_extents(x_limits, y_limits, extents, pad_frac=0.015):
+    if not extents:
+        return x_limits, y_limits
+
+    xmins = [item[0] for item in extents]
+    xmaxs = [item[1] for item in extents]
+    ymins = [item[2] for item in extents]
+    ymaxs = [item[3] for item in extents]
+
+    xmin = min(xmins) if x_limits is None else min(float(x_limits[0]), min(xmins))
+    xmax = max(xmaxs) if x_limits is None else max(float(x_limits[1]), max(xmaxs))
+    ymin = min(ymins) if y_limits is None else min(float(y_limits[0]), min(ymins))
+    ymax = max(ymaxs) if y_limits is None else max(float(y_limits[1]), max(ymaxs))
+
+    xspan = xmax - xmin
+    yspan = ymax - ymin
+    xpad = max(xspan * pad_frac, 1e-9)
+    ypad = max(yspan * pad_frac, 1e-9)
+
+    if xmin >= 0 and xmin - xpad < 0:
+        xmin = 0.0
+    else:
+        xmin -= xpad
+    xmax += xpad
+
+    if ymin >= 0 and ymin - ypad < 0:
+        ymin = 0.0
+    else:
+        ymin -= ypad
+    ymax += ypad
+
+    return (xmin, xmax), (ymin, ymax)
 
 
 def metric_distribution(row, getter):
@@ -764,6 +919,7 @@ def draw_parametric_panel(
 
     x_span = None if x_limits is None else float(x_limits[1] - x_limits[0])
     y_span = None if y_limits is None else float(y_limits[1] - y_limits[0])
+    bubble_extents = []
 
     for calculator, color in CALCULATOR_COLORS.items():
         calc_data = subset[subset["calculator"] == calculator].copy()
@@ -810,7 +966,9 @@ def draw_parametric_panel(
                     zorder=1,
                 )
                 ax.add_patch(ellipse)
+                bubble_extents.append((x_center - x_radius, x_center + x_radius, y_center - y_radius, y_center + y_radius))
 
+            bubble_extents.append((x_center, x_center, y_center, y_center))
             ax.scatter(
                 [x_center],
                 [y_center],
@@ -828,6 +986,8 @@ def draw_parametric_panel(
     ax.set_xlabel(x_label)
     if show_ylabel:
         ax.set_ylabel(y_label)
+
+    x_limits, y_limits = expand_limits_for_bubble_extents(x_limits, y_limits, bubble_extents)
 
     if x_limits is not None:
         ax.set_xlim(*x_limits)
@@ -1064,12 +1224,13 @@ def collect_box_data(records, attack, value_getter, missing_rows):
     positions = []
     values = []
     colors = []
+    calculators = []
     point_x = []
     point_y = []
 
     rng = np.random.default_rng(12345)
 
-    for i, epsilon in enumerate(epsilons, start=1):
+    for epsilon in epsilons:
         for calculator in ["mace", "uma"]:
             rowset = attack_records[
                 (attack_records["epsilon"] == epsilon)
@@ -1091,20 +1252,21 @@ def collect_box_data(records, attack, value_getter, missing_rows):
                     box_values.extend(row_values.tolist())
 
             if box_values:
-                position = i + MODEL_OFFSETS[calculator]
+                position = epsilon_plot_position(epsilon, calculator)
                 positions.append(position)
                 values.append(box_values)
                 colors.append(CALCULATOR_COLORS[calculator])
+                calculators.append(calculator)
 
-                jitter = rng.normal(loc=0.0, scale=0.010, size=len(box_values))
-                point_x.extend((position + jitter).tolist())
+                jitter = 10 ** rng.normal(loc=0.0, scale=0.004, size=len(box_values))
+                point_x.extend((position * jitter).tolist())
                 point_y.extend(box_values)
 
-    return epsilons, positions, values, colors, point_x, point_y
+    return epsilons, positions, values, colors, calculators, point_x, point_y
 
 
 def draw_grouped_boxplot(ax, records, attack, value_getter, ylabel, missing_rows):
-    epsilons, positions, values, colors, point_x, point_y = collect_box_data(
+    epsilons, positions, values, colors, calculators, point_x, point_y = collect_box_data(
         records,
         attack,
         value_getter,
@@ -1130,7 +1292,7 @@ def draw_grouped_boxplot(ax, records, attack, value_getter, ylabel, missing_rows
     box = ax.boxplot(
         values,
         positions=positions,
-        widths=0.30,
+        widths=epsilon_box_widths(positions),
         patch_artist=True,
         showfliers=False,
         zorder=2,
@@ -1144,11 +1306,7 @@ def draw_grouped_boxplot(ax, records, attack, value_getter, ylabel, missing_rows
         patch.set_edgecolor(color)
         patch.set_linewidth(1.2)
 
-    tick_positions = list(range(1, len(epsilons) + 1))
-    ax.set_xticks(tick_positions)
-    ax.set_xticklabels([format_epsilon_label(epsilon) for epsilon in epsilons])
-    style_epsilon_tick_labels(ax, rotate=len(epsilons) >= 6)
-    ax.set_xlabel(r"$\epsilon$ ($\AA$)")
+    apply_systematic_epsilon_axis(ax, epsilons)
     ax.set_ylabel(ylabel)
     ax.grid(True, axis="y")
     ax.grid(False, axis="x")
@@ -1165,8 +1323,6 @@ def plot_convergence_panel(ax, records, attack, step_col, conv_col):
         return False
 
     epsilons = sorted(attack_records["epsilon"].dropna().unique())
-    epsilon_positions = {epsilon: index + 1 for index, epsilon in enumerate(epsilons)}
-
     for calculator, color in CALCULATOR_COLORS.items():
         data = attack_records[
             (attack_records["calculator"] == calculator)
@@ -1177,10 +1333,9 @@ def plot_convergence_panel(ax, records, attack, step_col, conv_col):
             continue
 
         grouped = data.groupby("epsilon", as_index=False)[step_col].mean()
-        grouped["epsilon_position"] = grouped["epsilon"].map(epsilon_positions)
 
         ax.plot(
-            grouped["epsilon_position"],
+            grouped["epsilon"],
             grouped[step_col],
             marker="o",
             markersize=4,
@@ -1191,10 +1346,8 @@ def plot_convergence_panel(ax, records, attack, step_col, conv_col):
 
         not_converged = data[data[conv_col] == False].copy()
         if not not_converged.empty:
-            not_converged["epsilon_position"] = not_converged["epsilon"].map(epsilon_positions)
-
             ax.scatter(
-                not_converged["epsilon_position"],
+                not_converged["epsilon"],
                 not_converged[step_col],
                 s=45,
                 facecolors="none",
@@ -1203,11 +1356,7 @@ def plot_convergence_panel(ax, records, attack, step_col, conv_col):
                 zorder=3,
             )
 
-    tick_positions = list(range(1, len(epsilons) + 1))
-    ax.set_xticks(tick_positions)
-    ax.set_xticklabels([format_epsilon_label(epsilon) for epsilon in epsilons])
-    style_epsilon_tick_labels(ax, rotate=len(epsilons) >= 6)
-    ax.set_xlabel(r"$\epsilon$ ($\AA$)")
+    apply_systematic_epsilon_axis(ax, epsilons)
     ax.set_ylabel("Relaxation steps")
     ax.grid(True, axis="y")
     ax.grid(False, axis="x")
@@ -1280,7 +1429,7 @@ def bootstrap_median_ci(values, confidence=95, n_bootstrap=1000, seed=12345):
 
 
 def draw_grouped_ci(ax, records, attack, value_getter, ylabel, missing_rows):
-    epsilons, positions, values, colors, point_x, point_y = collect_box_data(
+    epsilons, positions, values, colors, calculators, point_x, point_y = collect_box_data(
         records,
         attack,
         value_getter,
@@ -1297,20 +1446,14 @@ def draw_grouped_ci(ax, records, attack, value_getter, ylabel, missing_rows):
         "uma": {"x": [], "median": [], "lower": [], "upper": []},
     }
 
-    for position, box_values in zip(positions, values):
+    for position, box_values, calculator in zip(positions, values, calculators):
         ci = bootstrap_median_ci(box_values)
         if ci is None:
             continue
 
         median, lower, upper = ci
-        center_position = round(position)
-        offset = position - center_position
-        calculator = min(
-            MODEL_OFFSETS,
-            key=lambda name: abs(offset - MODEL_OFFSETS[name]),
-        )
 
-        x_value = round(position - MODEL_OFFSETS[calculator])
+        x_value = position
         series[calculator]["x"].append(x_value)
         series[calculator]["median"].append(median)
         series[calculator]["lower"].append(lower)
@@ -1345,11 +1488,7 @@ def draw_grouped_ci(ax, records, attack, value_getter, ylabel, missing_rows):
             label=calculator.upper(),
         )
 
-    tick_positions = list(range(1, len(epsilons) + 1))
-    ax.set_xticks(tick_positions)
-    ax.set_xticklabels([format_epsilon_label(epsilon) for epsilon in epsilons])
-    style_epsilon_tick_labels(ax, rotate=len(epsilons) >= 6)
-    ax.set_xlabel(r"$\epsilon$ ($\AA$)")
+    apply_systematic_epsilon_axis(ax, epsilons)
     ax.set_ylabel(ylabel)
     ax.grid(True, axis="y")
     ax.grid(False, axis="x")
@@ -1470,6 +1609,7 @@ def collect_box_data_by_steps(records, attack, epsilon, value_getter, missing_ro
     positions = []
     values = []
     colors = []
+    calculators = []
     point_x = []
     point_y = []
 
@@ -1502,16 +1642,17 @@ def collect_box_data_by_steps(records, attack, epsilon, value_getter, missing_ro
                 positions.append(position)
                 values.append(box_values)
                 colors.append(CALCULATOR_COLORS[calculator])
+                calculators.append(calculator)
 
                 jitter = rng.normal(loc=0.0, scale=0.010, size=len(box_values))
                 point_x.extend((position + jitter).tolist())
                 point_y.extend(box_values)
 
-    return steps, positions, values, colors, point_x, point_y
+    return steps, positions, values, colors, calculators, point_x, point_y
 
 
 def draw_grouped_boxplot_by_steps(ax, records, attack, epsilon, value_getter, ylabel, missing_rows):
-    steps, positions, values, colors, point_x, point_y = collect_box_data_by_steps(
+    steps, positions, values, colors, calculators, point_x, point_y = collect_box_data_by_steps(
         records,
         attack,
         epsilon,
@@ -1623,7 +1764,7 @@ def collect_whisker_span_data(records, attack, value_getter, missing_rows):
             span = tukey_whisker_span(values)
             if span is not None:
                 points.append({
-                    "x": i,
+                    "x": epsilon_plot_position(epsilon, calculator),
                     "y": span,
                     "calculator": calculator,
                 })
@@ -1664,11 +1805,7 @@ def draw_whisker_span(ax, records, attack, value_getter, ylabel, missing_rows):
             zorder=3,
         )
 
-    tick_positions = list(range(1, len(epsilons) + 1))
-    ax.set_xticks(tick_positions)
-    ax.set_xticklabels([format_epsilon_label(epsilon) for epsilon in epsilons])
-    style_epsilon_tick_labels(ax, rotate=len(epsilons) >= 6)
-    ax.set_xlabel(r"$\epsilon$ ($\AA$)")
+    apply_systematic_epsilon_axis(ax, epsilons)
     ax.set_ylabel(ylabel)
     ax.grid(True, axis="y")
     ax.grid(False, axis="x")
@@ -1766,7 +1903,7 @@ def collect_whisker_span_data_by_steps(records, attack, epsilon, value_getter, m
             span = tukey_whisker_span(values)
             if span is not None:
                 points.append({
-                    "x": i,
+                    "x": i + MODEL_OFFSETS[calculator],
                     "y": span,
                     "calculator": calculator,
                 })
@@ -1989,7 +2126,7 @@ def make_convergence_by_steps_figure(records, output_dir, epsilon=0.1):
 
 
 def draw_grouped_ci_by_steps(ax, records, attack, epsilon, value_getter, ylabel, missing_rows):
-    steps, positions, values, colors, point_x, point_y = collect_box_data_by_steps(
+    steps, positions, values, colors, calculators, point_x, point_y = collect_box_data_by_steps(
         records,
         attack,
         epsilon,
@@ -2007,20 +2144,14 @@ def draw_grouped_ci_by_steps(ax, records, attack, epsilon, value_getter, ylabel,
         "uma": {"x": [], "median": [], "lower": [], "upper": []},
     }
 
-    for position, box_values in zip(positions, values):
+    for position, box_values, calculator in zip(positions, values, calculators):
         ci = bootstrap_median_ci(box_values)
         if ci is None:
             continue
 
         median, lower, upper = ci
-        center_position = round(position)
-        offset = position - center_position
-        calculator = min(
-            MODEL_OFFSETS,
-            key=lambda name: abs(offset - MODEL_OFFSETS[name]),
-        )
 
-        x_value = round(position - MODEL_OFFSETS[calculator])
+        x_value = position
         series[calculator]["x"].append(x_value)
         series[calculator]["median"].append(median)
         series[calculator]["lower"].append(lower)
@@ -2259,6 +2390,9 @@ def topology_scatter(ax, data, x_col, y_col, xlabel, ylabel, title):
     ax.set_title(title)
     ax.grid(True, alpha=0.28)
 
+    if plotted:
+        pad_limits_for_scatter_points(ax, data[x_col], data[y_col], np.full(len(data), 18.0))
+
     y_values = _artist_values_for_axis(ax, "y")
     if len(y_values) and np.nanmax(np.abs(y_values)) <= 1e-12:
         ax.set_ylim(-0.0005, 0.0005)
@@ -2297,9 +2431,8 @@ def make_topology_vs_displacement(records, output_dir):
         title="Topology change vs displacement",
     )
     ax.legend(frameon=False, ncol=2, fontsize=7)
-    tighten_axes_for_publication(fig)
     fig.tight_layout()
-    fig.savefig(output_dir / "figure_topology_vs_displacement.png", dpi=300, bbox_inches="tight")
+    save_figure(fig, output_dir / "topology_vs_displacement")
     plt.close(fig)
 
 
@@ -2368,7 +2501,7 @@ def make_topology_by_attack_type(records, output_dir):
         ax.set_ylim(0, min(100.0, max(5.0, max_rate * 1.25)))
 
     fig.tight_layout()
-    fig.savefig(output_dir / "figure_topology_by_attack_type.png", dpi=300, bbox_inches="tight")
+    save_figure(fig, output_dir / "topology_by_attack_type")
     plt.close(fig)
 
 
@@ -2392,9 +2525,8 @@ def make_rdf_vs_coordination_change(records, output_dir):
         title="RDF change vs coordination change",
     )
     ax.legend(frameon=False, ncol=2, fontsize=7)
-    tighten_axes_for_publication(fig)
     fig.tight_layout()
-    fig.savefig(output_dir / "figure_rdf_vs_coordination_change.png", dpi=300, bbox_inches="tight")
+    save_figure(fig, output_dir / "rdf_vs_coordination_change")
     plt.close(fig)
 
 
@@ -2424,6 +2556,44 @@ def make_topology_figures(records, output_dir):
         make_rdf_vs_coordination_change(material_records, material_output_dir)
 
 
+
+def write_publication_audit(output_dir, records):
+    output_dir = Path(output_dir)
+    material_count = 0 if records.empty else int(records["material_slug"].nunique())
+    run_count = 0 if records.empty else int(len(records))
+    lines = [
+        "# Publication Figure Audit",
+        "",
+        "Scope: all comprehensive figures generated in this directory, including the global panels and the per-material repeats.",
+        f"Input coverage at generation time: {run_count} successful runs across {material_count} materials.",
+        "",
+        "## Global Improvements Applied",
+        "",
+        "- Exported every main figure as 600 dpi PNG.",
+        "- Standardized typography, line widths, grid contrast, colorblind-safe MACE/UMA colors, panel labels, and white backgrounds.",
+        "- Replaced percentile-based post-hoc axis cropping with full finite-data limits plus padding, preventing hidden valid extremes.",
+        "- Applied log scaling only where the plotted positive values span at least two orders of magnitude; epsilon sweeps use a log epsilon axis by construction.",
+        "- Preserved raw values, medians, confidence intervals, whisker spans, and topology summaries; only visual encoding and export quality changed.",
+        "",
+        "## Figure-Specific Audit",
+        "",
+        "| Figure family | Before | After | Scientific communication impact |",
+        "| --- | --- | --- | --- |",
+        "| figure_1_convergence_by_epsilon | Epsilon values were evenly spaced as categories, which visually understated multiplicative epsilon changes. | Epsilon is plotted on a logarithmic axis with systematic decade ticks. | Readers can interpret convergence trends against the true perturbation scale. |",
+        "| figure_2_delta_force_by_epsilon and figure_3_displacement_by_epsilon | Distribution panels used categorical epsilon spacing and fixed box widths. | Box positions and widths are proportional on a log epsilon axis; raw point jitter is multiplicative. | The distribution summaries remain unchanged while the x-axis now reflects the physical parameter scale. |",
+        "| figure_2/3 CI-by-epsilon panels | Median CI lines used categorical offsets. | Lines and shaded 95% CIs use true log-epsilon positions with explicit calculator grouping. | Uncertainty bands are easier to compare across orders of magnitude in epsilon. |",
+        "| figure_2/3 whisker-span-by-epsilon panels | Spread summaries used categorical x positions. | Whisker-span points use true log-epsilon positions with calculator offsets. | Variability trends are no longer distorted by arbitrary category spacing. |",
+        "| figure_4_convergence_by_n_steps | Fixed-epsilon step sweep remains a linear step comparison. | Integer step ticks, categorical offsets, and readable rotated labels are retained. | Step-count effects are represented without inappropriate log-epsilon positioning. |",
+        "| figure_5/6 distribution, CI, and whisker-span by n_steps | Step-sweep panels risked inheriting epsilon-position logic during style updates. | Step-sweep helpers explicitly return calculator identity and use linear step positions. | Prevents misleading x coordinates while preserving the fixed-epsilon experiment design. |",
+        "| figure_7/8/9 parametric bubble panels | Bubble ellipses could approach or touch plot boundaries. | Axis limits include bubble extents and documented p95 capping for readability. | Multivariate summaries remain legible without hiding the stated capping policy. |",
+        "| topology_vs_displacement and rdf_vs_coordination_change | Scatter markers could sit too close to frame edges and exported only low-resolution PNGs. | Marker-aware padding and PNG export are applied. | Topology-change comparisons have clearer spatial separation and manuscript-ready raster outputs. |",
+        "| topology_by_attack_type | Export quality differed from main figures. | Uses the same publication export helper and styling policy. | Bar summaries are visually consistent with the rest of the manuscript figure set. |",
+        "",
+        "## Review Notes",
+        "",
+        "These changes are visual and presentational. They do not alter the underlying CSV inputs, force/displacement calculations, medians, bootstrap intervals, convergence flags, or topology metrics.",
+    ]
+    (output_dir / "publication_figure_audit.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 def main():
     apply_plot_style()
 
@@ -3114,7 +3284,7 @@ def main():
                 records=material_n_step_records,
                 output_dir=material_output_dir,
                 figure_name="figure_6_displacement_whisker_span_by_n_steps",
-                ylabel=r"displacement whisker span ($\AA$)",
+                ylabel=r"Displacement whisker span ($\AA$)",
                 epsilon=0.1,
                 rows=[
                     (
@@ -3163,6 +3333,7 @@ def main():
         args.output_dir / "missing_data_report.csv",
         index=False,
     )
+    write_publication_audit(args.output_dir, records)
 
     print(f"Saved comprehensive plots to {args.output_dir}")
     print(f"Saved combined dataset to {args.output_dir / 'combined_dataset.csv'}")

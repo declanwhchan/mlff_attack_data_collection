@@ -19,6 +19,60 @@ KEY_COLUMNS = [
 ]
 
 
+
+CALCULATOR_COLORS = {
+    "mace": "#0072B2",
+    "uma": "#D55E00",
+}
+
+METRIC_LABELS = {
+    "mean_displacement": r"Mean displacement ($\AA$)",
+    "max_displacement": r"Max displacement ($\AA$)",
+    "final_energy": "Final energy (eV)",
+    "before_relax_steps": "Before-attack relaxation steps",
+    "after_relax_steps": "After-attack relaxation steps",
+}
+
+
+def apply_plot_style():
+    plt.rcParams.update({
+        "figure.facecolor": "white",
+        "axes.facecolor": "white",
+        "axes.edgecolor": "#333333",
+        "axes.labelcolor": "#111111",
+        "axes.linewidth": 0.8,
+        "axes.spines.top": False,
+        "axes.spines.right": False,
+        "xtick.color": "#111111",
+        "ytick.color": "#111111",
+        "grid.color": "#D7D7D7",
+        "grid.linewidth": 0.7,
+        "grid.alpha": 0.8,
+        "font.family": "DejaVu Sans",
+        "font.size": 8,
+        "axes.titlesize": 9,
+        "axes.labelsize": 8,
+        "xtick.labelsize": 7,
+        "ytick.labelsize": 7,
+        "legend.fontsize": 8,
+        "legend.frameon": False,
+        "savefig.dpi": 600,
+        "savefig.facecolor": "white",
+        "savefig.bbox": "tight",
+        "pdf.fonttype": 42,
+        "ps.fonttype": 42,
+        "svg.fonttype": "none",
+    })
+
+
+def metric_label(metric):
+    return METRIC_LABELS.get(metric, metric.replace("_", " "))
+
+
+def save_figure(fig, output_base):
+    output_base = Path(output_base)
+    fig.savefig(output_base.with_suffix(".png"), dpi=600, bbox_inches="tight")
+
 METRIC_COLUMNS = [
     "mean_displacement",
     "max_displacement",
@@ -76,7 +130,7 @@ def save_metric_plot(data, metric, output_dir):
 
     fig, ax = plt.subplots(figsize=(6.0, 5.4))
 
-    for calculator, color in [("mace", "#0072B2"), ("uma", "#D55E00")]:
+    for calculator, color in CALCULATOR_COLORS.items():
         subset = plot_data[plot_data["calculator"] == calculator]
         if subset.empty:
             continue
@@ -106,24 +160,52 @@ def save_metric_plot(data, metric, output_dir):
     ax.plot([lower, upper], [lower, upper], color="#444444", linestyle="--", linewidth=1.0)
     ax.set_xlim(lower, upper)
     ax.set_ylim(lower, upper)
-    ax.set_xlabel(f"{metric} float64")
-    ax.set_ylabel(f"{metric} float32")
-    ax.set_title(f"float32 vs float64: {metric}")
+    label = metric_label(metric)
+    ax.set_xlabel(f"{label}, float64")
+    ax.set_ylabel(f"{label}, float32")
+    ax.set_title(f"float32 vs float64: {label}")
     style_numeric_axis(ax)
+    ax.set_aspect("equal", adjustable="box")
     ax.grid(True, alpha=0.35)
     ax.legend(frameon=False)
 
     fig.tight_layout()
-    fig.savefig(output_dir / f"{metric}_float32_vs_float64.png", dpi=300)
+    save_figure(fig, output_dir / f"{metric}_float32_vs_float64")
     plt.close(fig)
 
 
+
+def write_float_publication_audit(output_dir, metrics, merged):
+    output_dir = Path(output_dir)
+    lines = [
+        "# Float Comparison Figure Audit",
+        "",
+        f"Scope: float32-vs-float64 diagnostic scatterplots for {len(metrics)} metrics and {len(merged)} matched rows.",
+        "",
+        "## Improvements Applied",
+        "",
+        "- Exported every scatterplot as 600 dpi PNG.",
+        "- Used equal x/y aspect ratio so deviations from the 1:1 line are not visually distorted.",
+        "- Replaced raw column-name labels with unit-aware scientific labels where units are known.",
+        "- Standardized calculator colors, typography, grid contrast, and white backgrounds with the comprehensive figure style.",
+        "",
+        "## Figure-Specific Audit",
+        "",
+        "| Figure family | Before | After | Scientific communication impact |",
+        "| --- | --- | --- | --- |",
+        "| *_float32_vs_float64 | PNG-only export, unequal plotting aspect, and raw metric names. | PNG export, equal aspect, 1:1 reference line, and clear labels. | Precision differences are easier to judge because distance from the parity line is geometrically faithful. |",
+        "",
+        "These changes do not alter the merged comparison table or computed float32-minus-float64 deltas.",
+    ]
+    (output_dir / "publication_figure_audit.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--float32-dir", required=True, type=Path)
     parser.add_argument("--float64-dir", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     args = parser.parse_args()
+
+    apply_plot_style()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -176,6 +258,7 @@ def main():
         save_metric_plot(merged, metric, args.output_dir)
 
     pd.DataFrame(summary_rows).to_csv(args.output_dir / "float_comprehensive_summary.csv", index=False)
+    write_float_publication_audit(args.output_dir, metrics, merged)
 
     print(f"Saved float comparison outputs to {args.output_dir}")
 

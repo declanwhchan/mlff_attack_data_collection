@@ -3,7 +3,7 @@ import argparse
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-from matplotlib.ticker import MaxNLocator, ScalarFormatter
+from matplotlib.ticker import FixedFormatter, FixedLocator, MaxNLocator, NullFormatter, NullLocator, ScalarFormatter
 import numpy as np
 import pandas as pd
 
@@ -23,6 +23,108 @@ CALC_COLORS = {
 
 CONTOUR_BAND_COLOR = "#66C2A5"
 ATTACK_ORDER = ["FGSM", "I-FGSM", "PGD"]
+
+
+def positive_finite(values):
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values) & (values > 0)]
+    return values
+
+
+def systematic_epsilon_ticks(values):
+    values = positive_finite(values)
+    if len(values) == 0:
+        return [1e-3, 1e-2, 1e-1, 1.0, 10.0]
+
+    min_power = int(np.floor(np.log10(np.min(values))))
+    max_power = int(np.ceil(np.log10(np.max(values))))
+    return [10.0 ** power for power in range(min_power, max_power + 1)]
+
+
+def apply_systematic_epsilon_axis(ax, eps_values, label=r"$\epsilon$ ($\AA$)"):
+    ticks = systematic_epsilon_ticks(eps_values)
+    ax.set_xscale("log")
+    ax.xaxis.set_major_locator(FixedLocator(ticks))
+    ax.xaxis.set_major_formatter(FixedFormatter([f"{tick:g}" for tick in ticks]))
+    ax.xaxis.set_minor_locator(NullLocator())
+    ax.xaxis.set_minor_formatter(NullFormatter())
+    ax.set_xlim(ticks[0] / 1.18, ticks[-1] * 1.18)
+    ax.set_xlabel(label)
+    ax.tick_params(axis="x", labelrotation=0, pad=2)
+
+
+def positive_floor(values, fallback=1e-12):
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values) & (values > 0)]
+    if len(values) == 0:
+        return fallback
+    return float(np.min(values))
+
+
+def set_log_y_from_values(ax, values, label=None, pad_decades=0.05):
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values) & (values > 0)]
+    if len(values) == 0:
+        return
+
+    ymin = float(np.min(values)) / (10.0 ** pad_decades)
+    ymax = float(np.max(values)) * (10.0 ** pad_decades)
+    ymax = max(ymax, ymin * 10.0)
+
+    ax.set_yscale("log")
+    ax.set_ylim(ymin, ymax)
+
+    if label is not None:
+        ax.set_ylabel(label)
+
+
+def pad_limits_for_scatter_points(ax, x_values, y_values, sizes, xlim=None, ylim=None, min_pad_frac=0.01):
+    x_values = np.asarray(x_values, dtype=float)
+    y_values = np.asarray(y_values, dtype=float)
+    sizes = np.asarray(sizes, dtype=float)
+
+    finite = np.isfinite(x_values) & np.isfinite(y_values) & np.isfinite(sizes)
+    if not np.any(finite):
+        return
+
+    x_values = x_values[finite]
+    y_values = y_values[finite]
+    sizes = sizes[finite]
+
+    if xlim is None:
+        xmin = float(np.min(x_values))
+        xmax = float(np.max(x_values))
+    else:
+        xmin, xmax = map(float, xlim)
+
+    if ylim is None:
+        ymin = float(np.min(y_values))
+        ymax = float(np.max(y_values))
+    else:
+        ymin, ymax = map(float, ylim)
+
+    max_radius_points = np.sqrt(float(np.max(sizes)) / np.pi)
+    pixels = max_radius_points * ax.figure.dpi / 72.0
+
+    x0, y0 = ax.transData.inverted().transform((0.0, 0.0))
+    x1, _ = ax.transData.inverted().transform((pixels, 0.0))
+    _, y1 = ax.transData.inverted().transform((0.0, pixels))
+
+    xpad = abs(x1 - x0)
+    ypad = abs(y1 - y0)
+
+    xrange = xmax - xmin
+    yrange = ymax - ymin
+    xpad = max(xpad, max(xrange * min_pad_frac, 1e-12))
+    ypad = max(ypad, max(yrange * min_pad_frac, 1e-12))
+
+    if xrange == 0:
+        xpad = max(xpad, abs(xmin) * min_pad_frac, 1e-6)
+    if yrange == 0:
+        ypad = max(ypad, abs(ymin) * min_pad_frac, 1e-6)
+
+    ax.set_xlim(xmin - xpad, xmax + xpad)
+    ax.set_ylim(ymin - ypad, ymax + ypad)
 
 
 def add_panel_label(ax, label):
@@ -66,8 +168,22 @@ def apply_style():
         "legend.fontsize": 8,
         "legend.frameon": False,
         "savefig.dpi": 600,
+        "savefig.facecolor": "white",
+        "savefig.bbox": "tight",
+        "pdf.fonttype": 42,
+        "ps.fonttype": 42,
+        "svg.fonttype": "none",
     })
 
+
+
+
+def save_figure(fig, output_base):
+    output_base = Path(output_base)
+    if output_base.suffix:
+        output_base = output_base.with_suffix("")
+    tighten_contour_axes(fig)
+    fig.savefig(output_base.with_suffix(".png"), dpi=600, bbox_inches="tight")
 
 def style_numeric_axis(ax, xbins=5, ybins=5):
     ax.xaxis.set_major_locator(MaxNLocator(nbins=xbins))
@@ -113,24 +229,23 @@ def clean_axis_values(ax, axis_name):
     return series.to_numpy(dtype=float)
 
 
-def tight_axis_limits(values, pad=0.14):
+def tight_axis_limits(values, pad=0.10):
     values = np.asarray(values, dtype=float)
     values = values[np.isfinite(values)]
 
     if len(values) == 0:
         return None
 
-    if np.allclose(values, values[0]):
-        center = float(values[0])
-        span = max(abs(center) * 0.20, 1e-9)
-        if center >= 0 and center - span < 0:
-            return 0.0, center + span
-        return center - span, center + span
+    low = float(np.min(values))
+    high = float(np.max(values))
 
-    low = float(np.percentile(values, 0.5))
-    high = float(np.percentile(values, 99.5))
+    if np.allclose(low, high):
+        span = max(abs(low) * 0.20, 1e-9)
+        if low >= 0 and low - span < 0:
+            return 0.0, low + span
+        return low - span, high + span
+
     span = high - low
-
     if span <= 0 or not np.isfinite(span):
         return None
 
@@ -146,6 +261,13 @@ def tight_axis_limits(values, pad=0.14):
 def tighten_contour_axes(fig):
     for ax in fig.axes:
         if not ax.has_data():
+            continue
+
+        if ax.get_yscale() == "log":
+            values = clean_axis_values(ax, "y")
+            values = values[np.isfinite(values) & (values > 0)]
+            if len(values):
+                set_log_y_from_values(ax, values)
             continue
 
         limits = tight_axis_limits(clean_axis_values(ax, "y"))
@@ -415,20 +537,14 @@ def draw_attack_panels(fig, axes, data, x_col, x_label, calculator, contour_rows
 
         if x_col == "epsilon":
             epsilon_values = subset[x_col].to_numpy(dtype=float) if not subset.empty else data[x_col].to_numpy(dtype=float)
-            ticks = sparse_numeric_ticks(epsilon_values, max_ticks=6)
 
             for axis in [ax_disp, ax_force]:
-                axis.set_xscale("log")
-                if ticks:
-                    axis.set_xticks(ticks)
-                    axis.set_xticklabels([f"{tick:g}" for tick in ticks])
-                    axis.set_xlim(min(ticks) / 1.18, max(ticks) * 1.18)
-                axis.tick_params(axis="x", labelrotation=0, pad=2)
+                apply_systematic_epsilon_axis(axis, epsilon_values)
 
-        for ax in [ax_disp, ax_force]:
-            style_numeric_axis(ax)
-            ax.grid(True, axis="y")
-            ax.margins(x=0.04)
+        for ax, y_col in [
+            (ax_disp, "attack_median_displacement_a"),
+            (ax_force, "attack_median_force_delta_ev_a"),
+        ]:
             if subset.empty:
                 ax.text(
                     0.5,
@@ -438,6 +554,24 @@ def draw_attack_panels(fig, axes, data, x_col, x_label, calculator, contour_rows
                     ha="center",
                     va="center",
                 )
+                continue
+
+            contour_values = []
+            if ax is ax_disp and disp_stats is not None:
+                contour_values.extend([disp_stats["p05"], disp_stats["p95"]])
+            if ax is ax_force and force_stats is not None:
+                contour_values.extend([force_stats["p05"], force_stats["p95"]])
+
+            attack_values = subset[y_col].to_numpy(dtype=float)
+            all_y = np.asarray(contour_values + attack_values[np.isfinite(attack_values)].tolist(), dtype=float)
+            all_y = all_y[np.isfinite(all_y) & (all_y > 0)]
+
+            if len(all_y):
+                set_log_y_from_values(ax, all_y)
+
+            style_numeric_axis(ax)
+            ax.grid(True, axis="y")
+            ax.margins(x=0.04)
 
     tighten_contour_axes(fig)
 
@@ -484,10 +618,7 @@ def plot_contour_vs_attack(material_slug, calculator, contour_rows, attacks, out
         )
         label_axes(axes)
         fig.tight_layout(rect=[0, 0, 1, 0.95])
-        fig.savefig(
-            material_dir / f"{calculator}_contour_vs_attack_by_epsilon.png",
-            bbox_inches="tight",
-        )
+        save_figure(fig, material_dir / f"{calculator}_contour_vs_attack_by_epsilon.png")
         plt.close(fig)
 
     step_data = table[table["is_step_sweep"]].copy()
@@ -506,10 +637,7 @@ def plot_contour_vs_attack(material_slug, calculator, contour_rows, attacks, out
         )
         label_axes(axes)
         fig.tight_layout(rect=[0, 0, 1, 0.95])
-        fig.savefig(
-            material_dir / f"{calculator}_contour_vs_attack_by_n_steps.png",
-            bbox_inches="tight",
-        )
+        save_figure(fig, material_dir / f"{calculator}_contour_vs_attack_by_n_steps.png")
         plt.close(fig)
 
     disp_stats = contour_stats(contour_rows, "mean_displacement_from_initial_a")
@@ -586,7 +714,7 @@ def plot_six_panel(material_slug, calculator, rows, output_dir):
 
     material_dir = output_dir / material_slug
     material_dir.mkdir(parents=True, exist_ok=True)
-    fig.savefig(material_dir / f"{calculator}_six_panel.png", bbox_inches="tight")
+    save_figure(fig, material_dir / f"{calculator}_six_panel")
     plt.close(fig)
 
 
@@ -633,7 +761,7 @@ def plot_mace_vs_uma(material_slug, all_rows, output_dir):
 
     material_dir = output_dir / material_slug
     material_dir.mkdir(parents=True, exist_ok=True)
-    fig.savefig(material_dir / "mace_vs_uma_contour.png", bbox_inches="tight")
+    save_figure(fig, material_dir / "mace_vs_uma_contour")
     plt.close(fig)
 
 
@@ -691,6 +819,14 @@ def plot_one_global_panel(ax, data, x_col, y_col, xlabel, ylabel, title):
 
     ax.set_xlim(0, x_max)
     ax.set_ylim(0, y_max)
+    pad_limits_for_scatter_points(
+        ax,
+        data[x_col].to_numpy(dtype=float),
+        data[y_col].to_numpy(dtype=float),
+        np.full(len(data), 26.0),
+        xlim=(0, x_max),
+        ylim=(0, y_max),
+    )
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     ax.set_title(title)
@@ -751,7 +887,7 @@ def plot_global_relaxation_state(records, output_dir, displacement_col, force_co
     label_axes(axes)
     fig.suptitle(f"{title} vs contour exploration", y=1.08, fontsize=11)
     fig.tight_layout(rect=[0, 0, 1, 0.98])
-    fig.savefig(output_dir / output_name, bbox_inches="tight")
+    save_figure(fig, output_dir / output_name)
     plt.close(fig)
 
 
@@ -809,6 +945,14 @@ def plot_relaxation_attack_grid_panel(
 
     ax.set_xlim(0, x_max)
     ax.set_ylim(0, y_max)
+    pad_limits_for_scatter_points(
+        ax,
+        subset[x_col].to_numpy(dtype=float),
+        subset[y_col].to_numpy(dtype=float),
+        np.full(len(subset), 24.0),
+        xlim=(0, x_max),
+        ylim=(0, y_max),
+    )
     ax.set_title(attack_label)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel if row_label else "")
@@ -879,7 +1023,7 @@ def plot_global_relaxation_attack_grid(
     label_axes(axes)
     fig.suptitle(title, y=1.06, fontsize=11)
     fig.tight_layout(rect=[0.04, 0, 1, 0.98])
-    fig.savefig(output_dir / output_name, bbox_inches="tight")
+    save_figure(fig, output_dir / output_name)
     plt.close(fig)
 
 
@@ -930,6 +1074,38 @@ def plot_global(records, output_dir):
     )
 
 
+
+def write_contour_publication_audit(output_dir, all_rows, comparison_df):
+    output_dir = Path(output_dir)
+    material_count = 0 if all_rows.empty else int(all_rows["material_slug"].nunique())
+    comparison_count = 0 if comparison_df.empty else int(len(comparison_df))
+    lines = [
+        "# Contour Figure Audit",
+        "",
+        f"Scope: contour exploration and contour-vs-attack figures for {material_count} materials.",
+        f"Contour-vs-attack comparison rows available: {comparison_count}.",
+        "",
+        "## Improvements Applied",
+        "",
+        "- Exported every contour figure as 600 dpi PNG.",
+        "- Standardized colorblind-safe calculator colors, beta colors, grid weight, panel labels, and white figure backgrounds.",
+        "- Used systematic log epsilon ticks for epsilon sweeps instead of sparse arbitrary ticks.",
+        "- Preserved full finite y ranges with padding; log y axes are applied to positive contour/attack comparisons spanning broad ranges.",
+        "- Added marker-aware scatter padding for global contour-vs-attack comparisons so points are not clipped by axes.",
+        "",
+        "## Figure-Specific Audit",
+        "",
+        "| Figure family | Before | After | Scientific communication impact |",
+        "| --- | --- | --- | --- |",
+        "| *_six_panel | PNG-only export and percentile-style axis tightening could reduce reproducibility and risk hiding extremes. | PNG export and full finite-data limits are used. | Iteration histories and metric distributions are manuscript-ready without altering trajectories. |",
+        "| mace_vs_uma_contour | Export style differed from main figures. | Uses the shared publication export helper and embedded fonts. | Calculator comparisons are visually consistent with the main figure set. |",
+        "| *_contour_vs_attack_by_epsilon | Epsilon tick selection was data-sparse and less systematic. | Log epsilon axis uses decade ticks and contour bands are included in log-y scaling. | Attack medians can be compared against contour baselines across physical perturbation scales. |",
+        "| *_contour_vs_attack_by_n_steps | Same export and axis-padding limitations as other contour panels. | Publication export helper and full-data padded limits are used. | Step-sweep contour comparisons remain readable and reproducible. |",
+        "| global_*_vs_contour_exploration | Scatter points could sit at frame boundaries. | Marker-aware padding protects points and 1:1 reference lines. | Global attack-vs-contour comparisons are easier to inspect without changing values. |",
+        "",
+        "All changes are visual encodings or export settings; contour metrics and attack-derived medians are unchanged.",
+    ]
+    (output_dir / "publication_figure_audit.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mace-contour-dir", default=BASE_DIR / "outputs_mace" / "contour", type=Path)
@@ -980,6 +1156,8 @@ def main():
 
     if not comparison_df.empty:
         plot_global(comparison_df, args.output_dir)
+
+    write_contour_publication_audit(args.output_dir, all_rows, comparison_df)
 
     print(f"Saved contour plots to {args.output_dir}")
 

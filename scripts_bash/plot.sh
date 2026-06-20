@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --account=rrg-j3goals
-#SBATCH --time=05:00:00
+#SBATCH --time=04:00:00
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=16
 #SBATCH --output=plot-%j.out
@@ -9,10 +9,6 @@ set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
 
 export PYTHONUNBUFFERED=1
-export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
-export MKL_NUM_THREADS=$SLURM_CPUS_PER_TASK
-export OPENBLAS_NUM_THREADS=$SLURM_CPUS_PER_TASK
-export NUMEXPR_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
 module load gcc/12.3 python/3.11 arrow
 
@@ -41,7 +37,15 @@ for dtype_str in ["float32", "float64"]:
         print(f"Wrote {len(combined)} rows to {output_path}", flush=True)
 PY
 
-for dtype_str in float32 float64; do
+run_dtype_branch() {
+  local dtype_str="$1"
+  local threads="$2"
+
+  export OMP_NUM_THREADS="$threads"
+  export MKL_NUM_THREADS="$threads"
+  export OPENBLAS_NUM_THREADS="$threads"
+  export NUMEXPR_NUM_THREADS="$threads"
+
   python -u scripts_python/run_comprehensive.py \
     --mace-dir "outputs_${dtype_str}/mace" \
     --uma-dir "outputs_${dtype_str}/uma" \
@@ -56,7 +60,21 @@ for dtype_str in float32 float64; do
   else
     echo "No ${dtype_str} contour summaries found; skipping ${dtype_str} contour comparison plots."
   fi
-done
+}
+
+run_dtype_branch float32 8 &
+pid_float32=$!
+
+run_dtype_branch float64 8 &
+pid_float64=$!
+
+wait "$pid_float32"
+wait "$pid_float64"
+
+export OMP_NUM_THREADS=16
+export MKL_NUM_THREADS=16
+export OPENBLAS_NUM_THREADS=16
+export NUMEXPR_NUM_THREADS=16
 
 python -u scripts_python/float_comprehensive.py \
   --float32-dir outputs_comprehensive/float/float32 \
