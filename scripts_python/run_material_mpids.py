@@ -6,8 +6,6 @@ import importlib.util
 import json
 import os
 import re
-import subprocess
-import sys
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
