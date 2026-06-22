@@ -76,14 +76,14 @@ run_dtype_branch() {
   python -u scripts_python/run_comprehensive.py \
     --mace-dir "${trial_name}/outputs_${dtype_str}/mace" \
     --uma-dir "${trial_name}/outputs_${dtype_str}/uma" \
-    --output-dir "${trial_name}/outputs_comprehensive/float/${dtype_str}"
+    --output-dir "${trial_name}/outputs_comprehensive/${dtype_str}"
 
   if [ -f "${trial_name}/outputs_${dtype_str}/mace/contour/summary.csv" ] || [ -f "${trial_name}/outputs_${dtype_str}/uma/contour/summary.csv" ]; then
     python -u scripts_python/contour_comprehensive.py \
       --mace-contour-dir "${trial_name}/outputs_${dtype_str}/mace/contour" \
       --uma-contour-dir "${trial_name}/outputs_${dtype_str}/uma/contour" \
-      --comprehensive-dir "${trial_name}/outputs_comprehensive/float/${dtype_str}" \
-      --output-dir "${trial_name}/outputs_comprehensive/float/${dtype_str}/contour"
+      --comprehensive-dir "${trial_name}/outputs_comprehensive/${dtype_str}" \
+      --output-dir "${trial_name}/outputs_comprehensive/${dtype_str}/contour"
   else
     echo "No ${dtype_str} contour summaries found for ${trial_name}; skipping contour comparison plots."
   fi
@@ -104,9 +104,9 @@ export OPENBLAS_NUM_THREADS=16
 export NUMEXPR_NUM_THREADS=16
 
 python -u scripts_python/float_comprehensive.py \
-  --float32-dir "${TRIAL_NAME}/outputs_comprehensive/float/float32" \
-  --float64-dir "${TRIAL_NAME}/outputs_comprehensive/float/float64" \
-  --output-dir "${TRIAL_NAME}/outputs_comprehensive/float/comparison"
+  --float32-dir "${TRIAL_NAME}/outputs_comprehensive/float32" \
+  --float64-dir "${TRIAL_NAME}/outputs_comprehensive/float64" \
+  --output-dir "${TRIAL_NAME}/outputs_comprehensive/comparison"
 
 deactivate
 

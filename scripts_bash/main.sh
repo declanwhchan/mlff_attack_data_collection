@@ -40,11 +40,11 @@ import os
 task_id = int(os.environ["SLURM_ARRAY_TASK_ID"])
 
 trials = [
-    ("Trial 1 - 42", 42),
-    ("Trial 2 - 43", 43),
-    ("Trial 3 - 44", 44),
-    ("Trial 4 - 45", 45),
-    ("Trial 5 - 46", 46),
+    ("trial1_seed42", 42),
+    ("trial2_seed43", 43),
+    ("trial3_seed44", 44),
+    ("trial4_seed45", 45),
+    ("trial5_seed46", 46),
 ]
 
 with open("generated_material_tests.csv", newline="", encoding="utf-8-sig") as handle:

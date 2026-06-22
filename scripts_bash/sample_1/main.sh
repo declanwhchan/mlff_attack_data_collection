@@ -38,7 +38,7 @@ import csv
 import os
 
 task_id = int(os.environ.get("SLURM_ARRAY_TASK_ID", "1"))
-trial_name = "Trial 1 - 42"
+trial_name = "trial1_seed42"
 seed = 42
 
 with open("generated_material_tests.csv", newline="", encoding="utf-8-sig") as handle:

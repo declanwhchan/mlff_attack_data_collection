@@ -7,7 +7,7 @@ import re
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
-from matplotlib.ticker import MaxNLocator, ScalarFormatter, FuncFormatter
+from matplotlib.ticker import MaxNLocator, ScalarFormatter, FuncFormatter, LogFormatterMathtext
 import numpy as np
 import pandas as pd
 from ase.io import read as read_structure
@@ -73,7 +73,13 @@ def save_figure(fig, output_base):
 
 
 def format_epsilon_label(value):
-    return f"{float(value):g}"
+    value = float(value)
+    if value <= 0 or not np.isfinite(value):
+        return f"{value:g}"
+    power = int(round(np.log10(value)))
+    if np.isclose(value, 10.0 ** power):
+        return rf"$10^{{{power}}}$"
+    return f"{value:g}"
 
 
 def positive_finite_values(values):
@@ -780,10 +786,25 @@ def style_y_axis_no_offset(ax, ybins=5):
     ax.tick_params(axis="y", labelsize=8, pad=2)
 
 
-def style_relaxation_steps_axis(ax):
+def style_relaxation_steps_axis(ax, log_scale=False):
     y_values = clean_numeric_array(_artist_values_for_axis(ax, "y"))
 
     if len(y_values) == 0:
+        return
+    
+    if log_scale:
+        positive = positive_finite_values(y_values)
+        if len(positive) == 0:
+            return
+
+        ax.set_yscale("log")
+        ticks = decade_ticks(positive)
+        if ticks:
+            ax.set_yticks(ticks)
+            ax.yaxis.set_major_formatter(LogFormatterMathtext(base=10))
+
+        ax.set_ylim(float(np.min(positive)) / 1.35, float(np.max(positive)) * 1.35)
+        ax.tick_params(axis="y", labelsize=8, pad=2)
         return
 
     y_max = float(np.nanmax(y_values))
@@ -812,6 +833,29 @@ def apply_displacement_symlog_axis(ax, linthresh=0.05):
     ax.set_xticks(ticks)
     ax.set_xticklabels(["0", "0.01", "0.1", "1", "10"])
     ax.tick_params(axis="x", labelrotation=0, pad=2)
+
+
+def apply_positive_log_axis(ax, axis_name):
+    values = positive_finite_values(_artist_values_for_axis(ax, axis_name))
+    if len(values) == 0:
+        return
+
+    ticks = decade_ticks(values)
+    lower = float(np.min(values)) / 1.35
+    upper = float(np.max(values)) * 1.35
+
+    if axis_name == "x":
+        ax.set_xscale("log")
+        ax.set_xlim(lower, upper)
+        if ticks:
+            ax.set_xticks(ticks)
+            ax.xaxis.set_major_formatter(LogFormatterMathtext(base=10))
+    else:
+        ax.set_yscale("log")
+        ax.set_ylim(lower, upper)
+        if ticks:
+            ax.set_yticks(ticks)
+            ax.yaxis.set_major_formatter(LogFormatterMathtext(base=10))
 
 
 def _artist_values_for_axis(ax, axis_name):
@@ -1115,6 +1159,8 @@ def make_parametric_state_figure(
     attacks_to_plot,
     x_getters,
     y_getters,
+    x_log=False,
+    y_log=False,
 ):
     missing_rows = []
     rows = [
@@ -1170,6 +1216,10 @@ def make_parametric_state_figure(
             ax.xaxis.label.set_fontsize(12)
             ax.yaxis.label.set_fontsize(12)
             style_numeric_axis(ax, xbins=4, ybins=5)
+            if x_log:
+                apply_positive_log_axis(ax, "x")
+            if y_log:
+                apply_positive_log_axis(ax, "y")
 
             if col_index == 0:
                 ax.text(
@@ -1278,6 +1328,7 @@ def make_parametric_figure_set(records, output_dir, suffix, attacks_to_plot, bub
             lambda row: scalar_distribution(row, "after_relax_steps"),
             lambda row: scalar_distribution(row, "after_relax_steps"),
         ],
+        x_log=True,
     )
 
     force_displacement_missing = make_parametric_state_figure(
@@ -1313,6 +1364,8 @@ def make_parametric_figure_set(records, output_dir, suffix, attacks_to_plot, bub
                 "after_forces.csv",
             )),
         ],
+        x_log=True,
+        y_log=True,
     )
 
     return (
@@ -1425,7 +1478,7 @@ def draw_grouped_boxplot(ax, records, attack, value_getter, ylabel, missing_rows
     return True
 
 
-def plot_convergence_panel(ax, records, attack, step_col, conv_col):
+def plot_convergence_panel(ax, records, attack, step_col, conv_col, log_steps=False):
     attack_records = records[records["attack_label"] == attack].copy()
     if attack_records.empty:
         ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
@@ -1458,7 +1511,7 @@ def plot_convergence_panel(ax, records, attack, step_col, conv_col):
     ax._preserve_manual_limits = True
     apply_epsilon_axis(ax, epsilons)
     ax.set_ylabel("Relaxation steps")
-    style_relaxation_steps_axis(ax)
+    style_relaxation_steps_axis(ax, log_scale=log_steps)
     ax.grid(True, axis="y")
     ax.grid(False, axis="x")
     ax.margins(x=0.03)
@@ -1478,7 +1531,14 @@ def make_convergence_figure(records, output_dir):
     for row_index, (step_col, conv_col, row_title) in enumerate(rows):
         for col_index, attack in enumerate(ATTACK_ORDER):
             ax = axes[row_index, col_index]
-            plot_convergence_panel(ax, records, attack, step_col, conv_col)
+            plot_convergence_panel(
+                ax,
+                records,
+                attack,
+                step_col,
+                conv_col,
+                log_steps=(step_col == "after_relax_steps"),
+            )
 
             if row_index == 0:
                 ax.set_title(attack)

@@ -52,23 +52,23 @@ for dtype_str in float32 float64; do
   python -u scripts_python/run_comprehensive.py \
     --mace-dir "${TRIAL_NAME}/outputs_${dtype_str}/mace" \
     --uma-dir "${TRIAL_NAME}/outputs_${dtype_str}/uma" \
-    --output-dir "${TRIAL_NAME}/outputs_comprehensive/float/${dtype_str}"
+    --output-dir "${TRIAL_NAME}/outputs_comprehensive/${dtype_str}"
 
   if [ -f "${TRIAL_NAME}/outputs_${dtype_str}/mace/contour/summary.csv" ] || [ -f "${TRIAL_NAME}/outputs_${dtype_str}/uma/contour/summary.csv" ]; then
     python -u scripts_python/contour_comprehensive.py \
       --mace-contour-dir "${TRIAL_NAME}/outputs_${dtype_str}/mace/contour" \
       --uma-contour-dir "${TRIAL_NAME}/outputs_${dtype_str}/uma/contour" \
-      --comprehensive-dir "${TRIAL_NAME}/outputs_comprehensive/float/${dtype_str}" \
-      --output-dir "${TRIAL_NAME}/outputs_comprehensive/float/${dtype_str}/contour"
+      --comprehensive-dir "${TRIAL_NAME}/outputs_comprehensive/${dtype_str}" \
+      --output-dir "${TRIAL_NAME}/outputs_comprehensive/${dtype_str}/contour"
   else
     echo "No ${dtype_str} contour summaries found; skipping ${dtype_str} contour plots."
   fi
 done
 
 python -u scripts_python/float_comprehensive.py \
-  --float32-dir "${TRIAL_NAME}/outputs_comprehensive/float/float32" \
-  --float64-dir "${TRIAL_NAME}/outputs_comprehensive/float/float64" \
-  --output-dir "${TRIAL_NAME}/outputs_comprehensive/float/comparison"
+  --float32-dir "${TRIAL_NAME}/outputs_comprehensive/float32" \
+  --float64-dir "${TRIAL_NAME}/outputs_comprehensive/float64" \
+  --output-dir "${TRIAL_NAME}/outputs_comprehensive/comparison"
 
 deactivate
 
