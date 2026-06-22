@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --account=rrg-j3goals
 #SBATCH --time=00:30:00
-#SBATCH --mem=8G
+#SBATCH --mem=16G
 #SBATCH --cpus-per-task=2
 #SBATCH --output=sample-1-setup-%j.out
 

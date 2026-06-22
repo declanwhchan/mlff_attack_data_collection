@@ -4,7 +4,7 @@
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=4
 #SBATCH --array=1-4
-#SBATCH --output=sample-1-contour-%j.out
+#SBATCH --output=sample-1-contour-%A_%a.out
 
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
@@ -37,6 +37,9 @@ source ~/project/.venv-mace/bin/activate
 mapfile -t CONTOUR_JOBS < <(env -u SLURM_ARRAY_TASK_ID python -u scripts_python/contour.py --tests generated_material_tests.csv --config test_1.json --list-jobs)
 deactivate
 
+TRIAL_NAME="Trial 1 - 42"
+MLFF_SEED=42
+
 JOB_COUNT="${#CONTOUR_JOBS[@]}"
 TOTAL_COUNT=$((JOB_COUNT * 2))
 TASK_INDEX=$((SLURM_ARRAY_TASK_ID - 1))
@@ -60,11 +63,15 @@ else
   JOB_INDEX=$((TASK_INDEX - JOB_COUNT))
 fi
 export MLFF_DTYPE
+export MLFF_SEED
+export MLFF_OUTPUT_ROOT="$TRIAL_NAME"
 
 JOB_LINE="${CONTOUR_JOBS[$JOB_INDEX]}"
 IFS=',' read -r JOB_NUMBER CALCULATOR MATERIAL_SLUG INPUT_PATH <<< "$JOB_LINE"
 
+echo "Selected trial: $TRIAL_NAME"
 echo "Selected dtype: $MLFF_DTYPE"
+echo "Selected seed: $MLFF_SEED"
 echo "Selected contour material: $MATERIAL_SLUG"
 echo "Calculator: $CALCULATOR"
 
@@ -87,7 +94,8 @@ python -u scripts_python/contour.py \
   --config test_1.json \
   --calculator "$CALCULATOR" \
   --material-slug "$MATERIAL_SLUG" \
-  --dtype-str "$MLFF_DTYPE"
+  --dtype-str "$MLFF_DTYPE" \
+  --seed "$MLFF_SEED"
 
 deactivate
 

@@ -3,7 +3,7 @@
 #SBATCH --time=00:30:00
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=4
-#SBATCH --output=sample-1-plot-%j.out
+#SBATCH --output=sample-1-plot-%A_%a.out
 
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
@@ -16,13 +16,21 @@ export NUMEXPR_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
 module load gcc/12.3 python/3.11 arrow
 
+TRIAL_NAME="Trial 1 - 42"
+
+if [ ! -d "$TRIAL_NAME" ]; then
+  echo "ERROR: missing trial directory: $TRIAL_NAME"
+  exit 1
+fi
+
 source ~/project/.venv-mace/bin/activate
 
-python -u - <<'PY'
+python -u - <<PY
 from pathlib import Path
 import pandas as pd
 
-summary_dir = Path("array_summaries")
+trial = Path("$TRIAL_NAME")
+summary_dir = trial / "array_summaries"
 
 for dtype_str in ["float32", "float64"]:
     for calculator in ["mace", "uma"]:
@@ -32,7 +40,7 @@ for dtype_str in ["float32", "float64"]:
 
         combined = pd.concat([pd.read_csv(path) for path in files], ignore_index=True)
 
-        output_dir = Path(f"outputs_{dtype_str}") / calculator
+        output_dir = trial / f"outputs_{dtype_str}" / calculator
         output_dir.mkdir(parents=True, exist_ok=True)
 
         output_path = output_dir / "summary.csv"
@@ -42,25 +50,25 @@ PY
 
 for dtype_str in float32 float64; do
   python -u scripts_python/run_comprehensive.py \
-    --mace-dir "outputs_${dtype_str}/mace" \
-    --uma-dir "outputs_${dtype_str}/uma" \
-    --output-dir "outputs_comprehensive/float/${dtype_str}"
+    --mace-dir "${TRIAL_NAME}/outputs_${dtype_str}/mace" \
+    --uma-dir "${TRIAL_NAME}/outputs_${dtype_str}/uma" \
+    --output-dir "${TRIAL_NAME}/outputs_comprehensive/float/${dtype_str}"
 
-  if [ -f "outputs_${dtype_str}/mace/contour/summary.csv" ] || [ -f "outputs_${dtype_str}/uma/contour/summary.csv" ]; then
+  if [ -f "${TRIAL_NAME}/outputs_${dtype_str}/mace/contour/summary.csv" ] || [ -f "${TRIAL_NAME}/outputs_${dtype_str}/uma/contour/summary.csv" ]; then
     python -u scripts_python/contour_comprehensive.py \
-      --mace-contour-dir "outputs_${dtype_str}/mace/contour" \
-      --uma-contour-dir "outputs_${dtype_str}/uma/contour" \
-      --comprehensive-dir "outputs_comprehensive/float/${dtype_str}" \
-      --output-dir "outputs_comprehensive/float/${dtype_str}/contour"
+      --mace-contour-dir "${TRIAL_NAME}/outputs_${dtype_str}/mace/contour" \
+      --uma-contour-dir "${TRIAL_NAME}/outputs_${dtype_str}/uma/contour" \
+      --comprehensive-dir "${TRIAL_NAME}/outputs_comprehensive/float/${dtype_str}" \
+      --output-dir "${TRIAL_NAME}/outputs_comprehensive/float/${dtype_str}/contour"
   else
     echo "No ${dtype_str} contour summaries found; skipping ${dtype_str} contour plots."
   fi
 done
 
 python -u scripts_python/float_comprehensive.py \
-  --float32-dir outputs_comprehensive/float/float32 \
-  --float64-dir outputs_comprehensive/float/float64 \
-  --output-dir outputs_comprehensive/float/comparison
+  --float32-dir "${TRIAL_NAME}/outputs_comprehensive/float/float32" \
+  --float64-dir "${TRIAL_NAME}/outputs_comprehensive/float/float64" \
+  --output-dir "${TRIAL_NAME}/outputs_comprehensive/float/comparison"
 
 deactivate
 

@@ -33,8 +33,6 @@ if [ ! -f generated_material_tests.csv ]; then
   exit 1
 fi
 
-mkdir -p "$TRIAL_NAME/material_tests" "$TRIAL_NAME/array_summaries"
-
 TASK_INFO=$(python -u - <<'PY'
 import csv
 import os

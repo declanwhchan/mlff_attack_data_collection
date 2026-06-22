@@ -4,7 +4,7 @@
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=4
 #SBATCH --array=1-4
-#SBATCH --output=sample-1-main-%j.out
+#SBATCH --output=sample-1-main-%A_%a.out
 
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
@@ -33,13 +33,13 @@ if [ ! -f generated_material_tests.csv ]; then
   exit 1
 fi
 
-mkdir -p material_tests array_summaries
-
 TASK_INFO=$(python -u - <<'PY'
 import csv
 import os
 
 task_id = int(os.environ.get("SLURM_ARRAY_TASK_ID", "1"))
+trial_name = "Trial 1 - 42"
+seed = 42
 
 with open("generated_material_tests.csv", newline="", encoding="utf-8-sig") as handle:
     rows = list(csv.DictReader(handle))
@@ -66,16 +66,25 @@ within_dtype = index % (n_materials * len(calculators))
 calculator = calculators[within_dtype // n_materials]
 material_slug = materials[within_dtype % n_materials]
 
-print(f"{dtype_str} {calculator} {material_slug}")
+print(f"{dtype_str}|{calculator}|{material_slug}|{seed}|{trial_name}")
 PY
 )
 
-MLFF_DTYPE=$(echo "$TASK_INFO" | awk '{print $1}')
-CALCULATOR=$(echo "$TASK_INFO" | awk '{print $2}')
-MATERIAL_SLUG=$(echo "$TASK_INFO" | awk '{print $3}')
-export MLFF_DTYPE
+MLFF_DTYPE=$(echo "$TASK_INFO" | cut -d'|' -f1)
+CALCULATOR=$(echo "$TASK_INFO" | cut -d'|' -f2)
+MATERIAL_SLUG=$(echo "$TASK_INFO" | cut -d'|' -f3)
+MLFF_SEED=$(echo "$TASK_INFO" | cut -d'|' -f4)
+TRIAL_NAME=$(echo "$TASK_INFO" | cut -d'|' -f5-)
 
+export MLFF_DTYPE
+export MLFF_SEED
+export MLFF_OUTPUT_ROOT="$TRIAL_NAME"
+
+mkdir -p "$TRIAL_NAME/material_tests" "$TRIAL_NAME/array_summaries"
+
+echo "Selected trial: $TRIAL_NAME"
 echo "Selected dtype: $MLFF_DTYPE"
+echo "Selected seed: $MLFF_SEED"
 echo "Selected material: $MATERIAL_SLUG"
 echo "Calculator: $CALCULATOR"
 
@@ -97,11 +106,13 @@ which python
 
 python -u - <<PY
 import csv
+import os
 from pathlib import Path
 
 material_slug = "$MATERIAL_SLUG"
 calculator = "$CALCULATOR"
 dtype_str = "$MLFF_DTYPE"
+trial_name = os.environ["MLFF_OUTPUT_ROOT"]
 
 with open("generated_material_tests.csv", newline="", encoding="utf-8-sig") as handle:
     rows = list(csv.DictReader(handle))
@@ -120,7 +131,7 @@ fieldnames = list(rows[0].keys())
 if "dtype_str" not in fieldnames:
     fieldnames.append("dtype_str")
 
-output_dir = Path("material_tests") / dtype_str
+output_dir = Path(trial_name) / "material_tests" / dtype_str
 output_dir.mkdir(parents=True, exist_ok=True)
 
 output = output_dir / f"{calculator}_{material_slug}.csv"
@@ -134,8 +145,8 @@ PY
 
 echo "Running $MLFF_DTYPE $CALCULATOR for $MATERIAL_SLUG"
 
-SUMMARY_FILE="array_summaries/${MLFF_DTYPE}_${CALCULATOR}_${MATERIAL_SLUG}_summary.csv" \
-  python -u scripts_python/run_tests.py --tests "material_tests/${MLFF_DTYPE}/${CALCULATOR}_${MATERIAL_SLUG}.csv"
+SUMMARY_FILE="${TRIAL_NAME}/array_summaries/${MLFF_DTYPE}_${CALCULATOR}_${MATERIAL_SLUG}_summary.csv" \
+  python -u scripts_python/run_tests.py --tests "${TRIAL_NAME}/material_tests/${MLFF_DTYPE}/${CALCULATOR}_${MATERIAL_SLUG}.csv"
 
 deactivate
 

@@ -1,2 +1,2 @@
-category,material_label,formula,mpid,phase_hint,prompt_atoms_cell,notes
-framework_cage,beta_cristobalite_sio2,SiO2,mp-546794,high beta cristobalite tetragonal I-42d,12,Short smoke-test material
+category,material_label,formula,mpid,phase_hint,prompt_atoms_cell
+layered_vdw,graphite,C,mp-48,layered graphite,4,

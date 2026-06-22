@@ -1,5 +1,5 @@
-category,material_label,formula,mpid,phase_hint,prompt_atoms_cell,notes
-framework_cage,beta_cristobalite_sio2,SiO2,mp-546794,high beta cristobalite tetragonal I-42d,12,Chosen over cubic mp-8352 to match 12 atom prompt cell
+category,material_label,formula,mpid,phase_hint,prompt_atoms_cell
+framework_cage,beta_cristobalite_sio2,SiO2,mp-546794,high beta cristobalite tetragonal I-42d,12,
 framework_cage,beta_quartz_sio2,SiO2,mp-6922,beta quartz hexagonal P6_222,9,
 framework_cage,berlinite_alpo4,AlPO4,mp-3955,berlinite alpha-quartz analogue P3_221,12,
 framework_cage,zn_cn2,Zn(CN)2,mp-5245,zinc cyanide,10,
