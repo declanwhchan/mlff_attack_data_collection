@@ -7,7 +7,7 @@ import re
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
-from matplotlib.ticker import MaxNLocator, ScalarFormatter, FuncFormatter, LogFormatterMathtext
+from matplotlib.ticker import MaxNLocator, ScalarFormatter, FuncFormatter, FixedLocator, NullLocator
 import numpy as np
 import pandas as pd
 from ase.io import read as read_structure
@@ -72,14 +72,22 @@ def save_figure(fig, output_base):
     fig.savefig(output_base.with_suffix(".png"), dpi=600, bbox_inches="tight")
 
 
-def format_epsilon_label(value):
+def format_power_tick(value):
     value = float(value)
     if value <= 0 or not np.isfinite(value):
-        return f"{value:g}"
+        return ""
+
     power = int(round(np.log10(value)))
-    if np.isclose(value, 10.0 ** power):
-        return rf"$10^{{{power}}}$"
-    return f"{value:g}"
+    decade = 10.0 ** power
+
+    if not np.isclose(value, decade, rtol=1e-8, atol=0.0):
+        return ""
+
+    if power >= 0:
+        return f"{decade:g}"
+
+    decimals = abs(power)
+    return f"{decade:.{decimals}f}"
 
 
 def positive_finite_values(values):
@@ -96,6 +104,13 @@ def decade_ticks(values):
     max_power = int(np.ceil(np.log10(np.max(values))))
 
     return [10.0 ** power for power in range(min_power, max_power + 1)]
+
+
+def apply_decade_ticks(axis, values):
+    ticks = decade_ticks(values)
+    axis.set_major_locator(FixedLocator(ticks))
+    axis.set_minor_locator(NullLocator())
+    axis.set_major_formatter(FuncFormatter(lambda value, _: format_power_tick(value)))
 
 
 def epsilon_plot_position(epsilon, calculator=None):
@@ -123,8 +138,7 @@ def apply_epsilon_axis(ax, epsilons, plotted_positions=None):
         limit_values.extend(positive_finite_values(plotted_positions).tolist())
 
     if ticks:
-        ax.set_xticks(ticks)
-        ax.set_xticklabels([format_epsilon_label(tick) for tick in ticks])
+        apply_decade_ticks(ax.xaxis, epsilons)
 
         finite_limits = positive_finite_values(limit_values)
         if len(finite_limits):
@@ -173,8 +187,7 @@ def apply_step_axis(ax, steps, plotted_positions=None):
         limit_values.extend(positive_finite_values(plotted_positions).tolist())
 
     if ticks:
-        ax.set_xticks(ticks)
-        ax.set_xticklabels([format_epsilon_label(tick) for tick in ticks])
+        apply_decade_ticks(ax.xaxis, steps)
 
         finite_limits = positive_finite_values(limit_values)
         if len(finite_limits):
@@ -800,8 +813,7 @@ def style_relaxation_steps_axis(ax, log_scale=False):
         ax.set_yscale("log")
         ticks = decade_ticks(positive)
         if ticks:
-            ax.set_yticks(ticks)
-            ax.yaxis.set_major_formatter(LogFormatterMathtext(base=10))
+            apply_decade_ticks(ax.yaxis, positive)
 
         ax.set_ylim(float(np.min(positive)) / 1.35, float(np.max(positive)) * 1.35)
         ax.tick_params(axis="y", labelsize=8, pad=2)
@@ -848,14 +860,12 @@ def apply_positive_log_axis(ax, axis_name):
         ax.set_xscale("log")
         ax.set_xlim(lower, upper)
         if ticks:
-            ax.set_xticks(ticks)
-            ax.xaxis.set_major_formatter(LogFormatterMathtext(base=10))
+            apply_decade_ticks(ax.xaxis, values)
     else:
         ax.set_yscale("log")
         ax.set_ylim(lower, upper)
         if ticks:
-            ax.set_yticks(ticks)
-            ax.yaxis.set_major_formatter(LogFormatterMathtext(base=10))
+            apply_decade_ticks(ax.yaxis, values)
 
 
 def _artist_values_for_axis(ax, axis_name):

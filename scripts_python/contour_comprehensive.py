@@ -102,6 +102,28 @@ def positive_finite_values(values):
     return values[np.isfinite(values) & (values > 0)]
 
 
+def format_power_tick(value):
+    value = float(value)
+
+    if value == 0:
+        return "0"
+
+    if value < 0 or not np.isfinite(value):
+        return ""
+
+    power = int(round(np.log10(value)))
+    decade = 10.0 ** power
+
+    if not np.isclose(value, decade, rtol=1e-8, atol=0.0):
+        return ""
+
+    if power >= 0:
+        return f"{decade:g}"
+
+    decimals = abs(power)
+    return f"{decade:.{decimals}f}"
+
+
 def decade_ticks(values):
     values = positive_finite_values(values)
     if len(values) == 0:
@@ -156,7 +178,7 @@ def apply_log_decade_axis(ax, axis_name, values, label=None):
         set_lim(low, high)
 
     set_ticks(ticks)
-    set_ticklabels([f"{tick:g}" for tick in ticks])
+    set_ticklabels([format_power_tick(tick) for tick in ticks])
 
     if label is not None:
         set_label(label)
