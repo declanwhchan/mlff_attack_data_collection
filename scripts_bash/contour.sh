@@ -2,8 +2,8 @@
 #SBATCH --account=rrg-j3goals
 #SBATCH --time=10:00:00
 #SBATCH --mem=16G
-#SBATCH --cpus-per-task=4
-#SBATCH --array=1-80%20
+#SBATCH --cpus-per-task=8
+#SBATCH --array=1-400%40
 #SBATCH --output=contour-%A_%a.out
 
 set -euo pipefail
@@ -37,8 +37,12 @@ source ~/project/.venv-mace/bin/activate
 mapfile -t CONTOUR_JOBS < <(env -u SLURM_ARRAY_TASK_ID python -u scripts_python/contour.py --list-jobs)
 deactivate
 
+TRIAL_NAMES=("Trial 1 - 42" "Trial 2 - 43" "Trial 3 - 44" "Trial 4 - 45" "Trial 5 - 46")
+TRIAL_SEEDS=(42 43 44 45 46)
+
 JOB_COUNT="${#CONTOUR_JOBS[@]}"
-TOTAL_COUNT=$((JOB_COUNT * 2))
+TASKS_PER_TRIAL=$((JOB_COUNT * 2))
+TOTAL_COUNT=$((${#TRIAL_NAMES[@]} * TASKS_PER_TRIAL))
 TASK_INDEX=$((SLURM_ARRAY_TASK_ID - 1))
 
 if [ "$JOB_COUNT" -eq 0 ]; then
@@ -52,14 +56,23 @@ if [ "$TASK_INDEX" -lt 0 ] || [ "$TASK_INDEX" -ge "$TOTAL_COUNT" ]; then
   exit 1
 fi
 
-if [ "$TASK_INDEX" -lt "$JOB_COUNT" ]; then
+TRIAL_INDEX=$((TASK_INDEX / TASKS_PER_TRIAL))
+WITHIN_TRIAL=$((TASK_INDEX % TASKS_PER_TRIAL))
+
+TRIAL_NAME="${TRIAL_NAMES[$TRIAL_INDEX]}"
+MLFF_SEED="${TRIAL_SEEDS[$TRIAL_INDEX]}"
+
+if [ "$WITHIN_TRIAL" -lt "$JOB_COUNT" ]; then
   MLFF_DTYPE="float32"
-  JOB_INDEX="$TASK_INDEX"
+  JOB_INDEX="$WITHIN_TRIAL"
 else
   MLFF_DTYPE="float64"
-  JOB_INDEX=$((TASK_INDEX - JOB_COUNT))
+  JOB_INDEX=$((WITHIN_TRIAL - JOB_COUNT))
 fi
+
 export MLFF_DTYPE
+export MLFF_SEED
+export MLFF_OUTPUT_ROOT="$TRIAL_NAME"
 
 JOB_LINE="${CONTOUR_JOBS[$JOB_INDEX]}"
 IFS=',' read -r JOB_NUMBER CALCULATOR MATERIAL_SLUG INPUT_PATH <<< "$JOB_LINE"
@@ -69,7 +82,9 @@ if [ -z "${CALCULATOR:-}" ] || [ -z "${MATERIAL_SLUG:-}" ]; then
   exit 1
 fi
 
+echo "Selected trial: $TRIAL_NAME"
 echo "Selected dtype: $MLFF_DTYPE"
+echo "Selected seed: $MLFF_SEED"
 echo "Selected contour material: $MATERIAL_SLUG"
 echo "Calculator: $CALCULATOR"
 echo "Input path: ${INPUT_PATH:-}"
@@ -94,7 +109,8 @@ which python
 python -u scripts_python/contour.py \
   --calculator "$CALCULATOR" \
   --material-slug "$MATERIAL_SLUG" \
-  --dtype-str "$MLFF_DTYPE"
+  --dtype-str "$MLFF_DTYPE" \
+  --seed "$MLFF_SEED"
 
 deactivate
 

@@ -19,6 +19,13 @@ from mlff_attack.relaxation import setup_calculator
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+def output_root():
+    root = os.environ.get("MLFF_OUTPUT_ROOT")
+    if root:
+        return BASE_DIR / root
+    return BASE_DIR
+
+
 def clean(value):
     if value is None:
         return ""
@@ -111,7 +118,7 @@ def select_jobs(jobs, calculator=None, material_slug=None):
     return selected
 
 
-def setup_job_calculator(atoms, job, dtype_str):
+def setup_job_calculator(atoms, job, dtype_str, seed=None):
     calculator = job["calculator"]
     model_path = BASE_DIR / job["model_path"] if calculator == "mace" else Path(job["model_path"]).stem
 
@@ -120,6 +127,7 @@ def setup_job_calculator(atoms, job, dtype_str):
         model_path,
         device=job["device"],
         dtype_str=dtype_str,
+        seed=seed,
         calculator=calculator,
         mace_head=job["mace_head"] or None,
         uma_task=job["uma_task"] or None,
@@ -215,17 +223,17 @@ def run_contour(job, beta, config, args):
     calculator = job["calculator"]
     material_slug = job["material_slug"]
     dtype_str = args.dtype_str
-    outdir = BASE_DIR / f"outputs_{dtype_str}" / calculator / "contour" / material_slug / beta_tag(beta)
+    seed = as_int(args.seed, as_int(config.get("contour_seed"), 12345))
+    outdir = output_root() / f"outputs_{dtype_str}" / calculator / "contour" / material_slug / beta_tag(beta)
     outdir.mkdir(parents=True, exist_ok=True)
 
     atoms = read(BASE_DIR / job["input_path"])
-    atoms = setup_job_calculator(atoms, job, dtype_str)
+    atoms = setup_job_calculator(atoms, job, dtype_str, seed=seed)
 
     pre_relax_fmax = as_float(config.get("contour_pre_relax_fmax"), None)
     pre_relax_steps = as_int(config.get("contour_pre_relax_max_steps"), 0)
     atoms = relax_if_requested(atoms, pre_relax_fmax, pre_relax_steps)
 
-    seed = as_int(args.seed, as_int(config.get("contour_seed"), 12345))
     initial_velocities(atoms, seed + int(round(beta * 1000)))
 
     energy_target = as_float(args.energy_target, as_float(config.get("contour_energy_target"), None))
@@ -316,7 +324,7 @@ def run_contour(job, beta, config, args):
 
 
 def append_summary(dtype_str, calculator, rows):
-    summary_path = BASE_DIR / f"outputs_{dtype_str}" / calculator / "contour" / "summary.csv"
+    summary_path = output_root() / f"outputs_{dtype_str}" / calculator / "contour" / "summary.csv"
     summary_path.parent.mkdir(parents=True, exist_ok=True)
 
     existing = pd.read_csv(summary_path) if summary_path.exists() else pd.DataFrame()

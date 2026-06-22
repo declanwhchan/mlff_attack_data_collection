@@ -3,7 +3,8 @@
 #SBATCH --time=04:00:00
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=16
-#SBATCH --output=plot-%j.out
+#SBATCH --array=1-5%5
+#SBATCH --output=plot-%A_%a.out
 
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
@@ -12,13 +13,38 @@ export PYTHONUNBUFFERED=1
 
 module load gcc/12.3 python/3.11 arrow
 
+TRIALS=(
+  "Trial 1 - 42"
+  "Trial 2 - 43"
+  "Trial 3 - 44"
+  "Trial 4 - 45"
+  "Trial 5 - 46"
+)
+
+TASK_INDEX=$((SLURM_ARRAY_TASK_ID - 1))
+
+if [ "$TASK_INDEX" -lt 0 ] || [ "$TASK_INDEX" -ge "${#TRIALS[@]}" ]; then
+  echo "ERROR: SLURM_ARRAY_TASK_ID must be 1..${#TRIALS[@]}, got $SLURM_ARRAY_TASK_ID"
+  exit 1
+fi
+
+TRIAL_NAME="${TRIALS[$TASK_INDEX]}"
+
+echo "Plotting $TRIAL_NAME"
+
+if [ ! -d "$TRIAL_NAME" ]; then
+  echo "ERROR: missing trial directory: $TRIAL_NAME"
+  exit 1
+fi
+
 source ~/project/.venv-mace/bin/activate
 
-python -u - <<'PY'
+python -u - <<PY
 from pathlib import Path
 import pandas as pd
 
-summary_dir = Path("array_summaries")
+trial = Path("$TRIAL_NAME")
+summary_dir = trial / "array_summaries"
 
 for dtype_str in ["float32", "float64"]:
     for calculator in ["mace", "uma"]:
@@ -29,7 +55,7 @@ for dtype_str in ["float32", "float64"]:
 
         combined = pd.concat([pd.read_csv(path) for path in files], ignore_index=True)
 
-        output_dir = Path(f"outputs_{dtype_str}") / calculator
+        output_dir = trial / f"outputs_{dtype_str}" / calculator
         output_dir.mkdir(parents=True, exist_ok=True)
 
         output_path = output_dir / "summary.csv"
@@ -38,8 +64,9 @@ for dtype_str in ["float32", "float64"]:
 PY
 
 run_dtype_branch() {
-  local dtype_str="$1"
-  local threads="$2"
+  local trial_name="$1"
+  local dtype_str="$2"
+  local threads="$3"
 
   export OMP_NUM_THREADS="$threads"
   export MKL_NUM_THREADS="$threads"
@@ -47,25 +74,25 @@ run_dtype_branch() {
   export NUMEXPR_NUM_THREADS="$threads"
 
   python -u scripts_python/run_comprehensive.py \
-    --mace-dir "outputs_${dtype_str}/mace" \
-    --uma-dir "outputs_${dtype_str}/uma" \
-    --output-dir "outputs_comprehensive/float/${dtype_str}"
+    --mace-dir "${trial_name}/outputs_${dtype_str}/mace" \
+    --uma-dir "${trial_name}/outputs_${dtype_str}/uma" \
+    --output-dir "${trial_name}/outputs_comprehensive/float/${dtype_str}"
 
-  if [ -f "outputs_${dtype_str}/mace/contour/summary.csv" ] || [ -f "outputs_${dtype_str}/uma/contour/summary.csv" ]; then
+  if [ -f "${trial_name}/outputs_${dtype_str}/mace/contour/summary.csv" ] || [ -f "${trial_name}/outputs_${dtype_str}/uma/contour/summary.csv" ]; then
     python -u scripts_python/contour_comprehensive.py \
-      --mace-contour-dir "outputs_${dtype_str}/mace/contour" \
-      --uma-contour-dir "outputs_${dtype_str}/uma/contour" \
-      --comprehensive-dir "outputs_comprehensive/float/${dtype_str}" \
-      --output-dir "outputs_comprehensive/float/${dtype_str}/contour"
+      --mace-contour-dir "${trial_name}/outputs_${dtype_str}/mace/contour" \
+      --uma-contour-dir "${trial_name}/outputs_${dtype_str}/uma/contour" \
+      --comprehensive-dir "${trial_name}/outputs_comprehensive/float/${dtype_str}" \
+      --output-dir "${trial_name}/outputs_comprehensive/float/${dtype_str}/contour"
   else
-    echo "No ${dtype_str} contour summaries found; skipping ${dtype_str} contour comparison plots."
+    echo "No ${dtype_str} contour summaries found for ${trial_name}; skipping contour comparison plots."
   fi
 }
 
-run_dtype_branch float32 8 &
+run_dtype_branch "$TRIAL_NAME" float32 8 &
 pid_float32=$!
 
-run_dtype_branch float64 8 &
+run_dtype_branch "$TRIAL_NAME" float64 8 &
 pid_float64=$!
 
 wait "$pid_float32"
@@ -77,10 +104,10 @@ export OPENBLAS_NUM_THREADS=16
 export NUMEXPR_NUM_THREADS=16
 
 python -u scripts_python/float_comprehensive.py \
-  --float32-dir outputs_comprehensive/float/float32 \
-  --float64-dir outputs_comprehensive/float/float64 \
-  --output-dir outputs_comprehensive/float/comparison
+  --float32-dir "${TRIAL_NAME}/outputs_comprehensive/float/float32" \
+  --float64-dir "${TRIAL_NAME}/outputs_comprehensive/float/float64" \
+  --output-dir "${TRIAL_NAME}/outputs_comprehensive/float/comparison"
 
 deactivate
 
-echo "Plotting complete."
+echo "Plotting complete for $TRIAL_NAME"

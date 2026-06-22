@@ -54,14 +54,29 @@ def infer_calculator(model_path):
     )
 
 
+def output_root():
+    root = os.environ.get("MLFF_OUTPUT_ROOT")
+    if root:
+        return BASE_DIR / root
+    return BASE_DIR
+
+
+def run_seed_for(row):
+    if "seed" in row:
+        seed = as_int_or_none(row["seed"])
+        if seed is not None:
+            return seed
+    return int(os.environ.get("MLFF_SEED", "42"))
+
+
 def output_base_for(calculator, dtype_str):
     calculator = str(calculator).strip().lower()
 
     if calculator == "mace":
-        return BASE_DIR / f"outputs_{dtype_str}" / "mace"
+        return output_root() / f"outputs_{dtype_str}" / "mace"
 
     if calculator == "uma":
-        return BASE_DIR / f"outputs_{dtype_str}" / "uma"
+        return output_root() / f"outputs_{dtype_str}" / "uma"
 
     raise RuntimeError(f"Unknown calculator for output folder: {calculator}")
 
@@ -429,6 +444,7 @@ def run_one(row):
 
     run_id = str(row["run_id"])
     dtype_str = dtype_for_row(row)
+    run_seed = run_seed_for(row)
     calculator = infer_calculator(row["model_path"])
     material_slug = summary_text(row, "material_slug")
     if material_slug is None:
@@ -474,6 +490,7 @@ def run_one(row):
         model_path,
         device=row["device"],
         dtype_str=dtype_str,
+        seed=run_seed,
         calculator=calculator,
         mace_head=as_none(row["mace_head"]),
         uma_task=as_none(row["uma_task"]),
@@ -501,6 +518,7 @@ def run_one(row):
         model_path=model_path,
         device=row["device"],
         dtype_str=dtype_str,
+        seed=run_seed,
         output_cif=output_cif,
         attack_type=str(row["attack_type"]).lower(),
         epsilon=float(row["epsilon"]),
@@ -600,6 +618,7 @@ def run_one(row):
         "model_path": row["model_path"],
         "calculator": calculator,
         "dtype_str": dtype_str,
+        "seed": run_seed,
         "attack_type": row["attack_type"],
         "epsilon": float(row["epsilon"]),
         "n_steps": int(row["n_steps"]),
@@ -652,14 +671,16 @@ def main(test_file=TEST_FILE):
     summaries = []
 
     summary_override = os.environ.get("SUMMARY_FILE")
+    output_root_dir = output_root()
+
     if summary_override:
         summary_file = Path(summary_override)
     elif current_env == "mace":
-        summary_file = outputs_mace_DIR / "summary.csv"
+        summary_file = output_root_dir / "outputs_mace" / "summary.csv"
     elif current_env == "uma":
-        summary_file = outputs_uma_DIR / "summary.csv"
+        summary_file = output_root_dir / "outputs_uma" / "summary.csv"
     else:
-        summary_file = BASE_DIR / "summary.csv"
+        summary_file = output_root_dir / "summary.csv"
 
     summary_file.parent.mkdir(parents=True, exist_ok=True)
 

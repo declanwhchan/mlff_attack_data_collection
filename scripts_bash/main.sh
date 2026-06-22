@@ -2,8 +2,8 @@
 #SBATCH --account=rrg-j3goals
 #SBATCH --time=48:00:00
 #SBATCH --mem=16G
-#SBATCH --cpus-per-task=4
-#SBATCH --array=1-80%20
+#SBATCH --cpus-per-task=8
+#SBATCH --array=1-400%40
 #SBATCH --output=main-%A_%a.out
 
 set -euo pipefail
@@ -33,13 +33,21 @@ if [ ! -f generated_material_tests.csv ]; then
   exit 1
 fi
 
-mkdir -p material_tests array_summaries
+mkdir -p "$TRIAL_NAME/material_tests" "$TRIAL_NAME/array_summaries"
 
 TASK_INFO=$(python -u - <<'PY'
 import csv
 import os
 
 task_id = int(os.environ["SLURM_ARRAY_TASK_ID"])
+
+trials = [
+    ("Trial 1 - 42", 42),
+    ("Trial 2 - 43", 43),
+    ("Trial 3 - 44", 44),
+    ("Trial 4 - 45", 45),
+    ("Trial 5 - 46", 46),
+]
 
 with open("generated_material_tests.csv", newline="", encoding="utf-8-sig") as handle:
     rows = list(csv.DictReader(handle))
@@ -56,27 +64,42 @@ for row in rows:
 n_materials = len(materials)
 dtypes = ["float32", "float64"]
 calculators = ["mace", "uma"]
-max_task_id = n_materials * len(calculators) * len(dtypes)
+
+tasks_per_trial = n_materials * len(calculators) * len(dtypes)
+max_task_id = len(trials) * tasks_per_trial
 
 if task_id < 1 or task_id > max_task_id:
     raise SystemExit(f"ERROR: SLURM_ARRAY_TASK_ID must be 1..{max_task_id}, got {task_id}")
 
 index = task_id - 1
-dtype_str = dtypes[index // (n_materials * len(calculators))]
-within_dtype = index % (n_materials * len(calculators))
+trial_index = index // tasks_per_trial
+within_trial = index % tasks_per_trial
+
+trial_name, seed = trials[trial_index]
+dtype_str = dtypes[within_trial // (n_materials * len(calculators))]
+within_dtype = within_trial % (n_materials * len(calculators))
 calculator = calculators[within_dtype // n_materials]
 material_slug = materials[within_dtype % n_materials]
 
-print(f"{dtype_str} {calculator} {material_slug}")
+print(f"{dtype_str} {calculator} {material_slug} {seed} {trial_name}")
 PY
 )
 
 MLFF_DTYPE=$(echo "$TASK_INFO" | awk '{print $1}')
 CALCULATOR=$(echo "$TASK_INFO" | awk '{print $2}')
 MATERIAL_SLUG=$(echo "$TASK_INFO" | awk '{print $3}')
-export MLFF_DTYPE
+MLFF_SEED=$(echo "$TASK_INFO" | awk '{print $4}')
+TRIAL_NAME=$(echo "$TASK_INFO" | cut -d' ' -f5-)
 
+export MLFF_DTYPE
+export MLFF_SEED
+export MLFF_OUTPUT_ROOT="$TRIAL_NAME"
+
+mkdir -p "$TRIAL_NAME/material_tests" "$TRIAL_NAME/array_summaries"
+
+echo "Selected trial: $TRIAL_NAME"
 echo "Selected dtype: $MLFF_DTYPE"
+echo "Selected seed: $MLFF_SEED"
 echo "Selected material: $MATERIAL_SLUG"
 echo "Calculator: $CALCULATOR"
 echo "CPU threads per task: $SLURM_CPUS_PER_TASK"
@@ -99,6 +122,7 @@ which python
 
 python -u - <<PY
 import csv
+import os
 from pathlib import Path
 
 material_slug = "$MATERIAL_SLUG"
@@ -118,7 +142,8 @@ selected = [
 if not selected:
     raise SystemExit(f"ERROR: no rows selected for {calculator} {material_slug}")
 
-output_dir = Path("material_tests") / dtype_str
+trial_name = os.environ["MLFF_OUTPUT_ROOT"]
+output_dir = Path(trial_name) / "material_tests" / dtype_str
 output_dir.mkdir(parents=True, exist_ok=True)
 
 fieldnames = list(rows[0].keys())
@@ -149,8 +174,8 @@ PY
 
 echo "Running $MLFF_DTYPE $CALCULATOR for $MATERIAL_SLUG"
 
-SUMMARY_FILE="array_summaries/${MLFF_DTYPE}_${CALCULATOR}_${MATERIAL_SLUG}_summary.csv" \
-  python -u scripts_python/run_tests.py --tests "material_tests/${MLFF_DTYPE}/${CALCULATOR}_${MATERIAL_SLUG}.csv"
+SUMMARY_FILE="${TRIAL_NAME}/array_summaries/${MLFF_DTYPE}_${CALCULATOR}_${MATERIAL_SLUG}_summary.csv" \
+  python -u scripts_python/run_tests.py --tests "${TRIAL_NAME}/material_tests/${MLFF_DTYPE}/${CALCULATOR}_${MATERIAL_SLUG}.csv"
 
 deactivate
 
