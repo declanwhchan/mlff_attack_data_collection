@@ -74,7 +74,7 @@ def style_numeric_axis(ax, xbins=5, ybins=5):
     ax.yaxis.set_major_locator(MaxNLocator(nbins=ybins))
 
     for axis in [ax.xaxis, ax.yaxis]:
-        formatter = ScalarFormatter(useMathText=True)
+        formatter = ScalarFormatter(useMathText=True, useOffset=False)
         formatter.set_powerlimits((-3, 3))
         axis.set_major_formatter(formatter)
 
@@ -113,19 +113,55 @@ def decade_ticks(values):
     return [10.0 ** power for power in range(min_power, max_power + 1)]
 
 
-def apply_log_decade_xaxis(ax, values, xlabel=None):
-    ticks = decade_ticks(values)
-    ax.set_xscale("log")
+def apply_log_decade_axis(ax, axis_name, values, label=None):
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
 
-    if ticks:
-        ax.set_xticks(ticks)
-        ax.set_xticklabels([f"{tick:g}" for tick in ticks])
-        ax.set_xlim(ticks[0] / 1.18, ticks[-1] * 1.18)
+    if len(values) == 0:
+        return
 
-    if xlabel is not None:
-        ax.set_xlabel(xlabel)
+    positive = values[values > 0]
+    if len(positive) == 0:
+        return
 
-    ax.tick_params(axis="x", labelrotation=0, pad=2)
+    ticks = decade_ticks(positive)
+    has_zero_or_negative = np.any(values <= 0)
+
+    if axis_name == "x":
+        set_scale = ax.set_xscale
+        set_ticks = ax.set_xticks
+        set_ticklabels = ax.set_xticklabels
+        set_lim = ax.set_xlim
+        set_label = ax.set_xlabel
+        tick_axis = "x"
+    else:
+        set_scale = ax.set_yscale
+        set_ticks = ax.set_yticks
+        set_ticklabels = ax.set_yticklabels
+        set_lim = ax.set_ylim
+        set_label = ax.set_ylabel
+        tick_axis = "y"
+
+    if has_zero_or_negative:
+        linthresh = max(float(np.min(positive)) / 2.0, 1e-12)
+        set_scale("symlog", linthresh=linthresh)
+        ticks = [0.0] + ticks
+        low = min(0.0, float(np.min(values)))
+        high = float(np.max(positive)) * 1.35
+        set_lim(low, high)
+    else:
+        set_scale("log")
+        low = float(np.min(positive)) / 1.35
+        high = float(np.max(positive)) * 1.35
+        set_lim(low, high)
+
+    set_ticks(ticks)
+    set_ticklabels([f"{tick:g}" for tick in ticks])
+
+    if label is not None:
+        set_label(label)
+
+    ax.tick_params(axis=tick_axis, labelrotation=0, pad=2)
 
 
 def clean_axis_values(ax, axis_name):
@@ -444,17 +480,47 @@ def draw_attack_panels(fig, axes, data, x_col, x_label, calculator, contour_rows
         ax_force.set_ylabel(r"$\Delta$ force (eV/$\AA$)" if col == 0 else "")
         ax_force.set_xlabel(x_label)
 
-        if x_col == "epsilon":
-            epsilon_values = data[x_col].to_numpy(dtype=float)
-
-            for axis in [ax_disp, ax_force]:
-                apply_log_decade_xaxis(axis, epsilon_values)
-
         for ax in [ax_disp, ax_force]:
             style_numeric_axis(ax)
             ax.grid(True, axis="y")
             ax.margins(x=0.04)
-            if subset.empty:
+
+        if x_col in ["epsilon", "n_steps"]:
+            x_values = data[x_col].to_numpy(dtype=float)
+
+            for axis in [ax_disp, ax_force]:
+                apply_log_decade_axis(axis, "x", x_values, x_label)
+
+        disp_y_values = clean_axis_values(ax_disp, "y")
+        force_y_values = clean_axis_values(ax_force, "y")
+
+        if disp_stats is not None:
+            disp_y_values = np.concatenate([
+                disp_y_values,
+                np.asarray([disp_stats["p05"], disp_stats["p95"]], dtype=float),
+            ])
+
+        if force_stats is not None:
+            force_y_values = np.concatenate([
+                force_y_values,
+                np.asarray([force_stats["p05"], force_stats["p95"]], dtype=float),
+            ])
+
+        apply_log_decade_axis(
+            ax_disp,
+            "y",
+            disp_y_values,
+            r"Displacement ($\AA$)" if col == 0 else "",
+        )
+        apply_log_decade_axis(
+            ax_force,
+            "y",
+            force_y_values,
+            r"$\Delta$ force (eV/$\AA$)" if col == 0 else "",
+        )
+
+        if subset.empty:
+            for ax in [ax_disp, ax_force]:
                 ax.text(
                     0.5,
                     0.5,
@@ -463,8 +529,6 @@ def draw_attack_panels(fig, axes, data, x_col, x_label, calculator, contour_rows
                     ha="center",
                     va="center",
                 )
-
-    tighten_contour_axes(fig)
 
     handles, labels = axes[0, 0].get_legend_handles_labels()
     if handles:

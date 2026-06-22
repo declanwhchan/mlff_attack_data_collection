@@ -7,7 +7,7 @@ import re
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
-from matplotlib.ticker import MaxNLocator, ScalarFormatter
+from matplotlib.ticker import MaxNLocator, ScalarFormatter, FuncFormatter
 import numpy as np
 import pandas as pd
 from ase.io import read as read_structure
@@ -39,51 +39,6 @@ EPSILON_POSITION_FACTORS = {
 }
 
 EPSILON_BOX_WIDTH_LOG10 = 0.020
-
-
-def positive_finite_values(values):
-    values = np.asarray(values, dtype=float)
-    return values[np.isfinite(values) & (values > 0)]
-
-
-def decade_ticks(values):
-    values = positive_finite_values(values)
-    if len(values) == 0:
-        return []
-
-    min_power = int(np.floor(np.log10(np.min(values))))
-    max_power = int(np.ceil(np.log10(np.max(values))))
-
-    return [10.0 ** power for power in range(min_power, max_power + 1)]
-
-
-def epsilon_plot_position(epsilon, calculator=None):
-    epsilon = float(epsilon)
-    if calculator is None:
-        return epsilon
-    return epsilon * EPSILON_POSITION_FACTORS[calculator]
-
-
-def epsilon_box_widths(positions):
-    widths = []
-    for position in positions:
-        lower = position / (10 ** EPSILON_BOX_WIDTH_LOG10)
-        upper = position * (10 ** EPSILON_BOX_WIDTH_LOG10)
-        widths.append(upper - lower)
-    return widths
-
-
-def apply_epsilon_axis(ax, epsilons):
-    ticks = decade_ticks(epsilons)
-    ax.set_xscale("log")
-
-    if ticks:
-        ax.set_xticks(ticks)
-        ax.set_xticklabels([format_epsilon_label(tick) for tick in ticks])
-        ax.set_xlim(ticks[0] / 1.18, ticks[-1] * 1.18)
-
-    ax.tick_params(axis="x", labelrotation=0, pad=2)
-    ax.set_xlabel(r"$\epsilon$ ($\AA$)")
 
 
 def apply_plot_style():
@@ -137,21 +92,96 @@ def decade_ticks(values):
     return [10.0 ** power for power in range(min_power, max_power + 1)]
 
 
-def epsilon_plot_position(epsilon):
-    return float(epsilon)
+def epsilon_plot_position(epsilon, calculator=None):
+    epsilon = float(epsilon)
+    if calculator is None:
+        return epsilon
+    return epsilon * EPSILON_POSITION_FACTORS[calculator]
 
 
-def apply_epsilon_axis(ax, epsilons):
+def epsilon_box_widths(positions):
+    widths = []
+    for position in positions:
+        lower = position / (10 ** EPSILON_BOX_WIDTH_LOG10)
+        upper = position * (10 ** EPSILON_BOX_WIDTH_LOG10)
+        widths.append(upper - lower)
+    return widths
+
+
+def apply_epsilon_axis(ax, epsilons, plotted_positions=None):
     ticks = decade_ticks(epsilons)
     ax.set_xscale("log")
+
+    limit_values = list(positive_finite_values(epsilons))
+    if plotted_positions is not None:
+        limit_values.extend(positive_finite_values(plotted_positions).tolist())
 
     if ticks:
         ax.set_xticks(ticks)
         ax.set_xticklabels([format_epsilon_label(tick) for tick in ticks])
-        ax.set_xlim(ticks[0] / 1.18, ticks[-1] * 1.18)
+
+        finite_limits = positive_finite_values(limit_values)
+        if len(finite_limits):
+            left = min(ticks[0], float(np.min(finite_limits))) / 1.18
+            right = max(ticks[-1], float(np.max(finite_limits))) * 1.18
+        else:
+            left = ticks[0] / 1.18
+            right = ticks[-1] * 1.18
+
+        ax.set_xlim(left, right)
 
     ax.tick_params(axis="x", labelrotation=0, pad=2)
     ax.set_xlabel(r"$\epsilon$ ($\AA$)")
+
+
+STEP_POSITION_FACTORS = {
+    "mace": 10 ** (-0.035),
+    "uma": 10 ** (0.035),
+}
+
+STEP_BOX_WIDTH_LOG10 = 0.020
+
+
+def step_plot_position(n_steps, calculator=None):
+    n_steps = float(n_steps)
+    if calculator is None:
+        return n_steps
+    return n_steps * STEP_POSITION_FACTORS[calculator]
+
+
+def step_box_widths(positions):
+    widths = []
+    for position in positions:
+        lower = position / (10 ** STEP_BOX_WIDTH_LOG10)
+        upper = position * (10 ** STEP_BOX_WIDTH_LOG10)
+        widths.append(upper - lower)
+    return widths
+
+
+def apply_step_axis(ax, steps, plotted_positions=None):
+    ticks = decade_ticks(steps)
+    ax.set_xscale("log")
+
+    limit_values = list(positive_finite_values(steps))
+    if plotted_positions is not None:
+        limit_values.extend(positive_finite_values(plotted_positions).tolist())
+
+    if ticks:
+        ax.set_xticks(ticks)
+        ax.set_xticklabels([format_epsilon_label(tick) for tick in ticks])
+
+        finite_limits = positive_finite_values(limit_values)
+        if len(finite_limits):
+            left = min(ticks[0], float(np.min(finite_limits))) / 1.18
+            right = max(ticks[-1], float(np.max(finite_limits))) * 1.18
+        else:
+            left = ticks[0] / 1.18
+            right = ticks[-1] * 1.18
+
+        ax.set_xlim(left, right)
+
+    ax.tick_params(axis="x", labelrotation=0, pad=2)
+    ax.set_xlabel("n_steps")
 
 
 def sparse_tick_indices(count, max_labels=6):
@@ -709,16 +739,66 @@ def limits_from_bubble_extents(extents, pad=0.12, nonnegative=True):
     return (xmin, xmax), (ymin, ymax)
 
 
-def style_numeric_axis(ax, xbins=4, ybins=5):
-    ax.xaxis.set_major_locator(MaxNLocator(nbins=xbins, prune=None))
-    ax.yaxis.set_major_locator(MaxNLocator(nbins=ybins, prune=None))
+def style_numeric_axis(ax, xbins=5, ybins=5):
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=xbins))
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=ybins))
 
-    for axis in [ax.xaxis, ax.yaxis]:
-        formatter = ScalarFormatter(useMathText=True)
-        formatter.set_powerlimits((-3, 3))
-        axis.set_major_formatter(formatter)
+    formatter_x = ScalarFormatter(useMathText=True, useOffset=False)
+    formatter_x.set_powerlimits((-3, 3))
+    ax.xaxis.set_major_formatter(formatter_x)
+
+    style_y_axis_no_offset(ax, ybins=ybins)
 
     ax.tick_params(axis="both", labelsize=8, pad=2)
+
+
+def style_y_axis_no_offset(ax, ybins=5):
+    y_values = clean_numeric_array(_artist_values_for_axis(ax, "y"))
+
+    if len(y_values):
+        ymin, ymax = ax.get_ylim()
+        span = float(ymax - ymin)
+        center = float(np.nanmedian(y_values))
+
+        if np.isfinite(span) and np.isfinite(center) and abs(center) > 0:
+            relative_span = abs(span / center)
+
+            if relative_span < 1e-5:
+                pad = max(abs(center) * 0.01, 1e-8)
+                ax.set_ylim(center - pad, center + pad)
+                ax.yaxis.set_major_locator(MaxNLocator(nbins=3, prune=None))
+                ax.yaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{value:.5g}"))
+                ax.tick_params(axis="y", labelsize=8, pad=2)
+                return
+
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=ybins, prune=None))
+
+    formatter = ScalarFormatter(useMathText=True, useOffset=False)
+    formatter.set_powerlimits((-3, 3))
+    ax.yaxis.set_major_formatter(formatter)
+
+    ax.tick_params(axis="y", labelsize=8, pad=2)
+
+
+def style_relaxation_steps_axis(ax):
+    y_values = clean_numeric_array(_artist_values_for_axis(ax, "y"))
+
+    if len(y_values) == 0:
+        return
+
+    y_max = float(np.nanmax(y_values))
+
+    if not np.isfinite(y_max) or y_max <= 0:
+        ax.set_ylim(-0.03, 1.0)
+        ax.set_yticks([0, 1])
+    else:
+        ax.set_ylim(0, y_max * 1.12)
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=5, integer=True, prune=None))
+
+    formatter = ScalarFormatter(useMathText=True, useOffset=False)
+    formatter.set_powerlimits((-3, 3))
+    ax.yaxis.set_major_formatter(formatter)
+    ax.tick_params(axis="y", labelsize=8, pad=2)
 
 
 def apply_displacement_symlog_axis(ax, linthresh=0.05):
@@ -792,7 +872,10 @@ def tighten_axes_for_publication(fig):
         if not ax.has_data():
             continue
 
-        if getattr(ax, "_preserve_parametric_limits", False):
+        if (
+            getattr(ax, "_preserve_parametric_limits", False)
+            or getattr(ax, "_preserve_manual_limits", False)
+        ):
             continue
 
         y_limits = _tight_limit(_artist_values_for_axis(ax, "y"))
@@ -1016,7 +1099,7 @@ def draw_parametric_panel(
         ax.set_ylim(*y_limits)
 
     style_numeric_axis(ax)
-    apply_displacement_symlog_axis(ax, linthresh=0.05)
+
     ax.grid(True, alpha=0.35)
     ax.margins(x=0.03, y=0.05)
 
@@ -1280,9 +1363,12 @@ def collect_box_data(records, attack, value_getter, missing_rows):
                 colors.append(CALCULATOR_COLORS[calculator])
                 calculators.append(calculator)
 
-                jitter = 10 ** rng.normal(loc=0.0, scale=0.004, size=len(box_values))
-                point_x.extend((position * jitter).tolist())
-                point_y.extend(box_values)
+                inlier_values = tukey_inlier_values(box_values)
+
+                if len(inlier_values):
+                    jitter = 10 ** rng.normal(loc=0.0, scale=0.004, size=len(inlier_values))
+                    point_x.extend((position * jitter).tolist())
+                    point_y.extend(inlier_values.tolist())
 
     return epsilons, positions, values, colors, calculators, point_x, point_y
 
@@ -1328,8 +1414,10 @@ def draw_grouped_boxplot(ax, records, attack, value_getter, ylabel, missing_rows
         patch.set_edgecolor(color)
         patch.set_linewidth(1.2)
 
-    apply_epsilon_axis(ax, epsilons)
+    ax._preserve_manual_limits = True
+    apply_epsilon_axis(ax, epsilons, positions)
     ax.set_ylabel(ylabel)
+    style_y_axis_no_offset(ax)
     ax.grid(True, axis="y")
     ax.grid(False, axis="x")
     ax.margins(x=0.03)
@@ -1367,8 +1455,10 @@ def plot_convergence_panel(ax, records, attack, step_col, conv_col):
             label=calculator.upper(),
         )
 
+    ax._preserve_manual_limits = True
     apply_epsilon_axis(ax, epsilons)
     ax.set_ylabel("Relaxation steps")
+    style_relaxation_steps_axis(ax)
     ax.grid(True, axis="y")
     ax.grid(False, axis="x")
     ax.margins(x=0.03)
@@ -1395,7 +1485,7 @@ def make_convergence_figure(records, output_dir):
 
             if col_index == 0:
                 ax.text(
-                    -0.33,
+                    -0.48,
                     0.5,
                     row_title,
                     transform=ax.transAxes,
@@ -1409,7 +1499,7 @@ def make_convergence_figure(records, output_dir):
             add_panel_label(ax, chr(ord("A") + panel_index))
             panel_index += 1
 
-    apply_shared_figure_header(fig, left=0.03)
+    apply_shared_figure_header(fig, left=0.11)
     save_figure(fig, output_dir / "figure_1_convergence_by_epsilon")
     plt.close(fig)
 
@@ -1499,11 +1589,13 @@ def draw_grouped_ci(ax, records, attack, value_getter, ylabel, missing_rows):
             label=calculator.upper(),
         )
 
-    apply_epsilon_axis(ax, epsilons)
+    ax._preserve_manual_limits = True
+    apply_epsilon_axis(ax, epsilons, positions)
     ax.set_ylabel(ylabel)
+    style_y_axis_no_offset(ax)
     ax.grid(True, axis="y")
     ax.grid(False, axis="x")
-    ax.margins(x=0.03)
+    ax.margins(y=0.08)
 
     return True
 
@@ -1620,12 +1712,13 @@ def collect_box_data_by_steps(records, attack, epsilon, value_getter, missing_ro
     positions = []
     values = []
     colors = []
+    calculators = []
     point_x = []
     point_y = []
 
     rng = np.random.default_rng(12345)
 
-    for i, n_steps in enumerate(steps, start=1):
+    for n_steps in steps:
         for calculator in ["mace", "uma"]:
             rowset = attack_records[
                 (attack_records["n_steps"] == n_steps)
@@ -1648,20 +1741,24 @@ def collect_box_data_by_steps(records, attack, epsilon, value_getter, missing_ro
                     box_values.extend(row_values.tolist())
 
             if box_values:
-                position = i + MODEL_OFFSETS[calculator]
+                position = step_plot_position(n_steps, calculator)
                 positions.append(position)
                 values.append(box_values)
                 colors.append(CALCULATOR_COLORS[calculator])
+                calculators.append(calculator)
 
-                jitter = rng.normal(loc=0.0, scale=0.010, size=len(box_values))
-                point_x.extend((position + jitter).tolist())
-                point_y.extend(box_values)
+                inlier_values = tukey_inlier_values(box_values)
 
-    return steps, positions, values, colors, point_x, point_y
+                if len(inlier_values):
+                    jitter = 10 ** rng.normal(loc=0.0, scale=0.004, size=len(inlier_values))
+                    point_x.extend((position * jitter).tolist())
+                    point_y.extend(inlier_values.tolist())
+
+    return steps, positions, values, colors, calculators, point_x, point_y
 
 
 def draw_grouped_boxplot_by_steps(ax, records, attack, epsilon, value_getter, ylabel, missing_rows):
-    steps, positions, values, colors, point_x, point_y = collect_box_data_by_steps(
+    steps, positions, values, colors, calculators, point_x, point_y = collect_box_data_by_steps(
         records,
         attack,
         epsilon,
@@ -1688,7 +1785,7 @@ def draw_grouped_boxplot_by_steps(ax, records, attack, epsilon, value_getter, yl
     box = ax.boxplot(
         values,
         positions=positions,
-        widths=0.30,
+        widths=step_box_widths(positions),
         patch_artist=True,
         showfliers=False,
         zorder=2,
@@ -1702,14 +1799,10 @@ def draw_grouped_boxplot_by_steps(ax, records, attack, epsilon, value_getter, yl
         patch.set_edgecolor(color)
         patch.set_linewidth(1.2)
 
-    ax.set_xticks(list(range(1, len(steps) + 1)))
-    ax.set_xticklabels([str(int(step)) for step in steps])
-    ax.tick_params(axis="x", labelrotation=35, pad=2)
-    for label in ax.get_xticklabels():
-        label.set_horizontalalignment("right")
-
-    ax.set_xlabel("n_steps")
+    ax._preserve_manual_limits = True
+    apply_step_axis(ax, steps, positions)
     ax.set_ylabel(ylabel)
+    style_y_axis_no_offset(ax)
     ax.grid(True, axis="y")
     ax.grid(False, axis="x")
     ax.margins(x=0.03)
@@ -1743,6 +1836,25 @@ def tukey_whisker_span(values):
     return upper_whisker - lower_whisker
 
 
+def tukey_inlier_values(values):
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+
+    if len(values) < 4:
+        return values
+
+    q1, q3 = np.percentile(values, [25, 75])
+    iqr = q3 - q1
+
+    if not np.isfinite(iqr) or iqr <= 0:
+        return values
+
+    lower = q1 - 1.5 * iqr
+    upper = q3 + 1.5 * iqr
+
+    return values[(values >= lower) & (values <= upper)]
+
+
 def collect_whisker_span_data(records, attack, value_getter, missing_rows):
     attack_records = records[records["attack_label"] == attack].copy()
     epsilons = sorted(attack_records["epsilon"].dropna().unique())
@@ -1773,7 +1885,7 @@ def collect_whisker_span_data(records, attack, value_getter, missing_rows):
             span = tukey_whisker_span(values)
             if span is not None:
                 points.append({
-                    "x": epsilon_plot_position(epsilon) * (10 ** MODEL_OFFSETS[calculator] / 10),
+                    "x": epsilon_plot_position(epsilon, calculator),
                     "y": span,
                     "calculator": calculator,
                 })
@@ -1814,8 +1926,10 @@ def draw_whisker_span(ax, records, attack, value_getter, ylabel, missing_rows):
             zorder=3,
         )
 
-    apply_epsilon_axis(ax, epsilons)
+    ax._preserve_manual_limits = True
+    apply_epsilon_axis(ax, epsilons, [point["x"] for point in points])
     ax.set_ylabel(ylabel)
+    style_y_axis_no_offset(ax)
     ax.grid(True, axis="y")
     ax.grid(False, axis="x")
     ax.margins(x=0.05, y=0.12)
@@ -1912,7 +2026,7 @@ def collect_whisker_span_data_by_steps(records, attack, epsilon, value_getter, m
             span = tukey_whisker_span(values)
             if span is not None:
                 points.append({
-                    "x": i,
+                    "x": step_plot_position(n_steps, calculator),
                     "y": span,
                     "calculator": calculator,
                 })
@@ -1954,15 +2068,10 @@ def draw_whisker_span_by_steps(ax, records, attack, epsilon, value_getter, ylabe
             zorder=3,
         )
 
-    tick_positions = list(range(1, len(steps) + 1))
-    ax.set_xticks(tick_positions)
-    ax.set_xticklabels([str(int(step)) for step in steps])
-    ax.tick_params(axis="x", labelrotation=35, pad=2)
-    for label in ax.get_xticklabels():
-        label.set_horizontalalignment("right")
-
-    ax.set_xlabel("n_steps")
+    ax._preserve_manual_limits = True
+    apply_step_axis(ax, steps, [point["x"] for point in points])
     ax.set_ylabel(ylabel)
+    style_y_axis_no_offset(ax)
     ax.grid(True, axis="y")
     ax.grid(False, axis="x")
     ax.margins(x=0.05, y=0.12)
@@ -2018,7 +2127,7 @@ def make_whisker_span_by_steps_figure(records, output_dir, figure_name, ylabel, 
     apply_shared_figure_header(
         fig,
         subtitle=rf"Fixed $\epsilon$ = {epsilon:g} $\AA$; each dot = upper whisker - lower whisker",
-        left=0.05,
+        left=0.12,
     )
     save_figure(fig, output_dir / figure_name)
     plt.close(fig)
@@ -2038,7 +2147,6 @@ def plot_convergence_panel_by_steps(ax, records, attack, epsilon, step_col, conv
         return False
 
     steps = sorted(attack_records["n_steps"].dropna().unique())
-    step_positions = {step: index + 1 for index, step in enumerate(steps)}
 
     for calculator, color in CALCULATOR_COLORS.items():
         data = attack_records[
@@ -2050,10 +2158,9 @@ def plot_convergence_panel_by_steps(ax, records, attack, epsilon, step_col, conv
             continue
 
         grouped = data.groupby("n_steps", as_index=False)[step_col].mean()
-        grouped["step_position"] = grouped["n_steps"].map(step_positions)
 
         ax.plot(
-            grouped["step_position"],
+            grouped["n_steps"],
             grouped[step_col],
             marker="o",
             markersize=4,
@@ -2062,15 +2169,10 @@ def plot_convergence_panel_by_steps(ax, records, attack, epsilon, step_col, conv
             label=calculator.upper(),
         )
 
-    tick_positions = list(range(1, len(steps) + 1))
-    ax.set_xticks(tick_positions)
-    ax.set_xticklabels([str(int(step)) for step in steps])
-    ax.tick_params(axis="x", labelrotation=35, pad=2)
-    for label in ax.get_xticklabels():
-        label.set_horizontalalignment("right")
-
-    ax.set_xlabel("n_steps")
+    ax._preserve_manual_limits = True
+    apply_step_axis(ax, steps)
     ax.set_ylabel("Relaxation steps")
+    style_relaxation_steps_axis(ax)
     ax.grid(True, axis="y")
     ax.grid(False, axis="x")
     ax.margins(x=0.03)
@@ -2097,7 +2199,7 @@ def make_convergence_by_steps_figure(records, output_dir, epsilon=0.1):
 
             if col_index == 0:
                 ax.text(
-                    -0.33,
+                    -0.48,
                     0.5,
                     row_title,
                     transform=ax.transAxes,
@@ -2114,14 +2216,14 @@ def make_convergence_by_steps_figure(records, output_dir, epsilon=0.1):
     apply_shared_figure_header(
         fig,
         subtitle=rf"Fixed $\epsilon$ = {epsilon:g} $\AA$",
-        left=0.05,
+        left=0.12,
     )
     save_figure(fig, output_dir / "figure_4_convergence_by_n_steps")
     plt.close(fig)
 
 
 def draw_grouped_ci_by_steps(ax, records, attack, epsilon, value_getter, ylabel, missing_rows):
-    steps, positions, values, colors, point_x, point_y = collect_box_data_by_steps(
+    steps, positions, values, colors, calculators, point_x, point_y = collect_box_data_by_steps(
         records,
         attack,
         epsilon,
@@ -2139,21 +2241,13 @@ def draw_grouped_ci_by_steps(ax, records, attack, epsilon, value_getter, ylabel,
         "uma": {"x": [], "median": [], "lower": [], "upper": []},
     }
 
-    for position, box_values in zip(positions, values):
+    for position, box_values, calculator in zip(positions, values, calculators):
         ci = bootstrap_median_ci(box_values)
         if ci is None:
             continue
 
         median, lower, upper = ci
-        center_position = round(position)
-        offset = position - center_position
-        calculator = min(
-            MODEL_OFFSETS,
-            key=lambda name: abs(offset - MODEL_OFFSETS[name]),
-        )
-
-        x_value = round(position - MODEL_OFFSETS[calculator])
-        series[calculator]["x"].append(x_value)
+        series[calculator]["x"].append(position)
         series[calculator]["median"].append(median)
         series[calculator]["lower"].append(lower)
         series[calculator]["upper"].append(upper)
@@ -2162,10 +2256,11 @@ def draw_grouped_ci_by_steps(ax, records, attack, epsilon, value_getter, ylabel,
         if not data["x"]:
             continue
 
-        x = np.asarray(data["x"], dtype=float)
-        median = np.asarray(data["median"], dtype=float)
-        lower = np.asarray(data["lower"], dtype=float)
-        upper = np.asarray(data["upper"], dtype=float)
+        order = np.argsort(np.asarray(data["x"], dtype=float))
+        x = np.asarray(data["x"], dtype=float)[order]
+        median = np.asarray(data["median"], dtype=float)[order]
+        lower = np.asarray(data["lower"], dtype=float)[order]
+        upper = np.asarray(data["upper"], dtype=float)[order]
         color = CALCULATOR_COLORS[calculator]
 
         ax.fill_between(
@@ -2187,18 +2282,13 @@ def draw_grouped_ci_by_steps(ax, records, attack, epsilon, value_getter, ylabel,
             label=calculator.upper(),
         )
 
-    tick_positions = list(range(1, len(steps) + 1))
-    ax.set_xticks(tick_positions)
-    ax.set_xticklabels([str(int(step)) for step in steps])
-    ax.tick_params(axis="x", labelrotation=35, pad=2)
-    for label in ax.get_xticklabels():
-        label.set_horizontalalignment("right")
-
-    ax.set_xlabel("n_steps")
+    ax._preserve_manual_limits = True
+    apply_step_axis(ax, steps, positions)
     ax.set_ylabel(ylabel)
+    style_y_axis_no_offset(ax)
     ax.grid(True, axis="y")
     ax.grid(False, axis="x")
-    ax.margins(x=0.03)
+    ax.margins(y=0.08)
 
     return True
 
@@ -2251,7 +2341,7 @@ def make_ci_by_steps_figure(records, output_dir, figure_name, ylabel, rows, epsi
     apply_shared_figure_header(
         fig,
         subtitle=rf"Fixed $\epsilon$ = {epsilon:g} $\AA$; line = median, shaded band = 95% CI",
-        left=0.05,
+        left=0.12,
     )
     save_figure(fig, output_dir / figure_name)
     plt.close(fig)
@@ -2303,7 +2393,7 @@ def make_distribution_by_steps_figure(records, output_dir, figure_name, ylabel, 
     apply_shared_figure_header(
         fig,
         subtitle=rf"Fixed $\epsilon$ = {epsilon:g} $\AA$",
-        left=0.05,
+        left=0.12,
     )
     save_figure(fig, output_dir / figure_name)
     plt.close(fig)
@@ -2371,6 +2461,50 @@ def normalized_topology_data(records):
     ].mean(axis=1)
 
     return data
+
+
+def topology_discovery_data(records):
+    data = normalized_topology_data(records)
+    required = [
+        "material_slug",
+        "calculator",
+        "attack_label",
+        "neighbor_jaccard_distance",
+        "rdf_l1_distance",
+        "coordination_change_max",
+        "jaccard_norm",
+        "rdf_norm",
+        "coord_norm",
+        "topology_score",
+        "epsilon",
+        "n_steps",
+    ]
+
+    available = [column for column in required if column in data.columns]
+    data = data[available].replace([np.inf, -np.inf], np.nan)
+
+    metric_cols = [
+        "neighbor_jaccard_distance",
+        "rdf_l1_distance",
+        "coordination_change_max",
+        "jaccard_norm",
+        "rdf_norm",
+        "coord_norm",
+        "topology_score",
+    ]
+
+    for column in metric_cols + ["epsilon", "n_steps"]:
+        if column in data.columns:
+            data[column] = pd.to_numeric(data[column], errors="coerce")
+
+    return data.dropna(subset=[
+        "material_slug",
+        "calculator",
+        "attack_label",
+        "neighbor_jaccard_distance",
+        "rdf_l1_distance",
+        "coordination_change_max",
+    ]).copy()
 
 
 def topology_metric_axes(ax, xlabel=None, ylabel=None, title=None):
@@ -2766,6 +2900,119 @@ def make_topology_metric_coupling(records, output_dir):
     plt.close(fig)
 
 
+def make_topology_synergy_outliers(records, output_dir, max_points=18):
+    data = topology_discovery_data(records)
+    if data.empty:
+        return
+
+    data["synergy_score"] = (
+        data["jaccard_norm"] * data["rdf_norm"] * data["coord_norm"]
+    ) ** (1.0 / 3.0)
+
+    ranked = (
+        data.groupby(["material_slug", "calculator", "attack_label"], as_index=False)
+        .agg(
+            synergy_score=("synergy_score", "mean"),
+            jaccard=("neighbor_jaccard_distance", "mean"),
+            rdf=("rdf_l1_distance", "mean"),
+            coordination=("coordination_change_max", "mean"),
+        )
+        .sort_values("synergy_score", ascending=False)
+        .head(max_points)
+        .sort_values("synergy_score", ascending=True)
+    )
+
+    if ranked.empty:
+        return
+
+    labels = (
+        ranked["material_slug"].astype(str)
+        + " / "
+        + ranked["calculator"].str.upper()
+        + " / "
+        + ranked["attack_label"].astype(str)
+    )
+
+    fig_height = max(4.2, 0.34 * len(ranked) + 1.4)
+    fig, ax = plt.subplots(figsize=(7.6, fig_height))
+
+    y = np.arange(len(ranked))
+    ax.barh(y, ranked["synergy_score"], color="#7B3294", alpha=0.78)
+
+    ax.set_yticks(y)
+    ax.set_yticklabels(labels)
+    ax.set_xlabel("Topology synergy score: geometric mean of normalized Jaccard, RDF, and coordination")
+    ax.set_ylabel("Material / model / attack")
+    ax.set_title("Candidate coupled-topology failure modes")
+
+    ax.grid(True, axis="x", alpha=0.28)
+
+    fig.tight_layout()
+    fig.savefig(output_dir / "topology_synergy_outliers.png", dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def make_topology_mechanism_triangle(records, output_dir):
+    data = topology_discovery_data(records)
+    if data.empty:
+        return
+
+    components = data[["jaccard_norm", "rdf_norm", "coord_norm"]].clip(lower=0)
+    total = components.sum(axis=1)
+
+    data = data[total > 0].copy()
+    components = components.loc[data.index]
+    total = total.loc[data.index]
+
+    if data.empty:
+        return
+
+    data["jaccard_fraction"] = components["jaccard_norm"] / total
+    data["rdf_fraction"] = components["rdf_norm"] / total
+    data["coord_fraction"] = components["coord_norm"] / total
+
+    data["x"] = data["rdf_fraction"] + 0.5 * data["coord_fraction"]
+    data["y"] = (np.sqrt(3.0) / 2.0) * data["coord_fraction"]
+
+    fig, ax = plt.subplots(figsize=(6.2, 5.6))
+
+    triangle_x = [0.0, 1.0, 0.5, 0.0]
+    triangle_y = [0.0, 0.0, np.sqrt(3.0) / 2.0, 0.0]
+    ax.plot(triangle_x, triangle_y, color="#222222", linewidth=1.0)
+
+    for calculator, color in CALCULATOR_COLORS.items():
+        subset = data[data["calculator"] == calculator]
+        if subset.empty:
+            continue
+
+        ax.scatter(
+            subset["x"],
+            subset["y"],
+            s=24 + 180 * subset["topology_score"].fillna(0),
+            color=color,
+            alpha=0.42,
+            edgecolor="white",
+            linewidth=0.35,
+            label=calculator.upper(),
+        )
+
+    ax.text(-0.04, -0.04, "Jaccard-dominant", ha="right", va="top", fontsize=8)
+    ax.text(1.04, -0.04, "RDF-dominant", ha="left", va="top", fontsize=8)
+    ax.text(0.5, np.sqrt(3.0) / 2.0 + 0.04, "Coordination-dominant", ha="center", va="bottom", fontsize=8)
+
+    ax.set_xlim(-0.10, 1.10)
+    ax.set_ylim(-0.08, np.sqrt(3.0) / 2.0 + 0.12)
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_title("Topology mechanism simplex: which topology signal dominates?")
+    ax.legend(frameon=False, ncol=2, loc="lower center")
+
+    fig.tight_layout()
+    fig.savefig(output_dir / "topology_mechanism_simplex.png", dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
 def make_topology_figures(records, output_dir):
     if records.empty or not topology_ready(records):
         return
@@ -2784,6 +3031,8 @@ def make_topology_figures(records, output_dir):
     make_topology_material_ranking(clean, output_dir)
     make_topology_model_disagreement(clean, output_dir)
     make_topology_metric_coupling(clean, output_dir)
+    make_topology_synergy_outliers(clean, output_dir)
+    make_topology_mechanism_triangle(clean, output_dir)
 
     for material_slug, material_records in clean.groupby("material_slug"):
         material_output_dir = output_dir / str(material_slug)
@@ -2793,6 +3042,8 @@ def make_topology_figures(records, output_dir):
         make_topology_mechanism_map(material_records, material_output_dir)
         make_topology_model_disagreement(material_records, material_output_dir)
         make_topology_metric_coupling(material_records, material_output_dir)
+        make_topology_synergy_outliers(material_records, material_output_dir)
+        make_topology_mechanism_triangle(material_records, material_output_dir)
 
 
 def main():
