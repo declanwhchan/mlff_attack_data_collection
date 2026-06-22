@@ -120,9 +120,8 @@ Open http://localhost:8000
 Login using SFTP:
 
 ```bash
-cd mlff_attack_data_collection
+cd mlff_attack_data_collection/Trial <#>
 get -r outputs_comprehensive
-get -r outputs_visuals
 get -r outputs_float32
 get -r outputs_float64
 ```
