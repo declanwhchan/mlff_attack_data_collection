@@ -28,12 +28,19 @@ if [ "$TASK_INDEX" -lt 0 ] || [ "$TASK_INDEX" -ge "${#TRIALS[@]}" ]; then
   exit 1
 fi
 
+PROJECT_OUTPUT_ROOT="${PROJECT_OUTPUT_ROOT:-$PWD}"
+SCRATCH_OUTPUT_ROOT="${SCRATCH_OUTPUT_ROOT:-/scratch/$USER/mlff_attack_data_collection}"
+
 TRIAL_NAME="${TRIALS[$TASK_INDEX]}"
+
+SCRATCH_TRIAL_DIR="$SCRATCH_OUTPUT_ROOT/$TRIAL_NAME"
+PROJECT_TRIAL_DIR="$PROJECT_OUTPUT_ROOT/$TRIAL_NAME"
+mkdir -p "$PROJECT_TRIAL_DIR/outputs_comprehensive"
 
 echo "Plotting $TRIAL_NAME"
 
-if [ ! -d "$TRIAL_NAME" ]; then
-  echo "ERROR: missing trial directory: $TRIAL_NAME"
+if [ ! -d "$SCRATCH_TRIAL_DIR" ]; then
+  echo "ERROR: missing trial directory: $SCRATCH_TRIAL_DIR"
   exit 1
 fi
 
@@ -43,7 +50,7 @@ python -u - <<PY
 from pathlib import Path
 import pandas as pd
 
-trial = Path("$TRIAL_NAME")
+trial = Path("$SCRATCH_TRIAL_DIR")
 summary_dir = trial / "array_summaries"
 
 for dtype_str in ["float32", "float64"]:
@@ -55,7 +62,7 @@ for dtype_str in ["float32", "float64"]:
 
         combined = pd.concat([pd.read_csv(path) for path in files], ignore_index=True)
 
-        output_dir = trial / f"outputs_{dtype_str}" / calculator
+        output_dir = Path("$PROJECT_TRIAL_DIR") / "outputs_comprehensive" / dtype_str / calculator
         output_dir.mkdir(parents=True, exist_ok=True)
 
         output_path = output_dir / "summary.csv"
@@ -64,9 +71,10 @@ for dtype_str in ["float32", "float64"]:
 PY
 
 run_dtype_branch() {
-  local trial_name="$1"
-  local dtype_str="$2"
-  local threads="$3"
+  local scratch_trial_dir="$1"
+  local project_trial_dir="$2"
+  local dtype_str="$3"
+  local threads="$4"
 
   export OMP_NUM_THREADS="$threads"
   export MKL_NUM_THREADS="$threads"
@@ -74,25 +82,25 @@ run_dtype_branch() {
   export NUMEXPR_NUM_THREADS="$threads"
 
   python -u scripts_python/run_comprehensive.py \
-    --mace-dir "${trial_name}/outputs_${dtype_str}/mace" \
-    --uma-dir "${trial_name}/outputs_${dtype_str}/uma" \
-    --output-dir "${trial_name}/outputs_comprehensive/${dtype_str}"
+    --mace-dir "${scratch_trial_dir}/outputs_${dtype_str}/mace" \
+    --uma-dir "${scratch_trial_dir}/outputs_${dtype_str}/uma" \
+    --output-dir "${project_trial_dir}/outputs_comprehensive/${dtype_str}"
 
-  if [ -f "${trial_name}/outputs_${dtype_str}/mace/contour/summary.csv" ] || [ -f "${trial_name}/outputs_${dtype_str}/uma/contour/summary.csv" ]; then
+  if [ -f "${scratch_trial_dir}/outputs_${dtype_str}/mace/contour/summary.csv" ] || [ -f "${scratch_trial_dir}/outputs_${dtype_str}/uma/contour/summary.csv" ]; then
     python -u scripts_python/contour_comprehensive.py \
-      --mace-contour-dir "${trial_name}/outputs_${dtype_str}/mace/contour" \
-      --uma-contour-dir "${trial_name}/outputs_${dtype_str}/uma/contour" \
-      --comprehensive-dir "${trial_name}/outputs_comprehensive/${dtype_str}" \
-      --output-dir "${trial_name}/outputs_comprehensive/${dtype_str}/contour"
+      --mace-contour-dir "${scratch_trial_dir}/outputs_${dtype_str}/mace/contour" \
+      --uma-contour-dir "${scratch_trial_dir}/outputs_${dtype_str}/uma/contour" \
+      --comprehensive-dir "${project_trial_dir}/outputs_comprehensive/${dtype_str}" \
+      --output-dir "${project_trial_dir}/outputs_comprehensive/${dtype_str}/contour"
   else
-    echo "No ${dtype_str} contour summaries found for ${trial_name}; skipping contour comparison plots."
+    echo "No ${dtype_str} contour summaries found for ${scratch_trial_dir}; skipping contour comparison plots."
   fi
 }
 
-run_dtype_branch "$TRIAL_NAME" float32 8 &
+run_dtype_branch "$SCRATCH_TRIAL_DIR" "$PROJECT_TRIAL_DIR" float32 8 &
 pid_float32=$!
 
-run_dtype_branch "$TRIAL_NAME" float64 8 &
+run_dtype_branch "$SCRATCH_TRIAL_DIR" "$PROJECT_TRIAL_DIR" float64 8 &
 pid_float64=$!
 
 wait "$pid_float32"
@@ -104,10 +112,10 @@ export OPENBLAS_NUM_THREADS=16
 export NUMEXPR_NUM_THREADS=16
 
 python -u scripts_python/float_comprehensive.py \
-  --float32-dir "${TRIAL_NAME}/outputs_comprehensive/float32" \
-  --float64-dir "${TRIAL_NAME}/outputs_comprehensive/float64" \
-  --output-dir "${TRIAL_NAME}/outputs_comprehensive/comparison"
+  --float32-dir "${PROJECT_TRIAL_DIR}/outputs_comprehensive/float32" \
+  --float64-dir "${PROJECT_TRIAL_DIR}/outputs_comprehensive/float64" \
+  --output-dir "${PROJECT_TRIAL_DIR}/outputs_comprehensive/comparison"
 
 deactivate
 
-echo "Plotting complete for $TRIAL_NAME"
+echo "Plotting complete for $SCRATCH_TRIAL_DIR"

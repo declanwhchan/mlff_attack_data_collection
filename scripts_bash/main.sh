@@ -83,17 +83,21 @@ print(f"{dtype_str} {calculator} {material_slug} {seed} {trial_name}")
 PY
 )
 
+PROJECT_OUTPUT_ROOT="${PROJECT_OUTPUT_ROOT:-$PWD}"
+SCRATCH_OUTPUT_ROOT="${SCRATCH_OUTPUT_ROOT:-/scratch/$USER/mlff_attack_data_collection}"
+
 MLFF_DTYPE=$(echo "$TASK_INFO" | awk '{print $1}')
 CALCULATOR=$(echo "$TASK_INFO" | awk '{print $2}')
 MATERIAL_SLUG=$(echo "$TASK_INFO" | awk '{print $3}')
 MLFF_SEED=$(echo "$TASK_INFO" | awk '{print $4}')
 TRIAL_NAME=$(echo "$TASK_INFO" | cut -d' ' -f5-)
+TRIAL_DIR="$SCRATCH_OUTPUT_ROOT/$TRIAL_NAME"
 
 export MLFF_DTYPE
 export MLFF_SEED
-export MLFF_OUTPUT_ROOT="$TRIAL_NAME"
+export MLFF_OUTPUT_ROOT="$TRIAL_DIR"
 
-mkdir -p "$TRIAL_NAME/material_tests" "$TRIAL_NAME/array_summaries"
+mkdir -p "$TRIAL_DIR/material_tests" "$TRIAL_DIR/array_summaries"
 
 echo "Selected trial: $TRIAL_NAME"
 echo "Selected dtype: $MLFF_DTYPE"
@@ -172,8 +176,8 @@ PY
 
 echo "Running $MLFF_DTYPE $CALCULATOR for $MATERIAL_SLUG"
 
-SUMMARY_FILE="${TRIAL_NAME}/array_summaries/${MLFF_DTYPE}_${CALCULATOR}_${MATERIAL_SLUG}_summary.csv" \
-  python -u scripts_python/run_tests.py --tests "${TRIAL_NAME}/material_tests/${MLFF_DTYPE}/${CALCULATOR}_${MATERIAL_SLUG}.csv"
+SUMMARY_FILE="${TRIAL_DIR}/array_summaries/${MLFF_DTYPE}_${CALCULATOR}_${MATERIAL_SLUG}_summary.csv" \
+  python -u scripts_python/run_tests.py --tests "${TRIAL_DIR}/material_tests/${MLFF_DTYPE}/${CALCULATOR}_${MATERIAL_SLUG}.csv"
 
 deactivate
 

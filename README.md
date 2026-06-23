@@ -137,9 +137,4 @@ Login using SFTP:
 ```bash
 cd mlff_attack_data_collection/trial<#>
 get -r outputs_comprehensive
-get -r outputs_float32
-get -r outputs_float64
-
-# Initial .cif structures
-get -r mp_structures
 ```
