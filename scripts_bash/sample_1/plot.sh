@@ -16,7 +16,7 @@ export NUMEXPR_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
 module load gcc/12.3 python/3.11 arrow
 
-TRIAL_NAME="Trial 1 - 42"
+TRIAL_NAME="trial1_seed42"
 
 if [ ! -d "$TRIAL_NAME" ]; then
   echo "ERROR: missing trial directory: $TRIAL_NAME"

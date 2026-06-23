@@ -37,7 +37,7 @@ source ~/project/.venv-mace/bin/activate
 mapfile -t CONTOUR_JOBS < <(env -u SLURM_ARRAY_TASK_ID python -u scripts_python/contour.py --tests generated_material_tests.csv --config test_1.json --list-jobs)
 deactivate
 
-TRIAL_NAME="Trial 1 - 42"
+TRIAL_NAME="trial1_seed42"
 MLFF_SEED=42
 
 JOB_COUNT="${#CONTOUR_JOBS[@]}"

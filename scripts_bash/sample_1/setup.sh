@@ -2,7 +2,7 @@
 #SBATCH --account=rrg-j3goals
 #SBATCH --time=00:30:00
 #SBATCH --mem=16G
-#SBATCH --cpus-per-task=2
+#SBATCH --cpus-per-task=4
 #SBATCH --output=sample-1-setup-%j.out
 
 set -euo pipefail

@@ -3,7 +3,7 @@
 #SBATCH --time=10:00:00
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=8
-#SBATCH --array=1-400%40
+#SBATCH --array=1-400%80
 #SBATCH --output=contour-%A_%a.out
 
 set -euo pipefail
@@ -37,7 +37,7 @@ source ~/project/.venv-mace/bin/activate
 mapfile -t CONTOUR_JOBS < <(env -u SLURM_ARRAY_TASK_ID python -u scripts_python/contour.py --list-jobs)
 deactivate
 
-TRIAL_NAMES=("Trial 1 - 42" "Trial 2 - 43" "Trial 3 - 44" "Trial 4 - 45" "Trial 5 - 46")
+TRIAL_NAMES=("trial1_seed42" "trial2_seed43" "trial3_seed44" "trial4_seed45" "trial5_seed46")
 TRIAL_SEEDS=(42 43 44 45 46)
 
 JOB_COUNT="${#CONTOUR_JOBS[@]}"

@@ -3,7 +3,7 @@
 #SBATCH --time=48:00:00
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=8
-#SBATCH --array=1-400%40
+#SBATCH --array=1-400%80
 #SBATCH --output=main-%A_%a.out
 
 set -euo pipefail

@@ -2,7 +2,7 @@
 #SBATCH --account=rrg-j3goals
 #SBATCH --time=04:00:00
 #SBATCH --mem=16G
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=8
 #SBATCH --array=1-5%5
 #SBATCH --output=plot-%A_%a.out
 
@@ -14,11 +14,11 @@ export PYTHONUNBUFFERED=1
 module load gcc/12.3 python/3.11 arrow
 
 TRIALS=(
-  "Trial 1 - 42"
-  "Trial 2 - 43"
-  "Trial 3 - 44"
-  "Trial 4 - 45"
-  "Trial 5 - 46"
+  "trial1_seed42"
+  "trial2_seed43"
+  "trial3_seed44"
+  "trial4_seed45"
+  "trial5_seed46"
 )
 
 TASK_INDEX=$((SLURM_ARRAY_TASK_ID - 1))
