@@ -169,9 +169,40 @@ def save_metric_plot(data, metric, output_dir):
         lower -= pad
         upper += pad
 
-    bins = min(30, max(8, int(np.sqrt(len(x)))))
-    ax_hist_x.hist(x, bins=bins, color="#777777", alpha=0.75)
-    ax_hist_y.hist(y, bins=bins, orientation="horizontal", color="#777777", alpha=0.75)
+        bins = min(30, max(8, int(np.sqrt(len(x)))))
+    bin_edges = np.linspace(lower, upper, bins + 1)
+
+    for calculator, color in colors.items():
+        subset = plot_data[plot_data["calculator"] == calculator]
+        if subset.empty:
+            continue
+
+        sx = clean_numeric(subset[f"{metric}_float64"])
+        sy = clean_numeric(subset[f"{metric}_float32"])
+        valid = sx.notna() & sy.notna()
+
+        if not valid.any():
+            continue
+
+        ax_hist_x.hist(
+            sx[valid],
+            bins=bin_edges,
+            color=color,
+            alpha=0.48,
+            histtype="stepfilled",
+            edgecolor=color,
+            linewidth=1.0,
+        )
+        ax_hist_y.hist(
+            sy[valid],
+            bins=bin_edges,
+            orientation="horizontal",
+            color=color,
+            alpha=0.48,
+            histtype="stepfilled",
+            edgecolor=color,
+            linewidth=1.0,
+        )
 
     ax.plot([lower, upper], [lower, upper], color="#444444", linestyle="--", linewidth=1.0)
     ax.set_xlim(lower, upper)

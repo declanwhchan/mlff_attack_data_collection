@@ -40,6 +40,10 @@ EPSILON_POSITION_FACTORS = {
 
 EPSILON_BOX_WIDTH_LOG10 = 0.020
 
+EPSILON_PERCENT_SUFFIX = "_percent_displacement"
+EPSILON_AXIS_RAW = "epsilon"
+EPSILON_AXIS_PERCENT = "percent_displacement"
+
 
 def apply_plot_style():
     plt.rcParams.update({
@@ -129,29 +133,26 @@ def epsilon_box_widths(positions):
     return widths
 
 
-def apply_epsilon_axis(ax, epsilons, plotted_positions=None):
-    ticks = decade_ticks(epsilons)
+def apply_epsilon_axis(ax, x_values, plotted_positions=None, axis_mode=EPSILON_AXIS_RAW):
+    ticks = decade_ticks(x_values)
     ax.set_xscale("log")
 
-    limit_values = list(positive_finite_values(epsilons))
+    limit_values = list(positive_finite_values(x_values))
     if plotted_positions is not None:
         limit_values.extend(positive_finite_values(plotted_positions).tolist())
 
     if ticks:
-        apply_decade_ticks(ax.xaxis, epsilons)
-
+        apply_decade_ticks(ax.xaxis, x_values)
         finite_limits = positive_finite_values(limit_values)
-        if len(finite_limits):
-            left = min(ticks[0], float(np.min(finite_limits))) / 1.18
-            right = max(ticks[-1], float(np.max(finite_limits))) * 1.18
-        else:
-            left = ticks[0] / 1.18
-            right = ticks[-1] * 1.18
-
+        left = min(ticks[0], float(np.min(finite_limits))) / 1.18
+        right = max(ticks[-1], float(np.max(finite_limits))) * 1.18
         ax.set_xlim(left, right)
 
     ax.tick_params(axis="x", labelrotation=0, pad=2)
-    ax.set_xlabel(r"$\epsilon$ ($\AA$)")
+    if axis_mode == EPSILON_AXIS_PERCENT:
+        ax.set_xlabel("Epsilon (% of minimum lattice parameter)")
+    else:
+        ax.set_xlabel(r"$\epsilon$ ($\AA$)")
 
 
 STEP_POSITION_FACTORS = {
@@ -246,6 +247,47 @@ def as_float(value):
     if value is None:
         return None
     return float(value)
+
+
+def epsilon_reference_length_from_summary_row(row):
+    input_path = clean_value(row.get("input_path"))
+    if input_path is None:
+        return np.nan, "Missing input_path"
+
+    path = Path(str(input_path))
+    if not path.is_absolute():
+        path = BASE_DIR / path
+
+    try:
+        atoms = read_structure(path)
+        lengths = np.asarray(atoms.cell.lengths(), dtype=float)
+    except Exception as exc:
+        return np.nan, f"Could not read structure with ASE: {exc}"
+
+    lengths = lengths[np.isfinite(lengths) & (lengths > 0)]
+    if len(lengths) == 0:
+        return np.nan, "No positive lattice lengths"
+
+    return float(np.min(lengths)), None
+
+
+def percent_displacement_from_epsilon(epsilon, reference_length_a):
+    epsilon = as_float(epsilon)
+    reference_length_a = as_float(reference_length_a)
+    if epsilon is None or reference_length_a is None or reference_length_a <= 0:
+        return np.nan
+    return 100.0 * epsilon / reference_length_a
+
+
+def percent_figure_name(figure_name):
+    return f"{figure_name}{EPSILON_PERCENT_SUFFIX}"
+
+
+def has_percent_displacement_axis(records):
+    if "epsilon_percent_displacement" not in records.columns:
+        return False
+    values = positive_finite_values(records["epsilon_percent_displacement"].dropna())
+    return len(values) > 0
 
 
 def as_int(value):
@@ -475,6 +517,14 @@ def load_summary(summary_path, base_dir, calculator):
             relax_fmax,
         )
 
+        epsilon_value = as_float(row.get("epsilon"))
+        input_path = clean_value(row.get("input_path"))
+        epsilon_reference_length_a, epsilon_reference_reason = epsilon_reference_length_from_summary_row(row)
+        epsilon_percent_displacement = percent_displacement_from_epsilon(
+            epsilon_value,
+            epsilon_reference_length_a,
+        )
+
         records.append({
             "run_id": str(row["run_id"]),
             "material_label": material_label,
@@ -482,7 +532,11 @@ def load_summary(summary_path, base_dir, calculator):
             "logical_run_id": normalized_run_id(row["run_id"]),
             "calculator": calculator,
             "attack_label": attack_label(row),
-            "epsilon": as_float(row.get("epsilon")),
+            "epsilon": epsilon_value,
+            "input_path": input_path,
+            "epsilon_reference_length_a": epsilon_reference_length_a,
+            "epsilon_reference_reason": epsilon_reference_reason,
+            "epsilon_percent_displacement": epsilon_percent_displacement,
             "n_steps": as_int(row.get("n_steps")),
             "alpha": as_float(row.get("alpha")),
             "relax_fmax": relax_fmax,
@@ -1385,9 +1439,9 @@ def make_parametric_figure_set(records, output_dir, suffix, attacks_to_plot, bub
     )
 
 
-def collect_box_data(records, attack, value_getter, missing_rows):
+def collect_box_data(records, attack, value_getter, missing_rows, x_col="epsilon"):
     attack_records = records[records["attack_label"] == attack].copy()
-    epsilons = sorted(attack_records["epsilon"].dropna().unique())
+    x_values = sorted(attack_records[x_col].dropna().unique())
 
     positions = []
     values = []
@@ -1398,10 +1452,10 @@ def collect_box_data(records, attack, value_getter, missing_rows):
 
     rng = np.random.default_rng(12345)
 
-    for epsilon in epsilons:
+    for x_value in x_values:
         for calculator in ["mace", "uma"]:
             rowset = attack_records[
-                (attack_records["epsilon"] == epsilon)
+                (attack_records[x_col] == x_value)
                 & (attack_records["calculator"] == calculator)
             ]
 
@@ -1412,7 +1466,9 @@ def collect_box_data(records, attack, value_getter, missing_rows):
                     missing_rows.append({
                         "attack": attack,
                         "calculator": calculator,
-                        "epsilon": epsilon,
+                        "epsilon": row.get("epsilon"),
+                        "x_col": x_col,
+                        "x_value": x_value,
                         "run_id": row["run_id"],
                         "reason": reason,
                     })
@@ -1420,7 +1476,7 @@ def collect_box_data(records, attack, value_getter, missing_rows):
                     box_values.extend(row_values.tolist())
 
             if box_values:
-                position = epsilon_plot_position(epsilon, calculator)
+                position = epsilon_plot_position(x_value, calculator)
                 positions.append(position)
                 values.append(box_values)
                 colors.append(CALCULATOR_COLORS[calculator])
@@ -1433,15 +1489,25 @@ def collect_box_data(records, attack, value_getter, missing_rows):
                     point_x.extend((position * jitter).tolist())
                     point_y.extend(inlier_values.tolist())
 
-    return epsilons, positions, values, colors, calculators, point_x, point_y
+    return x_values, positions, values, colors, calculators, point_x, point_y
 
 
-def draw_grouped_boxplot(ax, records, attack, value_getter, ylabel, missing_rows):
-    epsilons, positions, values, colors, calculators, point_x, point_y = collect_box_data(
+def draw_grouped_boxplot(
+    ax,
+    records,
+    attack,
+    value_getter,
+    ylabel,
+    missing_rows,
+    x_col="epsilon",
+    axis_mode=EPSILON_AXIS_RAW,
+):
+    x_values, positions, values, colors, calculators, point_x, point_y = collect_box_data(
         records,
         attack,
         value_getter,
         missing_rows,
+        x_col=x_col,
     )
 
     if not values:
@@ -1478,7 +1544,7 @@ def draw_grouped_boxplot(ax, records, attack, value_getter, ylabel, missing_rows
         patch.set_linewidth(1.2)
 
     ax._preserve_manual_limits = True
-    apply_epsilon_axis(ax, epsilons, positions)
+    apply_epsilon_axis(ax, x_values, positions, axis_mode=axis_mode)
     ax.set_ylabel(ylabel)
     style_y_axis_no_offset(ax)
     ax.grid(True, axis="y")
@@ -1488,28 +1554,38 @@ def draw_grouped_boxplot(ax, records, attack, value_getter, ylabel, missing_rows
     return True
 
 
-def plot_convergence_panel(ax, records, attack, step_col, conv_col, log_steps=False):
+def plot_convergence_panel(
+    ax,
+    records,
+    attack,
+    step_col,
+    conv_col,
+    log_steps=False,
+    x_col="epsilon",
+    axis_mode=EPSILON_AXIS_RAW,
+):
     attack_records = records[records["attack_label"] == attack].copy()
     if attack_records.empty:
         ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
         ax.set_axis_off()
         return False
 
-    epsilons = sorted(attack_records["epsilon"].dropna().unique())
+    x_values = sorted(attack_records[x_col].dropna().unique())
 
     for calculator, color in CALCULATOR_COLORS.items():
         data = attack_records[
             (attack_records["calculator"] == calculator)
             & attack_records[step_col].notna()
-        ].sort_values("epsilon")
+            & attack_records[x_col].notna()
+        ].sort_values(x_col)
 
         if data.empty:
             continue
 
-        grouped = data.groupby("epsilon", as_index=False)[step_col].mean()
+        grouped = data.groupby(x_col, as_index=False)[step_col].mean()
 
         ax.plot(
-            grouped["epsilon"],
+            grouped[x_col],
             grouped[step_col],
             marker="o",
             markersize=4,
@@ -1519,7 +1595,7 @@ def plot_convergence_panel(ax, records, attack, step_col, conv_col, log_steps=Fa
         )
 
     ax._preserve_manual_limits = True
-    apply_epsilon_axis(ax, epsilons)
+    apply_epsilon_axis(ax, x_values, axis_mode=axis_mode)
     ax.set_ylabel("Relaxation steps")
     style_relaxation_steps_axis(ax, log_scale=log_steps)
     ax.grid(True, axis="y")
@@ -1530,48 +1606,61 @@ def plot_convergence_panel(ax, records, attack, step_col, conv_col, log_steps=Fa
 
 
 def make_convergence_figure(records, output_dir):
-    fig, axes = plt.subplots(2, 3, figsize=(8.2, 5.0), sharex=False, sharey=False)
-
-    rows = [
-        ("before_relax_steps", "before_relax_converged", "Relaxation before attack"),
-        ("after_relax_steps", "after_relax_converged", "Relaxation after attack"),
+    axis_specs = [
+        ("epsilon", EPSILON_AXIS_RAW, "figure_1_convergence_by_epsilon"),
     ]
+    if has_percent_displacement_axis(records):
+        axis_specs.append((
+            "epsilon_percent_displacement",
+            EPSILON_AXIS_PERCENT,
+            "figure_1_convergence_by_epsilon_percent_displacement",
+        ))
 
-    panel_index = 0
-    for row_index, (step_col, conv_col, row_title) in enumerate(rows):
-        for col_index, attack in enumerate(ATTACK_ORDER):
-            ax = axes[row_index, col_index]
-            plot_convergence_panel(
-                ax,
-                records,
-                attack,
-                step_col,
-                conv_col,
-                log_steps=(step_col == "after_relax_steps"),
-            )
+    for x_col, axis_mode, figure_name in axis_specs:
+        fig, axes = plt.subplots(2, 3, figsize=(8.2, 5.0), sharex=False, sharey=False)
 
-            if row_index == 0:
-                ax.set_title(attack)
+        rows = [
+            ("before_relax_steps", "before_relax_converged", "Relaxation before attack"),
+            ("after_relax_steps", "after_relax_converged", "Relaxation after attack"),
+        ]
 
-            if col_index == 0:
-                ax.text(
-                    -0.48,
-                    0.5,
-                    row_title,
-                    transform=ax.transAxes,
-                    rotation=90,
-                    va="center",
-                    ha="center",
-                    fontsize=8,
-                    fontweight="bold",
+        panel_index = 0
+        for row_index, (step_col, conv_col, row_title) in enumerate(rows):
+            for col_index, attack in enumerate(ATTACK_ORDER):
+                ax = axes[row_index, col_index]
+                plot_convergence_panel(
+                    ax,
+                    records,
+                    attack,
+                    step_col,
+                    conv_col,
+                    log_steps=(step_col == "after_relax_steps"),
+                    x_col=x_col,
+                    axis_mode=axis_mode,
                 )
 
-            add_panel_label(ax, chr(ord("A") + panel_index))
-            panel_index += 1
+                if row_index == 0:
+                    ax.set_title(attack)
 
-    apply_shared_figure_header(fig, left=0.11)
-    save_figure(fig, output_dir / "figure_1_convergence_by_epsilon")
-    plt.close(fig)
+                if col_index == 0:
+                    ax.text(
+                        -0.48,
+                        0.5,
+                        row_title,
+                        transform=ax.transAxes,
+                        rotation=90,
+                        va="center",
+                        ha="center",
+                        fontsize=8,
+                        fontweight="bold",
+                    )
+
+                add_panel_label(ax, chr(ord("A") + panel_index))
+                panel_index += 1
+
+        apply_shared_figure_header(fig, left=0.11)
+        save_figure(fig, output_dir / figure_name)
+        plt.close(fig)
 
 
 def bootstrap_median_ci(values, confidence=95, n_bootstrap=1000, seed=12345):
@@ -1599,12 +1688,22 @@ def bootstrap_median_ci(values, confidence=95, n_bootstrap=1000, seed=12345):
     return median, lower, upper
 
 
-def draw_grouped_ci(ax, records, attack, value_getter, ylabel, missing_rows):
-    epsilons, positions, values, colors, calculators, point_x, point_y = collect_box_data(
+def draw_grouped_ci(
+    ax,
+    records,
+    attack,
+    value_getter,
+    ylabel,
+    missing_rows,
+    x_col="epsilon",
+    axis_mode=EPSILON_AXIS_RAW,
+):
+    x_values, positions, values, colors, calculators, point_x, point_y = collect_box_data(
         records,
         attack,
         value_getter,
         missing_rows,
+        x_col=x_col,
     )
 
     if not values:
@@ -1623,9 +1722,7 @@ def draw_grouped_ci(ax, records, attack, value_getter, ylabel, missing_rows):
             continue
 
         median, lower, upper = ci
-
-        x_value = position
-        series[calculator]["x"].append(x_value)
+        series[calculator]["x"].append(position)
         series[calculator]["median"].append(median)
         series[calculator]["lower"].append(lower)
         series[calculator]["upper"].append(upper)
@@ -1640,15 +1737,7 @@ def draw_grouped_ci(ax, records, attack, value_getter, ylabel, missing_rows):
         upper = np.asarray(data["upper"], dtype=float)
         color = CALCULATOR_COLORS[calculator]
 
-        ax.fill_between(
-            x,
-            lower,
-            upper,
-            color=color,
-            alpha=0.18,
-            linewidth=0,
-        )
-
+        ax.fill_between(x, lower, upper, color=color, alpha=0.18, linewidth=0)
         ax.plot(
             x,
             median,
@@ -1660,7 +1749,7 @@ def draw_grouped_ci(ax, records, attack, value_getter, ylabel, missing_rows):
         )
 
     ax._preserve_manual_limits = True
-    apply_epsilon_axis(ax, epsilons, positions)
+    apply_epsilon_axis(ax, x_values, positions, axis_mode=axis_mode)
     ax.set_ylabel(ylabel)
     style_y_axis_no_offset(ax)
     ax.grid(True, axis="y")
@@ -1670,104 +1759,123 @@ def draw_grouped_ci(ax, records, attack, value_getter, ylabel, missing_rows):
     return True
 
 
+def epsilon_axis_specs(records, figure_name):
+    specs = [(EPSILON_AXIS_RAW, "epsilon", figure_name)]
+    if has_percent_displacement_axis(records):
+        specs.append((
+            EPSILON_AXIS_PERCENT,
+            "epsilon_percent_displacement",
+            percent_figure_name(figure_name),
+        ))
+    return specs
+
+
 def make_ci_figure(records, output_dir, figure_name, ylabel, rows):
-    fig, axes = plt.subplots(2, 3, figsize=(8.4, 5.2), sharex=False, sharey=False)
-
     all_missing = []
-    panel_index = 0
 
-    for row_index, (row_title, getter_factory) in enumerate(rows):
-        for col_index, attack in enumerate(ATTACK_ORDER):
-            ax = axes[row_index, col_index]
-            attack_missing = []
+    for axis_mode, x_col, output_figure_name in epsilon_axis_specs(records, figure_name):
+        fig, axes = plt.subplots(2, 3, figsize=(8.4, 5.2), sharex=False, sharey=False)
 
-            draw_grouped_ci(
-                ax=ax,
-                records=records,
-                attack=attack,
-                value_getter=getter_factory(),
-                ylabel=ylabel,
-                missing_rows=attack_missing,
-            )
+        panel_index = 0
 
-            for missing in attack_missing:
-                missing["figure"] = figure_name
-                missing["panel"] = f"{row_title} / {attack}"
-            all_missing.extend(attack_missing)
+        for row_index, (row_title, getter_factory) in enumerate(rows):
+            for col_index, attack in enumerate(ATTACK_ORDER):
+                ax = axes[row_index, col_index]
+                attack_missing = []
 
-            if row_index == 0:
-                ax.set_title(attack)
-
-            if col_index == 0:
-                ax.text(
-                    -0.33,
-                    0.5,
-                    row_title,
-                    transform=ax.transAxes,
-                    rotation=90,
-                    va="center",
-                    ha="center",
-                    fontsize=8,
-                    fontweight="bold",
+                draw_grouped_ci(
+                    ax=ax,
+                    records=records,
+                    attack=attack,
+                    value_getter=getter_factory(),
+                    ylabel=ylabel,
+                    missing_rows=attack_missing,
+                    x_col=x_col,
+                    axis_mode=axis_mode,
                 )
 
-            add_panel_label(ax, chr(ord("A") + panel_index))
-            panel_index += 1
+                for missing in attack_missing:
+                    missing["figure"] = output_figure_name
+                    missing["panel"] = f"{row_title} / {attack}"
+                all_missing.extend(attack_missing)
 
-    apply_shared_figure_header(
-        fig,
-        subtitle="Line = median, shaded band = 95% CI",
-        left=0.03,
-    )
-    save_figure(fig, output_dir / figure_name)
-    plt.close(fig)
+                if row_index == 0:
+                    ax.set_title(attack)
+
+                if col_index == 0:
+                    ax.text(
+                        -0.33,
+                        0.5,
+                        row_title,
+                        transform=ax.transAxes,
+                        rotation=90,
+                        va="center",
+                        ha="center",
+                        fontsize=8,
+                        fontweight="bold",
+                    )
+
+                add_panel_label(ax, chr(ord("A") + panel_index))
+                panel_index += 1
+
+        apply_shared_figure_header(
+            fig,
+            subtitle="Line = median, shaded band = 95% CI",
+            left=0.03,
+        )
+        save_figure(fig, output_dir / output_figure_name)
+        plt.close(fig)
 
     return all_missing
 
 
 def make_distribution_figure(records, output_dir, figure_name, ylabel, rows):
-    fig, axes = plt.subplots(2, 3, figsize=(8.4, 5.2), sharex=False, sharey=False)
-
     all_missing = []
-    panel_index = 0
 
-    for row_index, (row_title, getter_factory) in enumerate(rows):
-        for col_index, attack in enumerate(ATTACK_ORDER):
-            ax = axes[row_index, col_index]
-            attack_missing = []
+    for axis_mode, x_col, output_figure_name in epsilon_axis_specs(records, figure_name):
+        fig, axes = plt.subplots(2, 3, figsize=(8.4, 5.2), sharex=False, sharey=False)
 
-            draw_grouped_boxplot(
-                ax=ax,
-                records=records,
-                attack=attack,
-                value_getter=getter_factory(),
-                ylabel=ylabel,
-                missing_rows=attack_missing,
-            )
-            all_missing.extend(attack_missing)
+        panel_index = 0
 
-            if row_index == 0:
-                ax.set_title(attack)
+        for row_index, (row_title, getter_factory) in enumerate(rows):
+            for col_index, attack in enumerate(ATTACK_ORDER):
+                ax = axes[row_index, col_index]
+                attack_missing = []
 
-            if col_index == 0:
-                ax.text(
-                    -0.33,
-                    0.5,
-                    row_title,
-                    transform=ax.transAxes,
-                    rotation=90,
-                    va="center",
-                    ha="center",
-                    fontsize=8,
-                    fontweight="bold",
+                draw_grouped_boxplot(
+                    ax=ax,
+                    records=records,
+                    attack=attack,
+                    value_getter=getter_factory(),
+                    ylabel=ylabel,
+                    missing_rows=attack_missing,
+                    x_col=x_col,
+                    axis_mode=axis_mode,
                 )
+                all_missing.extend(attack_missing)
 
-            add_panel_label(ax, chr(ord("A") + panel_index))
-            panel_index += 1
+                if row_index == 0:
+                    ax.set_title(attack)
 
-    apply_shared_figure_header(fig, left=0.03)
-    save_figure(fig, output_dir / figure_name)
-    plt.close(fig)
+                if col_index == 0:
+                    ax.text(
+                        -0.33,
+                        0.5,
+                        row_title,
+                        transform=ax.transAxes,
+                        rotation=90,
+                        va="center",
+                        ha="center",
+                        fontsize=8,
+                        fontweight="bold",
+                    )
+
+                add_panel_label(ax, chr(ord("A") + panel_index))
+                panel_index += 1
+
+        apply_shared_figure_header(fig, left=0.03)
+        save_figure(fig, output_dir / output_figure_name)
+        plt.close(fig)
 
     return all_missing
 
@@ -1925,16 +2033,16 @@ def tukey_inlier_values(values):
     return values[(values >= lower) & (values <= upper)]
 
 
-def collect_whisker_span_data(records, attack, value_getter, missing_rows):
+def collect_whisker_span_data(records, attack, value_getter, missing_rows, x_col="epsilon"):
     attack_records = records[records["attack_label"] == attack].copy()
-    epsilons = sorted(attack_records["epsilon"].dropna().unique())
+    x_values = sorted(attack_records[x_col].dropna().unique())
 
     points = []
 
-    for i, epsilon in enumerate(epsilons, start=1):
+    for x_value in x_values:
         for calculator in ["mace", "uma"]:
             rowset = attack_records[
-                (attack_records["epsilon"] == epsilon)
+                (attack_records[x_col] == x_value)
                 & (attack_records["calculator"] == calculator)
             ]
 
@@ -1945,7 +2053,9 @@ def collect_whisker_span_data(records, attack, value_getter, missing_rows):
                     missing_rows.append({
                         "attack": attack,
                         "calculator": calculator,
-                        "epsilon": epsilon,
+                        "epsilon": row.get("epsilon"),
+                        "x_col": x_col,
+                        "x_value": x_value,
                         "run_id": row["run_id"],
                         "reason": reason,
                     })
@@ -1955,20 +2065,30 @@ def collect_whisker_span_data(records, attack, value_getter, missing_rows):
             span = tukey_whisker_span(values)
             if span is not None:
                 points.append({
-                    "x": epsilon_plot_position(epsilon, calculator),
+                    "x": epsilon_plot_position(x_value, calculator),
                     "y": span,
                     "calculator": calculator,
                 })
 
-    return epsilons, points
+    return x_values, points
 
 
-def draw_whisker_span(ax, records, attack, value_getter, ylabel, missing_rows):
-    epsilons, points = collect_whisker_span_data(
+def draw_whisker_span(
+    ax,
+    records,
+    attack,
+    value_getter,
+    ylabel,
+    missing_rows,
+    x_col="epsilon",
+    axis_mode=EPSILON_AXIS_RAW,
+):
+    x_values, points = collect_whisker_span_data(
         records,
         attack,
         value_getter,
         missing_rows,
+        x_col=x_col,
     )
 
     if not points:
@@ -1982,11 +2102,11 @@ def draw_whisker_span(ax, records, attack, value_getter, ylabel, missing_rows):
             continue
 
         calc_points = sorted(calc_points, key=lambda point: point["x"])
-        x_values = [point["x"] for point in calc_points]
+        x_plot_values = [point["x"] for point in calc_points]
         y_values = [point["y"] for point in calc_points]
 
         ax.plot(
-            x_values,
+            x_plot_values,
             y_values,
             marker="o",
             markersize=4,
@@ -1997,7 +2117,7 @@ def draw_whisker_span(ax, records, attack, value_getter, ylabel, missing_rows):
         )
 
     ax._preserve_manual_limits = True
-    apply_epsilon_axis(ax, epsilons, [point["x"] for point in points])
+    apply_epsilon_axis(ax, x_values, [point["x"] for point in points], axis_mode=axis_mode)
     ax.set_ylabel(ylabel)
     style_y_axis_no_offset(ax)
     ax.grid(True, axis="y")
@@ -2008,56 +2128,60 @@ def draw_whisker_span(ax, records, attack, value_getter, ylabel, missing_rows):
 
 
 def make_whisker_span_figure(records, output_dir, figure_name, ylabel, rows):
-    fig, axes = plt.subplots(2, 3, figsize=(8.4, 5.2), sharex=False, sharey=False)
-
     all_missing = []
-    panel_index = 0
 
-    for row_index, (row_title, getter_factory) in enumerate(rows):
-        for col_index, attack in enumerate(ATTACK_ORDER):
-            ax = axes[row_index, col_index]
-            attack_missing = []
+    for axis_mode, x_col, output_figure_name in epsilon_axis_specs(records, figure_name):
+        fig, axes = plt.subplots(2, 3, figsize=(8.4, 5.2), sharex=False, sharey=False)
 
-            draw_whisker_span(
-                ax=ax,
-                records=records,
-                attack=attack,
-                value_getter=getter_factory(),
-                ylabel=ylabel,
-                missing_rows=attack_missing,
-            )
+        panel_index = 0
 
-            for missing in attack_missing:
-                missing["figure"] = figure_name
-                missing["panel"] = f"{row_title} / {attack}"
-            all_missing.extend(attack_missing)
+        for row_index, (row_title, getter_factory) in enumerate(rows):
+            for col_index, attack in enumerate(ATTACK_ORDER):
+                ax = axes[row_index, col_index]
+                attack_missing = []
 
-            if row_index == 0:
-                ax.set_title(attack)
-
-            if col_index == 0:
-                ax.text(
-                    -0.33,
-                    0.5,
-                    row_title,
-                    transform=ax.transAxes,
-                    rotation=90,
-                    va="center",
-                    ha="center",
-                    fontsize=8,
-                    fontweight="bold",
+                draw_whisker_span(
+                    ax=ax,
+                    records=records,
+                    attack=attack,
+                    value_getter=getter_factory(),
+                    ylabel=ylabel,
+                    missing_rows=attack_missing,
+                    x_col=x_col,
+                    axis_mode=axis_mode,
                 )
 
-            add_panel_label(ax, chr(ord("A") + panel_index))
-            panel_index += 1
+                for missing in attack_missing:
+                    missing["figure"] = output_figure_name
+                    missing["panel"] = f"{row_title} / {attack}"
+                all_missing.extend(attack_missing)
 
-    apply_shared_figure_header(
-        fig,
-        subtitle="Each dot = upper whisker - lower whisker",
-        left=0.03,
-    )
-    save_figure(fig, output_dir / figure_name)
-    plt.close(fig)
+                if row_index == 0:
+                    ax.set_title(attack)
+
+                if col_index == 0:
+                    ax.text(
+                        -0.33,
+                        0.5,
+                        row_title,
+                        transform=ax.transAxes,
+                        rotation=90,
+                        va="center",
+                        ha="center",
+                        fontsize=8,
+                        fontweight="bold",
+                    )
+
+                add_panel_label(ax, chr(ord("A") + panel_index))
+                panel_index += 1
+
+        apply_shared_figure_header(
+            fig,
+            subtitle="Each dot = upper whisker - lower whisker",
+            left=0.03,
+        )
+        save_figure(fig, output_dir / output_figure_name)
+        plt.close(fig)
 
     return all_missing
 

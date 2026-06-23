@@ -748,22 +748,129 @@ def plot_mace_vs_uma(material_slug, all_rows, output_dir):
     plt.close(fig)
 
 
-def axis_limit(values, pad=0.06):
+def clean_xy(data, x_col, y_col):
+    subset = data[[x_col, y_col, "calculator"]].copy()
+    subset[x_col] = pd.to_numeric(subset[x_col], errors="coerce")
+    subset[y_col] = pd.to_numeric(subset[y_col], errors="coerce")
+    subset = subset.replace([np.inf, -np.inf], np.nan).dropna(subset=[x_col, y_col])
+    subset = subset[(subset[x_col] >= 0) & (subset[y_col] >= 0)]
+    return subset
+
+
+def compact_axis_limits(values, upper_percentile=99.0, pad=0.18):
     values = np.asarray(values, dtype=float)
     values = values[np.isfinite(values)]
     values = values[values >= 0]
 
     if values.size == 0:
-        return 1.0
+        return 0.0, 1.0
 
-    upper = float(values.max())
+    upper = float(np.percentile(values, upper_percentile))
+    max_value = float(np.max(values))
+
     if upper <= 0:
-        return 1.0
+        upper = max_value
 
-    return upper * (1.0 + pad)
+    if upper <= 0:
+        return 0.0, 1.0
+
+    # Keep extreme outliers visible if there are only a few points.
+    if max_value > upper * 8:
+        upper = upper * 1.8
+    else:
+        upper = max_value
+
+    return 0.0, upper * (1.0 + pad)
+
+
+def symlog_linthresh(values):
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values) & (values > 0)]
+
+    if values.size == 0:
+        return 1e-6
+
+    return max(float(np.percentile(values, 10)) * 0.35, 1e-9)
+
+
+def add_binned_median_trend(ax, data, x_col, y_col):
+    subset = data[[x_col, y_col]].copy()
+    subset = subset.replace([np.inf, -np.inf], np.nan).dropna()
+    subset = subset[(subset[x_col] > 0) & (subset[y_col] >= 0)]
+
+    if len(subset) < 8:
+        return
+
+    x = subset[x_col].to_numpy(dtype=float)
+    y = subset[y_col].to_numpy(dtype=float)
+
+    edges = np.unique(np.quantile(x, np.linspace(0, 1, 6)))
+    if len(edges) < 3:
+        return
+
+    centers = []
+    medians = []
+
+    for left, right in zip(edges[:-1], edges[1:]):
+        if right <= left:
+            continue
+        mask = (x >= left) & (x <= right)
+        if np.count_nonzero(mask) < 3:
+            continue
+        centers.append(float(np.median(x[mask])))
+        medians.append(float(np.median(y[mask])))
+
+    if len(centers) < 2:
+        return
+
+    ax.plot(
+        centers,
+        medians,
+        color="#111111",
+        linewidth=1.7,
+        marker="o",
+        markersize=3.2,
+        alpha=0.78,
+        label="median trend",
+        zorder=4,
+    )
+
+
+def style_global_comparison_axis(ax, data, x_col, y_col):
+    x_values = data[x_col].to_numpy(dtype=float)
+    y_values = data[y_col].to_numpy(dtype=float)
+
+    x_linthresh = symlog_linthresh(x_values)
+    y_linthresh = symlog_linthresh(y_values)
+
+    ax.set_xscale("symlog", linthresh=x_linthresh)
+    ax.set_yscale("symlog", linthresh=y_linthresh)
+
+    x_left, x_right = compact_axis_limits(x_values)
+    y_bottom, y_top = compact_axis_limits(y_values)
+
+    ax.set_xlim(x_left, x_right)
+    ax.set_ylim(y_bottom, y_top)
+
+    line_max = min(x_right, y_top)
+    if line_max > 0:
+        ax.plot(
+            [0, line_max],
+            [0, line_max],
+            color="#555555",
+            lw=1.0,
+            linestyle="--",
+            label="1:1",
+            zorder=2,
+        )
+
+    ax.grid(True, which="major", alpha=0.34)
+    ax.grid(True, which="minor", alpha=0.12)
 
 
 def plot_one_global_panel(ax, data, x_col, y_col, xlabel, ylabel, title):
+    data = clean_xy(data, x_col, y_col)
+
     if data.empty:
         ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha="center", va="center")
         ax.set_xlabel(xlabel)
@@ -779,34 +886,21 @@ def plot_one_global_panel(ax, data, x_col, y_col, xlabel, ylabel, title):
         ax.scatter(
             subset[x_col],
             subset[y_col],
-            s=26,
+            s=28,
             color=color,
-            alpha=0.72,
+            alpha=0.68,
             edgecolor="white",
             linewidth=0.35,
             label=calculator.upper(),
+            zorder=3,
         )
 
-    x_max = axis_limit(data[x_col])
-    y_max = axis_limit(data[y_col])
+    style_global_comparison_axis(ax, data, x_col, y_col)
+    add_binned_median_trend(ax, data, x_col, y_col)
 
-    line_max = min(x_max, y_max)
-    ax.plot(
-        [0, line_max],
-        [0, line_max],
-        color="#555555",
-        lw=1.0,
-        linestyle="--",
-        label="1:1",
-    )
-
-    ax.set_xlim(0, x_max)
-    ax.set_ylim(0, y_max)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     ax.set_title(title)
-    style_numeric_axis(ax)
-    ax.grid(True, alpha=0.35)
 
 
 def plot_global_relaxation_state(records, output_dir, displacement_col, force_col, title, output_name):
@@ -823,7 +917,7 @@ def plot_global_relaxation_state(records, output_dir, displacement_col, force_co
     if displacement.empty and force.empty:
         return
 
-    fig, axes = plt.subplots(1, 2, figsize=(10.8, 4.4))
+    fig, axes = plt.subplots(1, 2, figsize=(9.8, 4.2))
 
     plot_one_global_panel(
         ax=axes[0],
@@ -882,6 +976,8 @@ def plot_relaxation_attack_grid_panel(
         & data[y_col].notna()
     ].copy()
 
+    subset = clean_xy(subset, x_col, y_col)
+
     if subset.empty:
         ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha="center", va="center")
         ax.set_title(attack_label)
@@ -897,34 +993,21 @@ def plot_relaxation_attack_grid_panel(
         ax.scatter(
             calc_subset[x_col],
             calc_subset[y_col],
-            s=24,
+            s=22,
             color=color,
-            alpha=0.72,
+            alpha=0.68,
             edgecolor="white",
-            linewidth=0.35,
+            linewidth=0.32,
             label=calculator.upper(),
+            zorder=3,
         )
 
-    x_max = axis_limit(subset[x_col])
-    y_max = axis_limit(subset[y_col])
-    line_max = min(x_max, y_max)
+    style_global_comparison_axis(ax, subset, x_col, y_col)
+    add_binned_median_trend(ax, subset, x_col, y_col)
 
-    ax.plot(
-        [0, line_max],
-        [0, line_max],
-        color="#555555",
-        lw=1.0,
-        linestyle="--",
-        label="1:1",
-    )
-
-    ax.set_xlim(0, x_max)
-    ax.set_ylim(0, y_max)
     ax.set_title(attack_label)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel if row_label else "")
-    style_numeric_axis(ax)
-    ax.grid(True, alpha=0.35)
 
 
 def plot_global_relaxation_attack_grid(
@@ -941,7 +1024,7 @@ def plot_global_relaxation_attack_grid(
     if records.empty:
         return
 
-    fig, axes = plt.subplots(2, 3, figsize=(12.0, 7.2), sharex=False, sharey=False)
+    fig, axes = plt.subplots(2, 3, figsize=(11.2, 6.6), sharex=False, sharey=False)
 
     rows = [
         ("After attack, before relaxation", before_col),
