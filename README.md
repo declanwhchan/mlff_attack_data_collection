@@ -2,7 +2,7 @@
 
 This repo runs an HPC data-collection workflow from the `mlff_attack` package: [TRustworthy-AI-Tools-for-Science/mlff_attack](https://github.com/TRustworthy-AI-Tools-for-Science/mlff_attack).
 
-The 20 Materials Project structures used in the comprehensive workflow are listed in `tests_materials.csv`. Practical-use context and literature sources are summarized in [materials_practical_uses.md](materials_practical_uses.md).
+The 20 Materials Project structures used in the comprehensive workflow are listed in `tests_materials.csv`. Practical-use context and literature sources are summarized in [materials_practical_uses.md](research/materials_practical_uses.md).
 
 ## Setup for HPC
 
@@ -120,7 +120,7 @@ Open http://localhost:8000
 Login using SFTP:
 
 ```bash
-cd mlff_attack_data_collection/Trial <#>
+cd mlff_attack_data_collection/trial<#>
 get -r outputs_comprehensive
 get -r outputs_float32
 get -r outputs_float64
