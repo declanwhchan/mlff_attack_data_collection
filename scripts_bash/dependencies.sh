@@ -20,15 +20,38 @@ setup_env() {
   local env_path="$PROJECT_DIR/$env_name"
 
   if [ ! -d "$env_path" ]; then
-    python -m venv "$env_path"
+    python -m venv "$env_path" --system-site-packages
   else
     echo "Using existing $env_path"
   fi
 
   source "$env_path/bin/activate"
+
   python -m pip install --upgrade pip setuptools wheel
+
   python -m pip install -e "$PROJECT_DIR/mlff_attack"
-  python -m pip install "$extra_package" mp-api pymatgen pytest
+
+  python -m pip install "$extra_package"
+
+  python -m pip install \
+    pymatgen \
+    pytest \
+    boto3 \
+    botocore \
+    s3transfer
+
+  python -m pip install --no-deps mp-api
+
+  python - <<'PY'
+import boto3
+import botocore
+from mp_api.client import MPRester
+
+print("boto3", boto3.__version__)
+print("botocore", botocore.__version__)
+print("mp_api import OK")
+PY
+
   deactivate
 }
 
