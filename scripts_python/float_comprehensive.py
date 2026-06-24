@@ -209,7 +209,7 @@ def save_metric_plot(data, metric, output_dir):
     ax.set_ylim(lower, upper)
     ax.set_xlabel(f"{metric} float64")
     ax.set_ylabel(f"{metric} float32")
-    ax.set_title(f"float32 vs float64: {metric}")
+    fig.suptitle(f"float32 vs float64: {metric}", y=0.995, fontsize=13)
     ax.text(
         0.04,
         0.96,
@@ -225,6 +225,9 @@ def save_metric_plot(data, metric, output_dir):
     ax.grid(True, alpha=0.35)
     ax.legend(frameon=False)
 
+    ax_hist_x.set_yscale("log")
+    ax_hist_y.set_xscale("log")
+
     ax_hist_x.grid(True, axis="y", alpha=0.25)
     ax_hist_y.grid(True, axis="x", alpha=0.25)
     ax_hist_x.tick_params(axis="x", labelbottom=False)
@@ -232,7 +235,7 @@ def save_metric_plot(data, metric, output_dir):
     ax_hist_x.set_ylabel("count")
     ax_hist_y.set_xlabel("count")
 
-    fig.savefig(output_dir / f"{metric}_float32_vs_float64.png", dpi=300, bbox_inches="tight")
+    fig.savefig(output_dir / f"{metric}_float32_vs_float64.png", dpi=300, bbox_inches="tight", pad_inches=0.15)
     plt.close(fig)
 
 
