@@ -150,9 +150,15 @@ def apply_epsilon_axis(ax, x_values, plotted_positions=None, axis_mode=EPSILON_A
 
     ax.tick_params(axis="x", labelrotation=0, pad=2)
     if axis_mode == EPSILON_AXIS_PERCENT:
-        ax.set_xlabel("Epsilon (% of minimum lattice parameter)")
+        ax.set_xlabel("Epsilon (% min lattice)")
     else:
         ax.set_xlabel(r"$\epsilon$ ($\AA$)")
+
+
+def percent_displacement_plot_x(value):
+    if value is None or not np.isfinite(value) or value <= 0:
+        return np.nan
+    return 10 ** (round(np.log10(float(value)) * 4) / 4)
 
 
 STEP_POSITION_FACTORS = {
@@ -853,12 +859,12 @@ def style_y_axis_no_offset(ax, ybins=5):
     ax.tick_params(axis="y", labelsize=8, pad=2)
 
 
-def style_relaxation_steps_axis(ax, log_scale=False):
+def style_relaxation_steps_axis(ax, log_scale=False, tight_linear=False):
     y_values = clean_numeric_array(_artist_values_for_axis(ax, "y"))
 
     if len(y_values) == 0:
         return
-    
+
     if log_scale:
         positive = positive_finite_values(y_values)
         if len(positive) == 0:
@@ -873,14 +879,26 @@ def style_relaxation_steps_axis(ax, log_scale=False):
         ax.tick_params(axis="y", labelsize=8, pad=2)
         return
 
-    y_max = float(np.nanmax(y_values))
-
-    if not np.isfinite(y_max) or y_max <= 0:
+    finite = y_values[np.isfinite(y_values)]
+    if len(finite) == 0:
         ax.set_ylim(-0.03, 1.0)
         ax.set_yticks([0, 1])
+    elif tight_linear:
+        y_min = float(np.nanmin(finite))
+        y_max = float(np.nanmax(finite))
+        span = y_max - y_min
+        pad = max(span * 0.35, abs(y_max) * 0.035, 0.05)
+
+        ax.set_ylim(y_min - pad, y_max + pad)
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=4, integer=False, prune=None))
     else:
-        ax.set_ylim(0, y_max * 1.12)
-        ax.yaxis.set_major_locator(MaxNLocator(nbins=5, integer=True, prune=None))
+        y_max = float(np.nanmax(finite))
+        if not np.isfinite(y_max) or y_max <= 0:
+            ax.set_ylim(-0.03, 1.0)
+            ax.set_yticks([0, 1])
+        else:
+            ax.set_ylim(0, y_max * 1.12)
+            ax.yaxis.set_major_locator(MaxNLocator(nbins=5, integer=True, prune=None))
 
     formatter = ScalarFormatter(useMathText=True, useOffset=False)
     formatter.set_powerlimits((-3, 3))
@@ -906,20 +924,67 @@ def apply_positive_log_axis(ax, axis_name):
     if len(values) == 0:
         return
 
-    ticks = decade_ticks(values)
     lower = float(np.min(values)) / 1.35
     upper = float(np.max(values)) * 1.35
+
+    if not np.isfinite(lower) or not np.isfinite(upper) or lower <= 0 or upper <= 0:
+        return
+
+    if lower == upper:
+        lower /= 1.35
+        upper *= 1.35
+
+    log_span = np.log10(upper) - np.log10(lower)
+
+    if log_span < 1.0:
+        if axis_name == "x":
+            ax.set_xscale("linear")
+            ax.set_xlim(lower, upper)
+            ax.xaxis.set_major_locator(MaxNLocator(nbins=4, prune=None))
+            formatter = ScalarFormatter(useMathText=True, useOffset=False)
+            formatter.set_powerlimits((-3, 3))
+            ax.xaxis.set_major_formatter(formatter)
+        else:
+            ax.set_yscale("linear")
+            ax.set_ylim(lower, upper)
+            ax.yaxis.set_major_locator(MaxNLocator(nbins=4, prune=None))
+            formatter = ScalarFormatter(useMathText=True, useOffset=False)
+            formatter.set_powerlimits((-3, 3))
+            ax.yaxis.set_major_formatter(formatter)
+
+        ax.tick_params(axis=axis_name, labelsize=8, pad=2)
+        return
+
+    ticks = decade_ticks(values)
+
+    def format_log_tick(value, _):
+        if value <= 0 or not np.isfinite(value):
+            return ""
+
+        if value >= 100:
+            return f"{value:.0f}"
+        if value >= 10:
+            return f"{value:.1f}".rstrip("0").rstrip(".")
+        if value >= 1:
+            return f"{value:.2f}".rstrip("0").rstrip(".")
+        if value >= 0.01:
+            return f"{value:.3f}".rstrip("0").rstrip(".")
+        return f"{value:.1e}"
 
     if axis_name == "x":
         ax.set_xscale("log")
         ax.set_xlim(lower, upper)
         if ticks:
-            apply_decade_ticks(ax.xaxis, values)
+            ax.xaxis.set_major_locator(FixedLocator(ticks))
+            ax.xaxis.set_major_formatter(FuncFormatter(format_log_tick))
     else:
         ax.set_yscale("log")
         ax.set_ylim(lower, upper)
         if ticks:
-            apply_decade_ticks(ax.yaxis, values)
+            ax.yaxis.set_major_locator(FixedLocator(ticks))
+            ax.yaxis.set_major_formatter(FuncFormatter(format_log_tick))
+
+    ax.tick_params(axis=axis_name, labelsize=8, pad=2)
 
 
 def _artist_values_for_axis(ax, axis_name):
@@ -1441,7 +1506,13 @@ def make_parametric_figure_set(records, output_dir, suffix, attacks_to_plot, bub
 
 def collect_box_data(records, attack, value_getter, missing_rows, x_col="epsilon"):
     attack_records = records[records["attack_label"] == attack].copy()
-    x_values = sorted(attack_records[x_col].dropna().unique())
+
+    plot_x_col = x_col
+    if x_col == "epsilon_percent_displacement":
+        plot_x_col = "_epsilon_percent_displacement_plot"
+        attack_records[plot_x_col] = attack_records[x_col].map(percent_displacement_plot_x)
+
+    x_values = sorted(attack_records[plot_x_col].dropna().unique())
 
     positions = []
     values = []
@@ -1455,7 +1526,7 @@ def collect_box_data(records, attack, value_getter, missing_rows, x_col="epsilon
     for x_value in x_values:
         for calculator in ["mace", "uma"]:
             rowset = attack_records[
-                (attack_records[x_col] == x_value)
+                (attack_records[plot_x_col] == x_value)
                 & (attack_records["calculator"] == calculator)
             ]
 
@@ -1468,7 +1539,7 @@ def collect_box_data(records, attack, value_getter, missing_rows, x_col="epsilon
                         "calculator": calculator,
                         "epsilon": row.get("epsilon"),
                         "x_col": x_col,
-                        "x_value": x_value,
+                        "x_value": row.get(x_col),
                         "run_id": row["run_id"],
                         "reason": reason,
                     })
@@ -1570,22 +1641,27 @@ def plot_convergence_panel(
         ax.set_axis_off()
         return False
 
-    x_values = sorted(attack_records[x_col].dropna().unique())
+    plot_x_col = x_col
+    if x_col == "epsilon_percent_displacement":
+        plot_x_col = "_epsilon_percent_displacement_plot"
+        attack_records[plot_x_col] = attack_records[x_col].map(percent_displacement_plot_x)
+
+    x_values = sorted(attack_records[plot_x_col].dropna().unique())
 
     for calculator, color in CALCULATOR_COLORS.items():
         data = attack_records[
             (attack_records["calculator"] == calculator)
             & attack_records[step_col].notna()
-            & attack_records[x_col].notna()
-        ].sort_values(x_col)
+            & attack_records[plot_x_col].notna()
+        ].sort_values(plot_x_col)
 
         if data.empty:
             continue
 
-        grouped = data.groupby(x_col, as_index=False)[step_col].mean()
+        grouped = data.groupby(plot_x_col, as_index=False)[step_col].mean()
 
         ax.plot(
-            grouped[x_col],
+            grouped[plot_x_col],
             grouped[step_col],
             marker="o",
             markersize=4,
@@ -1597,7 +1673,7 @@ def plot_convergence_panel(
     ax._preserve_manual_limits = True
     apply_epsilon_axis(ax, x_values, axis_mode=axis_mode)
     ax.set_ylabel("Relaxation steps")
-    style_relaxation_steps_axis(ax, log_scale=log_steps)
+    style_relaxation_steps_axis(ax, log_scale=log_steps, tight_linear=not log_steps)
     ax.grid(True, axis="y")
     ax.grid(False, axis="x")
     ax.margins(x=0.03)
@@ -2366,7 +2442,7 @@ def plot_convergence_panel_by_steps(ax, records, attack, epsilon, step_col, conv
     ax._preserve_manual_limits = True
     apply_step_axis(ax, steps)
     ax.set_ylabel("Relaxation steps")
-    style_relaxation_steps_axis(ax)
+    style_relaxation_steps_axis(ax, tight_linear=True)
     ax.grid(True, axis="y")
     ax.grid(False, axis="x")
     ax.margins(x=0.03)

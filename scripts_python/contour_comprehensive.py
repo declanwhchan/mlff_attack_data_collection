@@ -793,49 +793,6 @@ def symlog_linthresh(values):
     return max(float(np.percentile(values, 10)) * 0.35, 1e-9)
 
 
-def add_binned_median_trend(ax, data, x_col, y_col):
-    subset = data[[x_col, y_col]].copy()
-    subset = subset.replace([np.inf, -np.inf], np.nan).dropna()
-    subset = subset[(subset[x_col] > 0) & (subset[y_col] >= 0)]
-
-    if len(subset) < 8:
-        return
-
-    x = subset[x_col].to_numpy(dtype=float)
-    y = subset[y_col].to_numpy(dtype=float)
-
-    edges = np.unique(np.quantile(x, np.linspace(0, 1, 6)))
-    if len(edges) < 3:
-        return
-
-    centers = []
-    medians = []
-
-    for left, right in zip(edges[:-1], edges[1:]):
-        if right <= left:
-            continue
-        mask = (x >= left) & (x <= right)
-        if np.count_nonzero(mask) < 3:
-            continue
-        centers.append(float(np.median(x[mask])))
-        medians.append(float(np.median(y[mask])))
-
-    if len(centers) < 2:
-        return
-
-    ax.plot(
-        centers,
-        medians,
-        color="#111111",
-        linewidth=1.7,
-        marker="o",
-        markersize=3.2,
-        alpha=0.78,
-        label="median trend",
-        zorder=4,
-    )
-
-
 def style_global_comparison_axis(ax, data, x_col, y_col):
     x_values = data[x_col].to_numpy(dtype=float)
     y_values = data[y_col].to_numpy(dtype=float)
@@ -896,7 +853,6 @@ def plot_one_global_panel(ax, data, x_col, y_col, xlabel, ylabel, title):
         )
 
     style_global_comparison_axis(ax, data, x_col, y_col)
-    add_binned_median_trend(ax, data, x_col, y_col)
 
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
@@ -1003,7 +959,6 @@ def plot_relaxation_attack_grid_panel(
         )
 
     style_global_comparison_axis(ax, subset, x_col, y_col)
-    add_binned_median_trend(ax, subset, x_col, y_col)
 
     ax.set_title(attack_label)
     ax.set_xlabel(xlabel)

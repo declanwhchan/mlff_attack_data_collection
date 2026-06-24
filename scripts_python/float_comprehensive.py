@@ -169,7 +169,7 @@ def save_metric_plot(data, metric, output_dir):
         lower -= pad
         upper += pad
 
-        bins = min(30, max(8, int(np.sqrt(len(x)))))
+    bins = min(30, max(8, int(np.sqrt(len(x)))))
     bin_edges = np.linspace(lower, upper, bins + 1)
 
     for calculator, color in colors.items():
