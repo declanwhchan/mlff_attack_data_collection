@@ -35,9 +35,12 @@ TRIAL_NAME="${TRIALS[$TASK_INDEX]}"
 
 SCRATCH_TRIAL_DIR="$SCRATCH_OUTPUT_ROOT/$TRIAL_NAME"
 PROJECT_TRIAL_DIR="$PROJECT_OUTPUT_ROOT/$TRIAL_NAME"
+
 mkdir -p "$PROJECT_TRIAL_DIR/outputs_comprehensive"
 
 echo "Plotting $TRIAL_NAME"
+echo "Scratch trial dir: $SCRATCH_TRIAL_DIR"
+echo "Project trial dir: $PROJECT_TRIAL_DIR"
 
 if [ ! -d "$SCRATCH_TRIAL_DIR" ]; then
   echo "ERROR: missing trial directory: $SCRATCH_TRIAL_DIR"
@@ -48,10 +51,12 @@ source ~/project/.venv-mace/bin/activate
 
 python -u - <<PY
 from pathlib import Path
+import shutil
 import pandas as pd
 
-trial = Path("$SCRATCH_TRIAL_DIR")
-summary_dir = trial / "array_summaries"
+scratch_trial = Path("$SCRATCH_TRIAL_DIR")
+project_trial = Path("$PROJECT_TRIAL_DIR")
+summary_dir = scratch_trial / "array_summaries"
 
 for dtype_str in ["float32", "float64"]:
     for calculator in ["mace", "uma"]:
@@ -62,12 +67,17 @@ for dtype_str in ["float32", "float64"]:
 
         combined = pd.concat([pd.read_csv(path) for path in files], ignore_index=True)
 
-        output_dir = Path("$PROJECT_TRIAL_DIR") / "outputs_comprehensive" / dtype_str / calculator
-        output_dir.mkdir(parents=True, exist_ok=True)
+        scratch_output_dir = scratch_trial / f"outputs_{dtype_str}" / calculator
+        scratch_output_dir.mkdir(parents=True, exist_ok=True)
+        scratch_summary = scratch_output_dir / "summary.csv"
+        combined.to_csv(scratch_summary, index=False)
+        print(f"Wrote {len(combined)} rows to {scratch_summary}", flush=True)
 
-        output_path = output_dir / "summary.csv"
-        combined.to_csv(output_path, index=False)
-        print(f"Wrote {len(combined)} rows to {output_path}", flush=True)
+        project_output_dir = project_trial / "outputs_comprehensive" / dtype_str / calculator
+        project_output_dir.mkdir(parents=True, exist_ok=True)
+        project_summary = project_output_dir / "summary.csv"
+        shutil.copy2(scratch_summary, project_summary)
+        print(f"Copied summary to {project_summary}", flush=True)
 PY
 
 run_dtype_branch() {
@@ -97,19 +107,19 @@ run_dtype_branch() {
   fi
 }
 
-run_dtype_branch "$SCRATCH_TRIAL_DIR" "$PROJECT_TRIAL_DIR" float32 8 &
+run_dtype_branch "$SCRATCH_TRIAL_DIR" "$PROJECT_TRIAL_DIR" float32 4 &
 pid_float32=$!
 
-run_dtype_branch "$SCRATCH_TRIAL_DIR" "$PROJECT_TRIAL_DIR" float64 8 &
+run_dtype_branch "$SCRATCH_TRIAL_DIR" "$PROJECT_TRIAL_DIR" float64 4 &
 pid_float64=$!
 
 wait "$pid_float32"
 wait "$pid_float64"
 
-export OMP_NUM_THREADS=16
-export MKL_NUM_THREADS=16
-export OPENBLAS_NUM_THREADS=16
-export NUMEXPR_NUM_THREADS=16
+export OMP_NUM_THREADS=8
+export MKL_NUM_THREADS=8
+export OPENBLAS_NUM_THREADS=8
+export NUMEXPR_NUM_THREADS=8
 
 python -u scripts_python/float_comprehensive.py \
   --float32-dir "${PROJECT_TRIAL_DIR}/outputs_comprehensive/float32" \
