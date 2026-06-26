@@ -3283,6 +3283,391 @@ def make_topology_mechanism_triangle(records, output_dir):
     plt.close(fig)
 
 
+COMPONENTS = ["x", "y", "z"]
+
+def vector_component_values(run_dir, before_name, after_name, columns, component, scale=1.0, absolute=False):
+    merged, reason = merge_atom_csvs(run_dir, before_name, after_name, columns)
+    if merged is None:
+        return None, reason
+
+    before = merged[[f"{col}_before" for col in columns]].to_numpy(dtype=float)
+    after = merged[[f"{col}_after" for col in columns]].to_numpy(dtype=float)
+    delta = after - before
+    index = columns.index(component)
+    values = delta[:, index] * float(scale)
+
+    if absolute:
+        values = np.abs(values)
+
+    return values, None
+
+
+def displacement_component_values(row, before_name, after_name, component, absolute=False):
+    reference = as_float(row.get("epsilon_reference_length_a"))
+    if reference is None or reference <= 0:
+        return None, "Missing positive epsilon_reference_length_a"
+
+    return vector_component_values(
+        row["run_dir"],
+        before_name,
+        after_name,
+        ["x", "y", "z"],
+        component,
+        scale=100.0 / reference,
+        absolute=absolute,
+    )
+
+
+def force_component_values(run_dir, before_name, after_name, component, absolute=False):
+    force_component = {
+        "x": "fx",
+        "y": "fy",
+        "z": "fz",
+    }.get(component)
+
+    if force_component is None:
+        return None, f"Unknown force component: {component}"
+
+    return vector_component_values(
+        run_dir,
+        before_name,
+        after_name,
+        ["fx", "fy", "fz"],
+        force_component,
+        scale=1.0,
+        absolute=absolute,
+    )
+
+
+def force_angle_values(run_dir, before_name, after_name):
+    merged, reason = merge_atom_csvs(run_dir, before_name, after_name, ["fx", "fy", "fz"])
+    if merged is None:
+        return None, reason
+
+    before = merged[["fx_before", "fy_before", "fz_before"]].to_numpy(dtype=float)
+    after = merged[["fx_after", "fy_after", "fz_after"]].to_numpy(dtype=float)
+
+    before_norm = np.linalg.norm(before, axis=1)
+    after_norm = np.linalg.norm(after, axis=1)
+    denom = before_norm * after_norm
+
+    angles = np.full(len(denom), np.nan, dtype=float)
+    valid = denom > 0
+    cos_theta = np.clip(np.sum(before[valid] * after[valid], axis=1) / denom[valid], -1.0, 1.0)
+    angles[valid] = np.degrees(np.arccos(cos_theta))
+
+    return angles[np.isfinite(angles)], None
+
+
+def make_component_figures(epsilon_records, n_step_records, output_dir):
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    states = [
+        ("After attack, before relaxation", "before_forces.csv", "perturbed_forces.csv"),
+        ("After attack, after relaxation", "before_forces.csv", "after_forces.csv"),
+    ]
+
+    for component in COMPONENTS:
+        for absolute in [True]:
+            suffix = "magnitude"
+
+            displacement_rows = [
+                (
+                    label,
+                    lambda before=before, after=after, comp=component, abs_val=absolute:
+                        (lambda row: displacement_component_values(row, before, after, comp, abs_val)),
+                )
+                for label, before, after in states
+            ]
+
+            force_rows = [
+                (
+                    label,
+                    lambda before=before, after=after, comp=component, abs_val=absolute:
+                        (lambda row: force_component_values(row["run_dir"], before, after, comp, abs_val)),
+                )
+                for label, before, after in states
+            ]
+
+            make_distribution_figure(
+                epsilon_records,
+                output_dir,
+                f"components_displacement_{component}_{suffix}_by_epsilon",
+                f"{component} displacement (% min lattice)",
+                displacement_rows,
+            )
+            make_ci_figure(
+                epsilon_records,
+                output_dir,
+                f"components_displacement_{component}_{suffix}_ci_by_epsilon",
+                f"Median {component} displacement (% min lattice)",
+                displacement_rows,
+            )
+            make_distribution_figure(
+                epsilon_records,
+                output_dir,
+                f"components_delta_force_{component}_{suffix}_by_epsilon",
+                rf"{component} $\Delta$ force (eV/$\AA$)",
+                force_rows,
+            )
+            make_ci_figure(
+                epsilon_records,
+                output_dir,
+                f"components_delta_force_{component}_{suffix}_ci_by_epsilon",
+                rf"Median {component} $\Delta$ force (eV/$\AA$)",
+                force_rows,
+            )
+
+            make_distribution_by_steps_figure(
+                n_step_records,
+                output_dir,
+                f"components_displacement_{component}_{suffix}_by_n_steps",
+                f"{component} displacement (% min lattice)",
+                displacement_rows,
+            )
+            make_ci_by_steps_figure(
+                n_step_records,
+                output_dir,
+                f"components_displacement_{component}_{suffix}_ci_by_n_steps",
+                f"Median {component} displacement (% min lattice)",
+                displacement_rows,
+            )
+            make_distribution_by_steps_figure(
+                n_step_records,
+                output_dir,
+                f"components_delta_force_{component}_{suffix}_by_n_steps",
+                rf"{component} $\Delta$ force (eV/$\AA$)",
+                force_rows,
+            )
+            make_ci_by_steps_figure(
+                n_step_records,
+                output_dir,
+                f"components_delta_force_{component}_{suffix}_ci_by_n_steps",
+                rf"Median {component} $\Delta$ force (eV/$\AA$)",
+                force_rows,
+            )
+
+    angle_rows = [
+        (
+            label,
+            lambda before=before, after=after:
+                (lambda row: force_angle_values(row["run_dir"], before, after)),
+        )
+        for label, before, after in states
+    ]
+
+    make_distribution_figure(
+        epsilon_records,
+        output_dir,
+        "components_delta_force_angle_by_epsilon",
+        "Force-vector angle (deg)",
+        angle_rows,
+    )
+    make_ci_figure(
+        epsilon_records,
+        output_dir,
+        "components_delta_force_angle_ci_by_epsilon",
+        "Median force-vector angle (deg)",
+        angle_rows,
+    )
+    make_distribution_by_steps_figure(
+        n_step_records,
+        output_dir,
+        "components_delta_force_angle_by_n_steps",
+        "Force-vector angle (deg)",
+        angle_rows,
+    )
+    make_ci_by_steps_figure(
+        n_step_records,
+        output_dir,
+        "components_delta_force_angle_ci_by_n_steps",
+        "Median force-vector angle (deg)",
+        angle_rows,
+    )
+
+
+def make_topology_metric_figure_set(epsilon_records, n_step_records, output_dir):
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    metrics = [
+        ("neighbor_jaccard_distance", "Neighbor Jaccard distance"),
+        ("rdf_l1_distance", "RDF L1 distance"),
+        ("coordination_change_max", "Max coordination change"),
+    ]
+
+    for column, label in metrics:
+        rows = [
+            ("Topology change", lambda col=column: (lambda row: scalar_distribution(row, col))),
+            ("Topology change", lambda col=column: (lambda row: scalar_distribution(row, col))),
+        ]
+
+        make_distribution_figure(
+            epsilon_records,
+            output_dir,
+            f"topology_{column}_by_epsilon",
+            label,
+            rows,
+        )
+        make_ci_figure(
+            epsilon_records,
+            output_dir,
+            f"topology_{column}_ci_by_epsilon",
+            f"Median {label}",
+            rows,
+        )
+        make_distribution_by_steps_figure(
+            n_step_records,
+            output_dir,
+            f"topology_{column}_by_n_steps",
+            label,
+            rows,
+        )
+        make_ci_by_steps_figure(
+            n_step_records,
+            output_dir,
+            f"topology_{column}_ci_by_n_steps",
+            f"Median {label}",
+            rows,
+        )
+
+
+def recommended_repeat_tuple(n_atoms, cell_lengths, target_atoms=64):
+    repeats = [1, 1, 1]
+    lengths = np.asarray(cell_lengths, dtype=float)
+
+    if n_atoms <= 0 or not np.all(np.isfinite(lengths)) or np.any(lengths <= 0):
+        return (1, 1, 1)
+
+    while n_atoms * repeats[0] * repeats[1] * repeats[2] < target_atoms:
+        scaled_lengths = lengths * np.asarray(repeats, dtype=float)
+        index = int(np.argmin(scaled_lengths))
+        repeats[index] += 1
+
+    return tuple(repeats)
+
+
+def make_supercell_metadata(records, output_dir):
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    rows = []
+    seen = set()
+
+    for _, row in records.iterrows():
+        key = (row.get("material_slug"), row.get("input_path"))
+        if key in seen:
+            continue
+        seen.add(key)
+
+        input_path = clean_value(row.get("input_path"))
+        if input_path is None:
+            continue
+
+        path = Path(str(input_path))
+        if not path.is_absolute():
+            path = BASE_DIR / path
+
+        try:
+            atoms = read_structure(path)
+            lengths = atoms.cell.lengths()
+            repeats = recommended_repeat_tuple(len(atoms), lengths)
+            rows.append({
+                "material_slug": row.get("material_slug"),
+                "material_label": row.get("material_label"),
+                "input_path": str(input_path),
+                "unit_cell_atoms": len(atoms),
+                "cell_a": float(lengths[0]),
+                "cell_b": float(lengths[1]),
+                "cell_c": float(lengths[2]),
+                "min_lattice_a": float(np.min(lengths)),
+                "repeat_tuple": f"{repeats[0]}x{repeats[1]}x{repeats[2]}",
+                "supercell_atoms": int(len(atoms) * repeats[0] * repeats[1] * repeats[2]),
+            })
+        except Exception as exc:
+            rows.append({
+                "material_slug": row.get("material_slug"),
+                "material_label": row.get("material_label"),
+                "input_path": str(input_path),
+                "error": str(exc),
+            })
+
+    pd.DataFrame(rows).to_csv(output_dir / "supercell_metadata.csv", index=False)
+
+
+def tukey_outlier_rows(data, group_cols, value_col):
+    rows = []
+    clean = data.replace([np.inf, -np.inf], np.nan).dropna(subset=[value_col]).copy()
+
+    if clean.empty:
+        return rows
+
+    for group_key, group in clean.groupby(group_cols, dropna=False):
+        values = pd.to_numeric(group[value_col], errors="coerce").dropna()
+        if len(values) < 4:
+            continue
+
+        q1 = values.quantile(0.25)
+        q3 = values.quantile(0.75)
+        iqr = q3 - q1
+        if not np.isfinite(iqr) or iqr <= 0:
+            continue
+
+        lower = q1 - 1.5 * iqr
+        upper = q3 + 1.5 * iqr
+        outliers = group[(group[value_col] < lower) | (group[value_col] > upper)].copy()
+
+        for _, row in outliers.iterrows():
+            item = row.to_dict()
+            item["outlier_metric"] = value_col
+            item["outlier_lower_bound"] = float(lower)
+            item["outlier_upper_bound"] = float(upper)
+            rows.append(item)
+
+    return rows
+
+
+def make_outlier_reports(records, output_dir):
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    metric_cols = [
+        "epsilon",
+        "epsilon_percent_displacement",
+        "mean_displacement",
+        "max_displacement",
+        "before_relax_steps",
+        "after_relax_steps",
+        "neighbor_jaccard_distance",
+        "coordination_change_mean",
+        "coordination_change_max",
+        "rdf_l1_distance",
+    ]
+
+    all_rows = []
+    summary_rows = []
+
+    group_cols = ["calculator", "attack_label"]
+    for column in metric_cols:
+        if column not in records.columns:
+            continue
+
+        data = records.copy()
+        data[column] = pd.to_numeric(data[column], errors="coerce")
+        rows = tukey_outlier_rows(data, group_cols, column)
+
+        pd.DataFrame(rows).to_csv(output_dir / f"outliers_{column}.csv", index=False)
+        summary_rows.append({
+            "metric": column,
+            "n_outliers": len(rows),
+        })
+        all_rows.extend(rows)
+
+    pd.DataFrame(all_rows).to_csv(output_dir / "outliers_all_metrics.csv", index=False)
+    pd.DataFrame(summary_rows).to_csv(output_dir / "outliers_summary.csv", index=False)
+
+
 def make_topology_figures(records, output_dir):
     if records.empty or not topology_ready(records):
         return
@@ -3357,6 +3742,7 @@ def main():
     records.to_csv(args.output_dir / "combined_dataset.csv", index=False)
 
     make_topology_figures(records, args.output_dir / "topology")
+    make_supercell_metadata(records, args.output_dir / "supercells")
 
     epsilon_records = records[
         ~records["run_id"].str.contains("_steps", regex=False)
@@ -3367,6 +3753,9 @@ def main():
     ].copy()
 
     make_convergence_figure(epsilon_records, args.output_dir)
+    make_component_figures(epsilon_records, n_step_records, args.output_dir / "components")
+    make_topology_metric_figure_set(epsilon_records, n_step_records, args.output_dir / "Topology")
+    make_outlier_reports(records, args.output_dir / "Outliers")
 
     force_missing = make_distribution_figure(
         records=epsilon_records,
