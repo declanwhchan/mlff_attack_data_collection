@@ -22,6 +22,7 @@ After completing the following 3 steps:
 ~/project/
 ├── mlff_attack/
 ├── mlff_attack_data_collection/
+│   └── .env
 ├── .venv-mace/
 └── .venv-uma/
 ```
@@ -91,6 +92,14 @@ sbatch scripts_bash/plot.sh
 
 # Visualize initial atomic structures (OPTIONAL)
 sbatch scripts_bash/visualize.sh
+```
+
+### Optional — Run Supercell Stress Test
+
+This submits a controller job that generates supercell CIFs, launches the full MACE/UMA attack array, and then runs a dependent plotting job.
+
+```bash
+sbatch scripts_bash/supercell.sh
 ```
 
 ### Check Status of Jobs
