@@ -352,22 +352,22 @@ def epsilon_percent_axis_specs(records):
         (
             EPSILON_AXIS_PERCENT,
             "epsilon_percent_displacement",
-            "epsilon_percent_displacement",
+            "percent_displacement",
         ),
         (
             EPSILON_AXIS_PERCENT_X,
             "epsilon_percent_displacement_x_lattice",
-            "epsilon_percent_x_lattice",
+            "percent_x_lattice",
         ),
         (
             EPSILON_AXIS_PERCENT_Y,
             "epsilon_percent_displacement_y_lattice",
-            "epsilon_percent_y_lattice",
+            "percent_y_lattice",
         ),
         (
             EPSILON_AXIS_PERCENT_Z,
             "epsilon_percent_displacement_z_lattice",
-            "epsilon_percent_z_lattice",
+            "percent_z_lattice",
         ),
     ]
 
@@ -3352,30 +3352,77 @@ def make_topology_metric_figure_set(epsilon_records, n_step_records, output_dir)
         make_distribution_figure(
             epsilon_records,
             output_dir,
-            f"topology_{column}_by_epsilon",
+            f"{column}_by_epsilon",
             label,
             rows,
         )
         make_ci_figure(
             epsilon_records,
             output_dir,
-            f"topology_{column}_ci_by_epsilon",
+            f"{column}_ci_by_epsilon",
             f"Median {label}",
             rows,
         )
         make_distribution_by_steps_figure(
             n_step_records,
             output_dir,
-            f"topology_{column}_by_n_steps",
+            f"{column}_by_n_steps",
             label,
             rows,
         )
         make_ci_by_steps_figure(
             n_step_records,
             output_dir,
-            f"topology_{column}_ci_by_n_steps",
+            f"{column}_ci_by_n_steps",
             f"Median {label}",
             rows,
+        )
+
+
+def make_topology_lattice_axis_component_figures(epsilon_records, output_dir):
+    output_dir = Path(output_dir) / "components"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    metrics = [
+        ("neighbor_jaccard_distance", "Neighbor Jaccard distance"),
+        ("rdf_l1_distance", "RDF L1 distance"),
+        ("coordination_change_max", "Max coordination change"),
+    ]
+
+    for column, label in metrics:
+        rows = [
+            (
+                "Topology change",
+                lambda col=column: (lambda row: topology_scalar_values(row, col)),
+            ),
+            (
+                "Topology change",
+                lambda col=column: (lambda row: topology_scalar_values(row, col)),
+            ),
+        ]
+
+        make_distribution_figure(
+            epsilon_records,
+            output_dir,
+            f"{column}_by_epsilon",
+            label,
+            rows,
+            axis_specs=epsilon_component_axis_specs(
+                epsilon_records,
+                f"{column}_by_epsilon",
+            ),
+        )
+
+        make_ci_figure(
+            epsilon_records,
+            output_dir,
+            f"{column}_ci_by_epsilon",
+            f"Median {label}",
+            rows,
+            axis_specs=epsilon_component_axis_specs(
+                epsilon_records,
+                f"{column}_ci_by_epsilon",
+            ),
         )
 
 
@@ -3594,7 +3641,11 @@ def main():
         args.output_dir / "components",
     )
     make_topology_metric_figure_set(epsilon_records, n_step_records, args.output_dir / "topology")
-    make_outlier_reports(records, args.output_dir / "Outliers")
+    make_topology_lattice_axis_component_figures(
+        epsilon_records,
+        args.output_dir / "topology",
+    )
+    make_outlier_reports(records, args.output_dir / "outliers")
 
     force_missing = make_distribution_figure(
         records=epsilon_records,
