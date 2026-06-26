@@ -12,8 +12,7 @@ import pandas as pd
 from mlff_attack.attacks import make_attack, visualize_perturbation
 from mlff_attack.relaxation import load_structure, run_relaxation, setup_calculator
 from mlff_attack.visualization import load_trajectory, create_visualization
-from ase.neighborlist import neighbor_list
-from ase.data import covalent_radii
+from ase.neighborlist import neighbor_list, natural_cutoffs
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -288,15 +287,9 @@ def atom_signature(symbols, index):
     return f"{symbols[index]}{index}"
 
 
-def neighbor_edge_set(atoms, scale=1.25, min_cutoff=1.2, max_cutoff=3.2):
+def neighbor_edge_set(atoms):
     symbols = atoms.get_chemical_symbols()
-
-    cutoffs = []
-    for atom in atoms:
-        radius = float(covalent_radii[atom.number])
-        if not np.isfinite(radius) or radius <= 0:
-            radius = 0.8
-        cutoffs.append(max(min_cutoff, min(max_cutoff, radius * scale)))
+    cutoffs = natural_cutoffs(atoms)
 
     try:
         i_list, j_list = neighbor_list("ij", atoms, cutoffs)
@@ -309,6 +302,7 @@ def neighbor_edge_set(atoms, scale=1.25, min_cutoff=1.2, max_cutoff=3.2):
         j = int(j)
         if i == j:
             continue
+
         a, b = sorted([i, j])
         edges.add((atom_signature(symbols, a), atom_signature(symbols, b)))
 
