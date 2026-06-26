@@ -42,7 +42,17 @@ EPSILON_BOX_WIDTH_LOG10 = 0.020
 
 EPSILON_PERCENT_SUFFIX = "_percent_displacement"
 EPSILON_AXIS_RAW = "epsilon"
-EPSILON_AXIS_PERCENT = "percent_displacement"
+EPSILON_AXIS_PERCENT = "percent_min_lattice"
+EPSILON_AXIS_PERCENT_X = "percent_x_lattice"
+EPSILON_AXIS_PERCENT_Y = "percent_y_lattice"
+EPSILON_AXIS_PERCENT_Z = "percent_z_lattice"
+
+EPSILON_PERCENT_AXIS_LABELS = {
+    EPSILON_AXIS_PERCENT: "Epsilon (% min lattice)",
+    EPSILON_AXIS_PERCENT_X: "Epsilon (% x lattice)",
+    EPSILON_AXIS_PERCENT_Y: "Epsilon (% y lattice)",
+    EPSILON_AXIS_PERCENT_Z: "Epsilon (% z lattice)",
+}
 
 
 def apply_plot_style():
@@ -149,8 +159,9 @@ def apply_epsilon_axis(ax, x_values, plotted_positions=None, axis_mode=EPSILON_A
         ax.set_xlim(left, right)
 
     ax.tick_params(axis="x", labelrotation=0, pad=2)
-    if axis_mode == EPSILON_AXIS_PERCENT:
-        ax.set_xlabel("Epsilon (% min lattice)")
+
+    if axis_mode in EPSILON_PERCENT_AXIS_LABELS:
+        ax.set_xlabel(EPSILON_PERCENT_AXIS_LABELS[axis_mode])
     else:
         ax.set_xlabel(r"$\epsilon$ ($\AA$)")
 
@@ -277,6 +288,51 @@ def epsilon_reference_length_from_summary_row(row):
     return float(np.min(lengths)), None
 
 
+def epsilon_lattice_lengths_from_summary_row(row):
+    input_path = clean_value(row.get("input_path"))
+    if input_path is None:
+        return {
+            "min": np.nan,
+            "x": np.nan,
+            "y": np.nan,
+            "z": np.nan,
+            "reason": "Missing input_path",
+        }
+
+    path = Path(str(input_path))
+    if not path.is_absolute():
+        path = BASE_DIR / path
+
+    try:
+        atoms = read_structure(path)
+        lengths = np.asarray(atoms.cell.lengths(), dtype=float)
+    except Exception as exc:
+        return {
+            "min": np.nan,
+            "x": np.nan,
+            "y": np.nan,
+            "z": np.nan,
+            "reason": f"Could not read structure with ASE: {exc}",
+        }
+
+    if len(lengths) < 3 or not np.all(np.isfinite(lengths)) or np.any(lengths <= 0):
+        return {
+            "min": np.nan,
+            "x": np.nan,
+            "y": np.nan,
+            "z": np.nan,
+            "reason": "Missing positive lattice lengths",
+        }
+
+    return {
+        "min": float(np.min(lengths)),
+        "x": float(lengths[0]),
+        "y": float(lengths[1]),
+        "z": float(lengths[2]),
+        "reason": None,
+    }
+
+
 def percent_displacement_from_epsilon(epsilon, reference_length_a):
     epsilon = as_float(epsilon)
     reference_length_a = as_float(reference_length_a)
@@ -289,10 +345,43 @@ def percent_figure_name(figure_name):
     return f"{figure_name}{EPSILON_PERCENT_SUFFIX}"
 
 
-def has_percent_displacement_axis(records):
-    if "epsilon_percent_displacement" not in records.columns:
+def epsilon_percent_axis_specs(records):
+    specs = []
+
+    candidates = [
+        (
+            EPSILON_AXIS_PERCENT,
+            "epsilon_percent_displacement",
+            "epsilon_percent_displacement",
+        ),
+        (
+            EPSILON_AXIS_PERCENT_X,
+            "epsilon_percent_displacement_x_lattice",
+            "epsilon_percent_x_lattice",
+        ),
+        (
+            EPSILON_AXIS_PERCENT_Y,
+            "epsilon_percent_displacement_y_lattice",
+            "epsilon_percent_y_lattice",
+        ),
+        (
+            EPSILON_AXIS_PERCENT_Z,
+            "epsilon_percent_displacement_z_lattice",
+            "epsilon_percent_z_lattice",
+        ),
+    ]
+
+    for axis_mode, column, suffix in candidates:
+        if has_percent_displacement_axis(records, column):
+            specs.append((axis_mode, column, suffix))
+
+    return specs
+
+
+def has_percent_displacement_axis(records, column="epsilon_percent_displacement"):
+    if column not in records.columns:
         return False
-    values = positive_finite_values(records["epsilon_percent_displacement"].dropna())
+    values = positive_finite_values(records[column].dropna())
     return len(values) > 0
 
 
@@ -525,10 +614,25 @@ def load_summary(summary_path, base_dir, calculator):
 
         epsilon_value = as_float(row.get("epsilon"))
         input_path = clean_value(row.get("input_path"))
-        epsilon_reference_length_a, epsilon_reference_reason = epsilon_reference_length_from_summary_row(row)
+        epsilon_lattice_lengths = epsilon_lattice_lengths_from_summary_row(row)
+        epsilon_reference_length_a = epsilon_lattice_lengths["min"]
+        epsilon_reference_reason = epsilon_lattice_lengths["reason"]
+
         epsilon_percent_displacement = percent_displacement_from_epsilon(
             epsilon_value,
-            epsilon_reference_length_a,
+            epsilon_lattice_lengths["min"],
+        )
+        epsilon_percent_displacement_x_lattice = percent_displacement_from_epsilon(
+            epsilon_value,
+            epsilon_lattice_lengths["x"],
+        )
+        epsilon_percent_displacement_y_lattice = percent_displacement_from_epsilon(
+            epsilon_value,
+            epsilon_lattice_lengths["y"],
+        )
+        epsilon_percent_displacement_z_lattice = percent_displacement_from_epsilon(
+            epsilon_value,
+            epsilon_lattice_lengths["z"],
         )
 
         records.append({
@@ -543,6 +647,12 @@ def load_summary(summary_path, base_dir, calculator):
             "epsilon_reference_length_a": epsilon_reference_length_a,
             "epsilon_reference_reason": epsilon_reference_reason,
             "epsilon_percent_displacement": epsilon_percent_displacement,
+            "epsilon_lattice_x_a": epsilon_lattice_lengths["x"],
+            "epsilon_lattice_y_a": epsilon_lattice_lengths["y"],
+            "epsilon_lattice_z_a": epsilon_lattice_lengths["z"],
+            "epsilon_percent_displacement_x_lattice": epsilon_percent_displacement_x_lattice,
+            "epsilon_percent_displacement_y_lattice": epsilon_percent_displacement_y_lattice,
+            "epsilon_percent_displacement_z_lattice": epsilon_percent_displacement_z_lattice,
             "n_steps": as_int(row.get("n_steps")),
             "alpha": as_float(row.get("alpha")),
             "relax_fmax": relax_fmax,
@@ -1508,8 +1618,8 @@ def collect_box_data(records, attack, value_getter, missing_rows, x_col="epsilon
     attack_records = records[records["attack_label"] == attack].copy()
 
     plot_x_col = x_col
-    if x_col == "epsilon_percent_displacement":
-        plot_x_col = "_epsilon_percent_displacement_plot"
+    if str(x_col).startswith("epsilon_percent_displacement"):
+        plot_x_col = f"_{x_col}_plot"
         attack_records[plot_x_col] = attack_records[x_col].map(percent_displacement_plot_x)
 
     x_values = sorted(attack_records[plot_x_col].dropna().unique())
@@ -1642,8 +1752,8 @@ def plot_convergence_panel(
         return False
 
     plot_x_col = x_col
-    if x_col == "epsilon_percent_displacement":
-        plot_x_col = "_epsilon_percent_displacement_plot"
+    if str(x_col).startswith("epsilon_percent_displacement"):
+        plot_x_col = f"_{x_col}_plot"
         attack_records[plot_x_col] = attack_records[x_col].map(percent_displacement_plot_x)
 
     x_values = sorted(attack_records[plot_x_col].dropna().unique())
@@ -1681,18 +1791,11 @@ def plot_convergence_panel(
     return True
 
 
-def make_convergence_figure(records, output_dir):
-    axis_specs = [
-        ("epsilon", EPSILON_AXIS_RAW, "figure_1_convergence_by_epsilon"),
-    ]
-    if has_percent_displacement_axis(records):
-        axis_specs.append((
-            "epsilon_percent_displacement",
-            EPSILON_AXIS_PERCENT,
-            "figure_1_convergence_by_epsilon_percent_displacement",
-        ))
+def make_convergence_figure(records, output_dir, axis_specs=None):
+    if axis_specs is None:
+        axis_specs = epsilon_axis_specs(records, "figure_1_convergence_by_epsilon")
 
-    for x_col, axis_mode, figure_name in axis_specs:
+    for axis_mode, x_col, figure_name in axis_specs:
         fig, axes = plt.subplots(2, 3, figsize=(8.2, 5.0), sharex=False, sharey=False)
 
         rows = [
@@ -1835,21 +1938,46 @@ def draw_grouped_ci(
     return True
 
 
-def epsilon_axis_specs(records, figure_name):
-    specs = [(EPSILON_AXIS_RAW, "epsilon", figure_name)]
-    if has_percent_displacement_axis(records):
-        specs.append((
-            EPSILON_AXIS_PERCENT,
-            "epsilon_percent_displacement",
-            percent_figure_name(figure_name),
-        ))
+def epsilon_axis_specs(records, figure_name, include_raw=True, include_min=True, include_xyz=False):
+    specs = []
+
+    if include_raw:
+        specs.append((EPSILON_AXIS_RAW, "epsilon", figure_name))
+
+    for axis_mode, x_col, suffix in epsilon_percent_axis_specs(records):
+        is_min_lattice = x_col == "epsilon_percent_displacement"
+        is_xyz_lattice = x_col in {
+            "epsilon_percent_displacement_x_lattice",
+            "epsilon_percent_displacement_y_lattice",
+            "epsilon_percent_displacement_z_lattice",
+        }
+
+        if is_min_lattice and include_min:
+            specs.append((axis_mode, x_col, f"{figure_name}_{suffix}"))
+
+        if is_xyz_lattice and include_xyz:
+            specs.append((axis_mode, x_col, f"{figure_name}_{suffix}"))
+
     return specs
 
 
-def make_ci_figure(records, output_dir, figure_name, ylabel, rows):
+def epsilon_component_axis_specs(records, figure_name):
+    return epsilon_axis_specs(
+        records,
+        figure_name,
+        include_raw=False,
+        include_min=False,
+        include_xyz=True,
+    )
+
+
+def make_ci_figure(records, output_dir, figure_name, ylabel, rows, axis_specs=None):
     all_missing = []
 
-    for axis_mode, x_col, output_figure_name in epsilon_axis_specs(records, figure_name):
+    if axis_specs is None:
+        axis_specs = epsilon_axis_specs(records, figure_name)
+
+    for axis_mode, x_col, output_figure_name in axis_specs:
         fig, axes = plt.subplots(2, 3, figsize=(8.4, 5.2), sharex=False, sharey=False)
 
         panel_index = 0
@@ -1905,10 +2033,13 @@ def make_ci_figure(records, output_dir, figure_name, ylabel, rows):
     return all_missing
 
 
-def make_distribution_figure(records, output_dir, figure_name, ylabel, rows):
+def make_distribution_figure(records, output_dir, figure_name, ylabel, rows, axis_specs=None):
     all_missing = []
 
-    for axis_mode, x_col, output_figure_name in epsilon_axis_specs(records, figure_name):
+    if axis_specs is None:
+        axis_specs = epsilon_axis_specs(records, figure_name)
+
+    for axis_mode, x_col, output_figure_name in axis_specs:
         fig, axes = plt.subplots(2, 3, figsize=(8.4, 5.2), sharex=False, sharey=False)
 
         panel_index = 0
@@ -2203,10 +2334,13 @@ def draw_whisker_span(
     return True
 
 
-def make_whisker_span_figure(records, output_dir, figure_name, ylabel, rows):
+def make_whisker_span_figure(records, output_dir, figure_name, ylabel, rows, axis_specs=None):
     all_missing = []
 
-    for axis_mode, x_col, output_figure_name in epsilon_axis_specs(records, figure_name):
+    if axis_specs is None:
+        axis_specs = epsilon_axis_specs(records, figure_name)
+
+    for axis_mode, x_col, output_figure_name in axis_specs:
         fig, axes = plt.subplots(2, 3, figsize=(8.4, 5.2), sharex=False, sharey=False)
 
         panel_index = 0
@@ -2924,70 +3058,6 @@ def make_topology_by_attack_type(records, output_dir):
     plt.close(fig)
 
 
-def make_topology_mechanism_map(records, output_dir):
-    data = finite_metric_data(
-        normalized_topology_data(records),
-        [
-            "neighbor_jaccard_distance",
-            "rdf_l1_distance",
-            "coordination_change_max",
-            "attack_label",
-            "calculator",
-        ],
-    )
-
-    if data.empty:
-        return
-
-    attacks = [attack for attack in ATTACK_ORDER if attack in set(data["attack_label"])]
-    if not attacks:
-        return
-
-    fig, axes = plt.subplots(1, len(attacks), figsize=(4.2 * len(attacks), 3.8), sharex=False, sharey=False)
-    axes = np.atleast_1d(axes)
-
-    size_max = data["coordination_change_max"].max()
-    if pd.isna(size_max) or size_max <= 0:
-        data["_size"] = 28.0
-    else:
-        data["_size"] = 28.0 + 170.0 * (data["coordination_change_max"] / size_max)
-
-    for ax, attack in zip(axes, attacks):
-        subset = data[data["attack_label"] == attack]
-
-        for calculator, color in CALCULATOR_COLORS.items():
-            calc_subset = subset[subset["calculator"] == calculator]
-            if calc_subset.empty:
-                continue
-
-            ax.scatter(
-                calc_subset["neighbor_jaccard_distance"],
-                calc_subset["rdf_l1_distance"],
-                s=calc_subset["_size"],
-                color=color,
-                alpha=0.52,
-                edgecolor="white",
-                linewidth=0.45,
-                label=calculator.upper(),
-            )
-
-        topology_metric_axes(
-            ax,
-            xlabel="Neighbor-graph Jaccard distance",
-            ylabel="RDF L1 distance",
-            title=attack,
-        )
-
-    handles, labels = axes[0].get_legend_handles_labels()
-    if handles:
-        fig.legend(handles, labels, loc="upper center", ncol=2, frameon=False)
-
-    fig.suptitle("Topology mechanism map: size = max coordination change", y=1.05)
-    fig.tight_layout(rect=[0, 0, 1, 0.96])
-    fig.savefig(output_dir / "topology_mechanism_map.png", dpi=300, bbox_inches="tight")
-    plt.close(fig)
-
-
 def make_topology_material_ranking(records, output_dir, max_materials=20):
     data = finite_metric_data(
         normalized_topology_data(records),
@@ -3042,244 +3112,6 @@ def make_topology_material_ranking(records, output_dir, max_materials=20):
 
     fig.tight_layout()
     fig.savefig(output_dir / "topology_material_ranking.png", dpi=300, bbox_inches="tight")
-    plt.close(fig)
-
-
-def make_topology_model_disagreement(records, output_dir, max_rows=24):
-    data = finite_metric_data(
-        normalized_topology_data(records),
-        ["material_slug", "attack_label", "calculator", "topology_score"],
-    )
-
-    if data.empty:
-        return
-
-    grouped = (
-        data.groupby(["material_slug", "attack_label", "calculator"], as_index=False)
-        .agg(topology_score=("topology_score", "mean"))
-    )
-
-    pivot = grouped.pivot_table(
-        index=["material_slug", "attack_label"],
-        columns="calculator",
-        values="topology_score",
-        aggfunc="mean",
-    ).reset_index()
-
-    if "mace" not in pivot.columns or "uma" not in pivot.columns:
-        return
-
-    pivot = pivot.dropna(subset=["mace", "uma"]).copy()
-    if pivot.empty:
-        return
-
-    pivot["disagreement"] = (pivot["mace"] - pivot["uma"]).abs()
-    pivot = pivot.sort_values("disagreement", ascending=False).head(max_rows)
-    pivot = pivot.sort_values("disagreement", ascending=True)
-    pivot["label"] = pivot["material_slug"].astype(str) + " / " + pivot["attack_label"].astype(str)
-
-    fig_height = max(4.0, 0.32 * len(pivot) + 1.5)
-    fig, ax = plt.subplots(figsize=(7.4, fig_height))
-
-    y = np.arange(len(pivot))
-
-    for index, row in enumerate(pivot.itertuples()):
-        ax.plot(
-            [row.mace, row.uma],
-            [index, index],
-            color="#999999",
-            linewidth=1.2,
-            zorder=1,
-        )
-
-    ax.scatter(pivot["mace"], y, color=CALCULATOR_COLORS["mace"], s=34, label="MACE", zorder=3)
-    ax.scatter(pivot["uma"], y, color=CALCULATOR_COLORS["uma"], s=34, label="UMA", zorder=3)
-
-    ax.set_yticks(y)
-    ax.set_yticklabels(pivot["label"])
-    topology_metric_axes(
-        ax,
-        xlabel="Mean normalized topology score",
-        ylabel="Material / attack",
-        title="Largest MACE-UMA topology-score disagreements",
-    )
-    ax.legend(frameon=False, ncol=2, loc="lower right")
-
-    fig.tight_layout()
-    fig.savefig(output_dir / "topology_model_disagreement.png", dpi=300, bbox_inches="tight")
-    plt.close(fig)
-
-
-def make_topology_metric_coupling(records, output_dir):
-    columns = [
-        "neighbor_jaccard_distance",
-        "rdf_l1_distance",
-        "coordination_change_max",
-        "mean_displacement",
-        "epsilon",
-        "n_steps",
-    ]
-
-    available = [column for column in columns if column in records.columns]
-    data = finite_metric_data(records, available)
-
-    if data.empty or len(available) < 2:
-        return
-
-    corr = data[available].corr(method="spearman")
-
-    labels = {
-        "neighbor_jaccard_distance": "Jaccard",
-        "rdf_l1_distance": "RDF L1",
-        "coordination_change_max": "Max coord.",
-        "mean_displacement": "Mean disp.",
-        "epsilon": "epsilon",
-        "n_steps": "n_steps",
-    }
-
-    fig, ax = plt.subplots(figsize=(6.2, 5.2))
-    image = ax.imshow(corr.to_numpy(dtype=float), vmin=-1, vmax=1, cmap="coolwarm")
-
-    ax.set_xticks(np.arange(len(available)))
-    ax.set_yticks(np.arange(len(available)))
-    ax.set_xticklabels([labels[column] for column in available], rotation=35, ha="right")
-    ax.set_yticklabels([labels[column] for column in available])
-
-    for i in range(len(available)):
-        for j in range(len(available)):
-            value = corr.iloc[i, j]
-            if pd.isna(value):
-                text = "NA"
-            else:
-                text = f"{value:.2f}"
-            ax.text(
-                j,
-                i,
-                text,
-                ha="center",
-                va="center",
-                fontsize=7,
-                color="white" if pd.notna(value) and abs(value) > 0.55 else "#222222",
-            )
-
-    ax.set_title("Spearman coupling among topology and attack metrics")
-    fig.colorbar(image, ax=ax, label="Spearman rho", shrink=0.82)
-
-    fig.tight_layout()
-    fig.savefig(output_dir / "topology_metric_coupling.png", dpi=300, bbox_inches="tight")
-    plt.close(fig)
-
-
-def make_topology_synergy_outliers(records, output_dir, max_points=18):
-    data = topology_discovery_data(records)
-    if data.empty:
-        return
-
-    data["synergy_score"] = (
-        data["jaccard_norm"] * data["rdf_norm"] * data["coord_norm"]
-    ) ** (1.0 / 3.0)
-
-    ranked = (
-        data.groupby(["material_slug", "calculator", "attack_label"], as_index=False)
-        .agg(
-            synergy_score=("synergy_score", "mean"),
-            jaccard=("neighbor_jaccard_distance", "mean"),
-            rdf=("rdf_l1_distance", "mean"),
-            coordination=("coordination_change_max", "mean"),
-        )
-        .sort_values("synergy_score", ascending=False)
-        .head(max_points)
-        .sort_values("synergy_score", ascending=True)
-    )
-
-    if ranked.empty:
-        return
-
-    labels = (
-        ranked["material_slug"].astype(str)
-        + " / "
-        + ranked["calculator"].str.upper()
-        + " / "
-        + ranked["attack_label"].astype(str)
-    )
-
-    fig_height = max(4.2, 0.34 * len(ranked) + 1.4)
-    fig, ax = plt.subplots(figsize=(7.6, fig_height))
-
-    y = np.arange(len(ranked))
-    ax.barh(y, ranked["synergy_score"], color="#7B3294", alpha=0.78)
-
-    ax.set_yticks(y)
-    ax.set_yticklabels(labels)
-    ax.set_xlabel("Topology synergy score: geometric mean of normalized Jaccard, RDF, and coordination")
-    ax.set_ylabel("Material / model / attack")
-    ax.set_title("Candidate coupled-topology failure modes")
-
-    ax.grid(True, axis="x", alpha=0.28)
-
-    fig.tight_layout()
-    fig.savefig(output_dir / "topology_synergy_outliers.png", dpi=300, bbox_inches="tight")
-    plt.close(fig)
-
-
-def make_topology_mechanism_triangle(records, output_dir):
-    data = topology_discovery_data(records)
-    if data.empty:
-        return
-
-    components = data[["jaccard_norm", "rdf_norm", "coord_norm"]].clip(lower=0)
-    total = components.sum(axis=1)
-
-    data = data[total > 0].copy()
-    components = components.loc[data.index]
-    total = total.loc[data.index]
-
-    if data.empty:
-        return
-
-    data["jaccard_fraction"] = components["jaccard_norm"] / total
-    data["rdf_fraction"] = components["rdf_norm"] / total
-    data["coord_fraction"] = components["coord_norm"] / total
-
-    data["x"] = data["rdf_fraction"] + 0.5 * data["coord_fraction"]
-    data["y"] = (np.sqrt(3.0) / 2.0) * data["coord_fraction"]
-
-    fig, ax = plt.subplots(figsize=(6.2, 5.6))
-
-    triangle_x = [0.0, 1.0, 0.5, 0.0]
-    triangle_y = [0.0, 0.0, np.sqrt(3.0) / 2.0, 0.0]
-    ax.plot(triangle_x, triangle_y, color="#222222", linewidth=1.0)
-
-    for calculator, color in CALCULATOR_COLORS.items():
-        subset = data[data["calculator"] == calculator]
-        if subset.empty:
-            continue
-
-        ax.scatter(
-            subset["x"],
-            subset["y"],
-            s=24 + 180 * subset["topology_score"].fillna(0),
-            color=color,
-            alpha=0.42,
-            edgecolor="white",
-            linewidth=0.35,
-            label=calculator.upper(),
-        )
-
-    ax.text(-0.04, -0.04, "Jaccard-dominant", ha="right", va="top", fontsize=8)
-    ax.text(1.04, -0.04, "RDF-dominant", ha="left", va="top", fontsize=8)
-    ax.text(0.5, np.sqrt(3.0) / 2.0 + 0.04, "Coordination-dominant", ha="center", va="bottom", fontsize=8)
-
-    ax.set_xlim(-0.10, 1.10)
-    ax.set_ylim(-0.08, np.sqrt(3.0) / 2.0 + 0.12)
-    ax.set_aspect("equal", adjustable="box")
-    ax.set_xticks([])
-    ax.set_yticks([])
-    ax.set_title("Topology mechanism simplex: which topology signal dominates?")
-    ax.legend(frameon=False, ncol=2, loc="lower center")
-
-    fig.tight_layout()
-    fig.savefig(output_dir / "topology_mechanism_simplex.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -3359,132 +3191,140 @@ def force_angle_values(run_dir, before_name, after_name):
     return angles[np.isfinite(angles)], None
 
 
-def make_component_figures(epsilon_records, n_step_records, output_dir):
+def make_lattice_axis_component_figures(epsilon_records, output_dir):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    states = [
-        ("After attack, before relaxation", "before_forces.csv", "perturbed_forces.csv"),
-        ("After attack, after relaxation", "before_forces.csv", "after_forces.csv"),
+    make_convergence_figure(
+        epsilon_records,
+        output_dir,
+        axis_specs=epsilon_component_axis_specs(
+            epsilon_records,
+            "figure_1_convergence_by_epsilon",
+        ),
+    )
+
+    force_rows = [
+        (
+            "After attack, before relaxation",
+            lambda: (lambda row: force_delta_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "perturbed_forces.csv",
+            )),
+        ),
+        (
+            "After attack, after relaxation",
+            lambda: (lambda row: force_delta_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "after_forces.csv",
+            )),
+        ),
     ]
 
-    for component in COMPONENTS:
-        for absolute in [True]:
-            suffix = "magnitude"
-
-            displacement_rows = [
-                (
-                    label,
-                    lambda before=before, after=after, comp=component, abs_val=absolute:
-                        (lambda row: displacement_component_values(row, before, after, comp, abs_val)),
-                )
-                for label, before, after in states
-            ]
-
-            force_rows = [
-                (
-                    label,
-                    lambda before=before, after=after, comp=component, abs_val=absolute:
-                        (lambda row: force_component_values(row["run_dir"], before, after, comp, abs_val)),
-                )
-                for label, before, after in states
-            ]
-
-            make_distribution_figure(
-                epsilon_records,
-                output_dir,
-                f"components_displacement_{component}_{suffix}_by_epsilon",
-                f"{component} displacement (% min lattice)",
-                displacement_rows,
-            )
-            make_ci_figure(
-                epsilon_records,
-                output_dir,
-                f"components_displacement_{component}_{suffix}_ci_by_epsilon",
-                f"Median {component} displacement (% min lattice)",
-                displacement_rows,
-            )
-            make_distribution_figure(
-                epsilon_records,
-                output_dir,
-                f"components_delta_force_{component}_{suffix}_by_epsilon",
-                rf"{component} $\Delta$ force (eV/$\AA$)",
-                force_rows,
-            )
-            make_ci_figure(
-                epsilon_records,
-                output_dir,
-                f"components_delta_force_{component}_{suffix}_ci_by_epsilon",
-                rf"Median {component} $\Delta$ force (eV/$\AA$)",
-                force_rows,
-            )
-
-            make_distribution_by_steps_figure(
-                n_step_records,
-                output_dir,
-                f"components_displacement_{component}_{suffix}_by_n_steps",
-                f"{component} displacement (% min lattice)",
-                displacement_rows,
-            )
-            make_ci_by_steps_figure(
-                n_step_records,
-                output_dir,
-                f"components_displacement_{component}_{suffix}_ci_by_n_steps",
-                f"Median {component} displacement (% min lattice)",
-                displacement_rows,
-            )
-            make_distribution_by_steps_figure(
-                n_step_records,
-                output_dir,
-                f"components_delta_force_{component}_{suffix}_by_n_steps",
-                rf"{component} $\Delta$ force (eV/$\AA$)",
-                force_rows,
-            )
-            make_ci_by_steps_figure(
-                n_step_records,
-                output_dir,
-                f"components_delta_force_{component}_{suffix}_ci_by_n_steps",
-                rf"Median {component} $\Delta$ force (eV/$\AA$)",
-                force_rows,
-            )
-
-    angle_rows = [
+    displacement_rows = [
         (
-            label,
-            lambda before=before, after=after:
-                (lambda row: force_angle_values(row["run_dir"], before, after)),
-        )
-        for label, before, after in states
+            "After attack, before relaxation",
+            lambda: (lambda row: displacement_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "perturbed_forces.csv",
+            )),
+        ),
+        (
+            "After attack, after relaxation",
+            lambda: (lambda row: displacement_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "after_forces.csv",
+            )),
+        ),
     ]
 
     make_distribution_figure(
         epsilon_records,
         output_dir,
-        "components_delta_force_angle_by_epsilon",
-        "Force-vector angle (deg)",
-        angle_rows,
+        "figure_2_delta_force_by_epsilon",
+        r"$\Delta$ force (eV/$\AA$)",
+        force_rows,
+        axis_specs=epsilon_component_axis_specs(
+            epsilon_records,
+            "figure_2_delta_force_by_epsilon",
+        ),
     )
+
     make_ci_figure(
         epsilon_records,
         output_dir,
-        "components_delta_force_angle_ci_by_epsilon",
-        "Median force-vector angle (deg)",
-        angle_rows,
+        "figure_2_delta_force_ci_by_epsilon",
+        r"Median $\Delta$ force with 95% CI (eV/$\AA$)",
+        force_rows,
+        axis_specs=epsilon_component_axis_specs(
+            epsilon_records,
+            "figure_2_delta_force_ci_by_epsilon",
+        ),
     )
-    make_distribution_by_steps_figure(
-        n_step_records,
+
+    make_whisker_span_figure(
+        epsilon_records,
         output_dir,
-        "components_delta_force_angle_by_n_steps",
-        "Force-vector angle (deg)",
-        angle_rows,
+        "figure_2_delta_force_whisker_span_by_epsilon",
+        r"$\Delta$ force whisker span (eV/$\AA$)",
+        force_rows,
+        axis_specs=epsilon_component_axis_specs(
+            epsilon_records,
+            "figure_2_delta_force_whisker_span_by_epsilon",
+        ),
     )
-    make_ci_by_steps_figure(
-        n_step_records,
+
+    make_distribution_figure(
+        epsilon_records,
         output_dir,
-        "components_delta_force_angle_ci_by_n_steps",
-        "Median force-vector angle (deg)",
-        angle_rows,
+        "figure_3_displacement_by_epsilon",
+        r"Displacement ($\AA$)",
+        displacement_rows,
+        axis_specs=epsilon_component_axis_specs(
+            epsilon_records,
+            "figure_3_displacement_by_epsilon",
+        ),
     )
+
+    make_ci_figure(
+        epsilon_records,
+        output_dir,
+        "figure_3_displacement_ci_by_epsilon",
+        r"Median displacement with 95% CI ($\AA$)",
+        displacement_rows,
+        axis_specs=epsilon_component_axis_specs(
+            epsilon_records,
+            "figure_3_displacement_ci_by_epsilon",
+        ),
+    )
+
+    make_whisker_span_figure(
+        epsilon_records,
+        output_dir,
+        "figure_3_displacement_whisker_span_by_epsilon",
+        r"Displacement whisker span ($\AA$)",
+        displacement_rows,
+        axis_specs=epsilon_component_axis_specs(
+            epsilon_records,
+            "figure_3_displacement_whisker_span_by_epsilon",
+        ),
+    )
+
+
+def topology_scalar_values(row, column):
+    value = row.get(column)
+    if value is None or pd.isna(value):
+        return None, f"Missing {column}"
+
+    value = float(value)
+    if not np.isfinite(value):
+        return None, f"Nonfinite {column}"
+
+    return np.array([value], dtype=float), None
 
 
 def make_topology_metric_figure_set(epsilon_records, n_step_records, output_dir):
@@ -3499,8 +3339,14 @@ def make_topology_metric_figure_set(epsilon_records, n_step_records, output_dir)
 
     for column, label in metrics:
         rows = [
-            ("Topology change", lambda col=column: (lambda row: scalar_distribution(row, col))),
-            ("Topology change", lambda col=column: (lambda row: scalar_distribution(row, col))),
+            (
+                "Topology change",
+                lambda col=column: (lambda row: topology_scalar_values(row, col)),
+            ),
+            (
+                "Topology change",
+                lambda col=column: (lambda row: topology_scalar_values(row, col)),
+            ),
         ]
 
         make_distribution_figure(
@@ -3682,23 +3528,13 @@ def make_topology_figures(records, output_dir):
 
     save_topology_summary(clean, output_dir)
     make_topology_by_attack_type(clean, output_dir)
-    make_topology_mechanism_map(clean, output_dir)
     make_topology_material_ranking(clean, output_dir)
-    make_topology_model_disagreement(clean, output_dir)
-    make_topology_metric_coupling(clean, output_dir)
-    make_topology_synergy_outliers(clean, output_dir)
-    make_topology_mechanism_triangle(clean, output_dir)
 
     for material_slug, material_records in clean.groupby("material_slug"):
         material_output_dir = output_dir / str(material_slug)
         material_output_dir.mkdir(parents=True, exist_ok=True)
         save_topology_summary(material_records, material_output_dir)
         make_topology_by_attack_type(material_records, material_output_dir)
-        make_topology_mechanism_map(material_records, material_output_dir)
-        make_topology_model_disagreement(material_records, material_output_dir)
-        make_topology_metric_coupling(material_records, material_output_dir)
-        make_topology_synergy_outliers(material_records, material_output_dir)
-        make_topology_mechanism_triangle(material_records, material_output_dir)
 
 
 def main():
@@ -3753,8 +3589,11 @@ def main():
     ].copy()
 
     make_convergence_figure(epsilon_records, args.output_dir)
-    make_component_figures(epsilon_records, n_step_records, args.output_dir / "components")
-    make_topology_metric_figure_set(epsilon_records, n_step_records, args.output_dir / "Topology")
+    make_lattice_axis_component_figures(
+        epsilon_records,
+        args.output_dir / "components",
+    )
+    make_topology_metric_figure_set(epsilon_records, n_step_records, args.output_dir / "topology")
     make_outlier_reports(records, args.output_dir / "Outliers")
 
     force_missing = make_distribution_figure(

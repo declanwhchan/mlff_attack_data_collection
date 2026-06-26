@@ -3,7 +3,7 @@
 #SBATCH --time=00:30:00
 #SBATCH --mem=4G
 #SBATCH --cpus-per-task=1
-#SBATCH --output=supercell-controller-%j.out
+#SBATCH --output=supercell-%j.out
 
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
@@ -54,7 +54,7 @@ controller_mode() {
     --time=7-00:00:00 \
     --mem=16G \
     --cpus-per-task=8 \
-    --output=supercell-run-%A_%a.out \
+    --output=supercell-%A_%a.out \
     --export=ALL,SUPERCELL_MODE=run,PROJECT_OUTPUT_ROOT="$PROJECT_OUTPUT_ROOT",SCRATCH_OUTPUT_ROOT="$SCRATCH_OUTPUT_ROOT" \
     scripts_bash/supercell.sh)
 
@@ -80,11 +80,15 @@ run_mode() {
   export NUMEXPR_NUM_THREADS=$SLURM_CPUS_PER_TASK
   export TORCH_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
+  source ~/project/.venv-mace/bin/activate
+
   TASK_ENV=$(python -u scripts_python/supercell.py task-info \
     --output-root "$SUPER_ROOT" \
     --task-id "$SLURM_ARRAY_TASK_ID")
 
   eval "$TASK_ENV"
+
+  deactivate
 
   export MLFF_DTYPE="float64"
   export MLFF_SEED="42"

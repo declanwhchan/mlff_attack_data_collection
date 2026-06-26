@@ -204,12 +204,18 @@ def generate(args):
                     for epsilon in config["epsilons"]:
                         tests.append(make_run_row(context, supercell, model, attack, epsilon))
 
-                for sweep in config.get("n_step_sweeps", []):
-                    for attack in sweep["attacks"]:
-                        for n_steps in sweep["n_steps"]:
-                            tests.append(make_run_row(
-                                context, supercell, model, sweep["epsilon"], n_steps=n_steps, sweep=True
-                            ))
+            for sweep in config.get("n_step_sweeps", []):
+                for attack in sweep["attacks"]:
+                    for n_steps in sweep["n_steps"]:
+                        tests.append(make_run_row(
+                            context,
+                            supercell,
+                            model,
+                            attack,
+                            sweep["epsilon"],
+                            n_steps=n_steps,
+                            sweep=True,
+                        ))
 
     output_root.mkdir(parents=True, exist_ok=True)
     tests_out = output_root / "generated_supercell_tests.csv"
