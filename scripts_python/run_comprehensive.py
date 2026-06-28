@@ -3223,6 +3223,25 @@ def make_lattice_axis_component_figures(epsilon_records, output_dir):
         ),
     ]
 
+    force_angle_rows = [
+        (
+            "After attack, before relaxation",
+            lambda: (lambda row: force_angle_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "perturbed_forces.csv",
+            )),
+        ),
+        (
+            "After attack, after relaxation",
+            lambda: (lambda row: force_angle_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "after_forces.csv",
+            )),
+        ),
+    ]
+
     displacement_rows = [
         (
             "After attack, before relaxation",
@@ -3281,6 +3300,42 @@ def make_lattice_axis_component_figures(epsilon_records, output_dir):
     make_distribution_figure(
         epsilon_records,
         output_dir,
+        "figure_2_delta_force_angle_by_epsilon",
+        "Force-vector angle (deg)",
+        force_angle_rows,
+        axis_specs=epsilon_component_axis_specs(
+            epsilon_records,
+            "figure_2_delta_force_angle_by_epsilon",
+        ),
+    )
+
+    make_ci_figure(
+        epsilon_records,
+        output_dir,
+        "figure_2_delta_force_angle_ci_by_epsilon",
+        "Median force-vector angle (deg)",
+        force_angle_rows,
+        axis_specs=epsilon_component_axis_specs(
+            epsilon_records,
+            "figure_2_delta_force_angle_ci_by_epsilon",
+        ),
+    )
+
+    make_whisker_span_figure(
+        epsilon_records,
+        output_dir,
+        "figure_2_delta_force_angle_whisker_span_by_epsilon",
+        "Force-vector angle whisker span (deg)",
+        force_angle_rows,
+        axis_specs=epsilon_component_axis_specs(
+            epsilon_records,
+            "figure_2_delta_force_angle_whisker_span_by_epsilon",
+        ),
+    )
+
+    make_distribution_figure(
+        epsilon_records,
+        output_dir,
         "figure_3_displacement_by_epsilon",
         r"Displacement ($\AA$)",
         displacement_rows,
@@ -3327,6 +3382,544 @@ def topology_scalar_values(row, column):
     return np.array([value], dtype=float), None
 
 
+def delta_force_rows():
+    return [
+        (
+            "After attack, before relaxation",
+            lambda: (lambda row: force_delta_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "perturbed_forces.csv",
+            )),
+        ),
+        (
+            "After attack, after relaxation",
+            lambda: (lambda row: force_delta_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "after_forces.csv",
+            )),
+        ),
+    ]
+
+
+def force_angle_rows():
+    return [
+        (
+            "After attack, before relaxation",
+            lambda: (lambda row: force_angle_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "perturbed_forces.csv",
+            )),
+        ),
+        (
+            "After attack, after relaxation",
+            lambda: (lambda row: force_angle_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "after_forces.csv",
+            )),
+        ),
+    ]
+
+
+def displacement_rows():
+    return [
+        (
+            "After attack, before relaxation",
+            lambda: (lambda row: displacement_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "perturbed_forces.csv",
+            )),
+        ),
+        (
+            "After attack, after relaxation",
+            lambda: (lambda row: displacement_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "after_forces.csv",
+            )),
+        ),
+    ]
+
+
+def topology_metric_rows(column):
+    return [
+        (
+            "Topology change",
+            lambda col=column: (lambda row: topology_scalar_values(row, col)),
+        ),
+        (
+            "Topology change",
+            lambda col=column: (lambda row: topology_scalar_values(row, col)),
+        ),
+    ]
+
+
+def force_angle_metric_getters():
+    return [
+        lambda row: metric_distribution(row, lambda item: force_angle_values(
+            item["run_dir"],
+            "before_forces.csv",
+            "perturbed_forces.csv",
+        )),
+        lambda row: metric_distribution(row, lambda item: force_angle_values(
+            item["run_dir"],
+            "before_forces.csv",
+            "after_forces.csv",
+        )),
+    ]
+
+
+def delta_force_metric_getters():
+    return [
+        lambda row: metric_distribution(row, lambda item: force_delta_values(
+            item["run_dir"],
+            "before_forces.csv",
+            "perturbed_forces.csv",
+        )),
+        lambda row: metric_distribution(row, lambda item: force_delta_values(
+            item["run_dir"],
+            "before_forces.csv",
+            "after_forces.csv",
+        )),
+    ]
+
+
+def displacement_metric_getters():
+    return [
+        lambda row: metric_distribution(row, lambda item: displacement_values(
+            item["run_dir"],
+            "before_forces.csv",
+            "perturbed_forces.csv",
+        )),
+        lambda row: metric_distribution(row, lambda item: displacement_values(
+            item["run_dir"],
+            "before_forces.csv",
+            "after_forces.csv",
+        )),
+    ]
+
+
+def topology_metric_getter(column):
+    return lambda row, col=column: scalar_distribution(row, col)
+
+
+def make_delta_force_angle_figure_set(epsilon_records, n_step_records, output_dir):
+    missing = []
+
+    rows = force_angle_rows()
+
+    missing.extend(make_distribution_figure(
+        records=epsilon_records,
+        output_dir=output_dir,
+        figure_name="figure_2_delta_force_angle_by_epsilon",
+        ylabel="Force-vector angle (deg)",
+        rows=rows,
+    ))
+
+    missing.extend(make_ci_figure(
+        records=epsilon_records,
+        output_dir=output_dir,
+        figure_name="figure_2_delta_force_angle_ci_by_epsilon",
+        ylabel="Median force-vector angle with 95% CI (deg)",
+        rows=rows,
+    ))
+
+    missing.extend(make_whisker_span_figure(
+        records=epsilon_records,
+        output_dir=output_dir,
+        figure_name="figure_2_delta_force_angle_whisker_span_by_epsilon",
+        ylabel="Force-vector angle whisker span (deg)",
+        rows=rows,
+    ))
+
+    missing.extend(make_distribution_by_steps_figure(
+        records=n_step_records,
+        output_dir=output_dir,
+        figure_name="figure_5_delta_force_angle_by_n_steps",
+        ylabel="Force-vector angle (deg)",
+        epsilon=0.1,
+        rows=rows,
+    ))
+
+    missing.extend(make_ci_by_steps_figure(
+        records=n_step_records,
+        output_dir=output_dir,
+        figure_name="figure_5_delta_force_angle_ci_by_n_steps",
+        ylabel="Median force-vector angle with 95% CI (deg)",
+        epsilon=0.1,
+        rows=rows,
+    ))
+
+    missing.extend(make_whisker_span_by_steps_figure(
+        records=n_step_records,
+        output_dir=output_dir,
+        figure_name="figure_5_delta_force_angle_whisker_span_by_n_steps",
+        ylabel="Force-vector angle whisker span (deg)",
+        epsilon=0.1,
+        rows=rows,
+    ))
+
+    angle_getters = force_angle_metric_getters()
+    displacement_getters = displacement_metric_getters()
+
+    missing.extend(make_parametric_state_figure(
+        records=epsilon_records,
+        output_dir=output_dir,
+        figure_name="figure_8_convergence_vs_delta_force_angle_by_epsilon",
+        title="Convergence vs delta-force angle by epsilon",
+        x_label="Median force-vector angle (deg)",
+        y_label="Relaxation steps",
+        bubble_label="epsilon",
+        attacks_to_plot=ATTACK_ORDER,
+        x_getters=angle_getters,
+        y_getters=[
+            lambda row: scalar_distribution(row, "before_relax_steps"),
+            lambda row: scalar_distribution(row, "after_relax_steps"),
+        ],
+    ))
+
+    missing.extend(make_parametric_state_figure(
+        records=n_step_records,
+        output_dir=output_dir,
+        figure_name="figure_8_convergence_vs_delta_force_angle_by_n_steps",
+        title="Convergence vs delta-force angle by n_steps",
+        x_label="Median force-vector angle (deg)",
+        y_label="Relaxation steps",
+        bubble_label="n_steps",
+        attacks_to_plot=STEP_ATTACK_ORDER,
+        x_getters=angle_getters,
+        y_getters=[
+            lambda row: scalar_distribution(row, "before_relax_steps"),
+            lambda row: scalar_distribution(row, "after_relax_steps"),
+        ],
+    ))
+
+    missing.extend(make_parametric_state_figure(
+        records=epsilon_records,
+        output_dir=output_dir,
+        figure_name="figure_9_delta_force_angle_vs_displacement_by_epsilon",
+        title="Delta-force angle vs displacement by epsilon",
+        x_label=r"Median displacement ($\AA$)",
+        y_label="Median force-vector angle (deg)",
+        bubble_label="epsilon",
+        attacks_to_plot=ATTACK_ORDER,
+        x_getters=displacement_getters,
+        y_getters=angle_getters,
+    ))
+
+    missing.extend(make_parametric_state_figure(
+        records=n_step_records,
+        output_dir=output_dir,
+        figure_name="figure_9_delta_force_angle_vs_displacement_by_n_steps",
+        title="Delta-force angle vs displacement by n_steps",
+        x_label=r"Median displacement ($\AA$)",
+        y_label="Median force-vector angle (deg)",
+        bubble_label="n_steps",
+        attacks_to_plot=STEP_ATTACK_ORDER,
+        x_getters=displacement_getters,
+        y_getters=angle_getters,
+    ))
+
+    return missing
+
+
+def make_single_row_distribution_figure(records, output_dir, figure_name, ylabel, row, attacks_to_plot, axis_specs=None):
+    all_missing = []
+
+    if axis_specs is None:
+        axis_specs = epsilon_axis_specs(records, figure_name)
+
+    row_title, getter_factory = row
+
+    for axis_mode, x_col, output_figure_name in axis_specs:
+        fig, axes = plt.subplots(1, len(attacks_to_plot), figsize=(2.8 * len(attacks_to_plot), 2.8), sharex=False, sharey=False)
+        axes = np.atleast_1d(axes)
+
+        for col_index, attack in enumerate(attacks_to_plot):
+            ax = axes[col_index]
+            attack_missing = []
+
+            draw_grouped_boxplot(
+                ax=ax,
+                records=records,
+                attack=attack,
+                value_getter=getter_factory(),
+                ylabel=ylabel,
+                missing_rows=attack_missing,
+                x_col=x_col,
+                axis_mode=axis_mode,
+            )
+
+            for missing in attack_missing:
+                missing["figure"] = output_figure_name
+                missing["panel"] = f"{row_title} / {attack}"
+            all_missing.extend(attack_missing)
+
+            ax.set_title(attack)
+            add_panel_label(ax, chr(ord("A") + col_index))
+
+        apply_shared_figure_header(fig, subtitle=row_title, left=0.04)
+        save_figure(fig, output_dir / output_figure_name)
+        plt.close(fig)
+
+    return all_missing
+
+
+def make_single_row_ci_figure(records, output_dir, figure_name, ylabel, row, attacks_to_plot, axis_specs=None):
+    all_missing = []
+
+    if axis_specs is None:
+        axis_specs = epsilon_axis_specs(records, figure_name)
+
+    row_title, getter_factory = row
+
+    for axis_mode, x_col, output_figure_name in axis_specs:
+        fig, axes = plt.subplots(1, len(attacks_to_plot), figsize=(2.8 * len(attacks_to_plot), 2.8), sharex=False, sharey=False)
+        axes = np.atleast_1d(axes)
+
+        for col_index, attack in enumerate(attacks_to_plot):
+            ax = axes[col_index]
+            attack_missing = []
+
+            draw_grouped_ci(
+                ax=ax,
+                records=records,
+                attack=attack,
+                value_getter=getter_factory(),
+                ylabel=ylabel,
+                missing_rows=attack_missing,
+                x_col=x_col,
+                axis_mode=axis_mode,
+            )
+
+            for missing in attack_missing:
+                missing["figure"] = output_figure_name
+                missing["panel"] = f"{row_title} / {attack}"
+            all_missing.extend(attack_missing)
+
+            ax.set_title(attack)
+            add_panel_label(ax, chr(ord("A") + col_index))
+
+        apply_shared_figure_header(fig, subtitle=f"{row_title}; line = median, shaded band = 95% CI", left=0.04)
+        save_figure(fig, output_dir / output_figure_name)
+        plt.close(fig)
+
+    return all_missing
+
+
+def make_single_row_whisker_span_figure(records, output_dir, figure_name, ylabel, row, attacks_to_plot, axis_specs=None):
+    all_missing = []
+
+    if axis_specs is None:
+        axis_specs = epsilon_axis_specs(records, figure_name)
+
+    row_title, getter_factory = row
+
+    for axis_mode, x_col, output_figure_name in axis_specs:
+        fig, axes = plt.subplots(1, len(attacks_to_plot), figsize=(2.8 * len(attacks_to_plot), 2.8), sharex=False, sharey=False)
+        axes = np.atleast_1d(axes)
+
+        for col_index, attack in enumerate(attacks_to_plot):
+            ax = axes[col_index]
+            attack_missing = []
+
+            draw_whisker_span(
+                ax=ax,
+                records=records,
+                attack=attack,
+                value_getter=getter_factory(),
+                ylabel=ylabel,
+                missing_rows=attack_missing,
+                x_col=x_col,
+                axis_mode=axis_mode,
+            )
+
+            for missing in attack_missing:
+                missing["figure"] = output_figure_name
+                missing["panel"] = f"{row_title} / {attack}"
+            all_missing.extend(attack_missing)
+
+            ax.set_title(attack)
+            add_panel_label(ax, chr(ord("A") + col_index))
+
+        apply_shared_figure_header(fig, subtitle=f"{row_title}; each dot = upper whisker - lower whisker", left=0.04)
+        save_figure(fig, output_dir / output_figure_name)
+        plt.close(fig)
+
+    return all_missing
+
+
+def make_single_row_distribution_by_steps_figure(records, output_dir, figure_name, ylabel, row, attacks_to_plot=STEP_ATTACK_ORDER, epsilon=0.1):
+    fig, axes = plt.subplots(1, len(attacks_to_plot), figsize=(3.3 * len(attacks_to_plot), 2.8), sharex=False, sharey=False)
+    axes = np.atleast_1d(axes)
+
+    all_missing = []
+    row_title, getter_factory = row
+
+    for col_index, attack in enumerate(attacks_to_plot):
+        ax = axes[col_index]
+        attack_missing = []
+
+        draw_grouped_boxplot_by_steps(
+            ax=ax,
+            records=records,
+            attack=attack,
+            epsilon=epsilon,
+            value_getter=getter_factory(),
+            ylabel=ylabel,
+            missing_rows=attack_missing,
+        )
+
+        for missing in attack_missing:
+            missing["figure"] = figure_name
+            missing["panel"] = f"{row_title} / {attack}"
+        all_missing.extend(attack_missing)
+
+        ax.set_title(attack)
+        add_panel_label(ax, chr(ord("A") + col_index))
+
+    apply_shared_figure_header(fig, subtitle=rf"{row_title}; fixed $\epsilon$ = {epsilon:g} $\AA$", left=0.08)
+    save_figure(fig, output_dir / figure_name)
+    plt.close(fig)
+
+    return all_missing
+
+
+def make_single_row_ci_by_steps_figure(records, output_dir, figure_name, ylabel, row, attacks_to_plot=STEP_ATTACK_ORDER, epsilon=0.1):
+    fig, axes = plt.subplots(1, len(attacks_to_plot), figsize=(3.3 * len(attacks_to_plot), 2.8), sharex=False, sharey=False)
+    axes = np.atleast_1d(axes)
+
+    all_missing = []
+    row_title, getter_factory = row
+
+    for col_index, attack in enumerate(attacks_to_plot):
+        ax = axes[col_index]
+        attack_missing = []
+
+        draw_grouped_ci_by_steps(
+            ax=ax,
+            records=records,
+            attack=attack,
+            epsilon=epsilon,
+            value_getter=getter_factory(),
+            ylabel=ylabel,
+            missing_rows=attack_missing,
+        )
+
+        for missing in attack_missing:
+            missing["figure"] = figure_name
+            missing["panel"] = f"{row_title} / {attack}"
+        all_missing.extend(attack_missing)
+
+        ax.set_title(attack)
+        add_panel_label(ax, chr(ord("A") + col_index))
+
+    apply_shared_figure_header(fig, subtitle=rf"{row_title}; fixed $\epsilon$ = {epsilon:g} $\AA$; line = median, shaded band = 95% CI", left=0.08)
+    save_figure(fig, output_dir / figure_name)
+    plt.close(fig)
+
+    return all_missing
+
+
+def make_single_row_whisker_span_by_steps_figure(records, output_dir, figure_name, ylabel, row, attacks_to_plot=STEP_ATTACK_ORDER, epsilon=0.1):
+    fig, axes = plt.subplots(1, len(attacks_to_plot), figsize=(3.3 * len(attacks_to_plot), 2.8), sharex=False, sharey=False)
+    axes = np.atleast_1d(axes)
+
+    all_missing = []
+    row_title, getter_factory = row
+
+    for col_index, attack in enumerate(attacks_to_plot):
+        ax = axes[col_index]
+        attack_missing = []
+
+        draw_whisker_span_by_steps(
+            ax=ax,
+            records=records,
+            attack=attack,
+            epsilon=epsilon,
+            value_getter=getter_factory(),
+            ylabel=ylabel,
+            missing_rows=attack_missing,
+        )
+
+        for missing in attack_missing:
+            missing["figure"] = figure_name
+            missing["panel"] = f"{row_title} / {attack}"
+        all_missing.extend(attack_missing)
+
+        ax.set_title(attack)
+        add_panel_label(ax, chr(ord("A") + col_index))
+
+    apply_shared_figure_header(fig, subtitle=rf"{row_title}; fixed $\epsilon$ = {epsilon:g} $\AA$; each dot = upper whisker - lower whisker", left=0.08)
+    save_figure(fig, output_dir / figure_name)
+    plt.close(fig)
+
+    return all_missing
+
+
+def make_single_row_parametric_figure(records, output_dir, figure_name, title, x_label, y_label, bubble_label, attacks_to_plot, x_getter, y_getter, x_log=False, y_log=False):
+    missing_rows = []
+    data = parametric_rows(
+        records=records,
+        x_getter=x_getter,
+        y_getter=y_getter,
+        bubble_col="epsilon" if "epsilon" in figure_name else "n_steps",
+        missing_rows=missing_rows,
+        figure_name=figure_name,
+    )
+
+    if data.empty:
+        return missing_rows
+
+    fig, axes = plt.subplots(1, len(attacks_to_plot), figsize=(5.2 * len(attacks_to_plot), 4.6), sharex=False, sharey=False)
+    axes = np.atleast_1d(axes)
+
+    for col_index, attack in enumerate(attacks_to_plot):
+        ax = axes[col_index]
+        draw_parametric_panel(
+            ax=ax,
+            data=data,
+            attack=attack,
+            x_label=x_label,
+            y_label=y_label,
+            show_ylabel=(col_index == 0),
+        )
+        ax.title.set_fontsize(13)
+        ax.xaxis.label.set_fontsize(12)
+        ax.yaxis.label.set_fontsize(12)
+        style_numeric_axis(ax, xbins=4, ybins=5)
+        if x_log:
+            apply_positive_log_axis(ax, "x")
+        if y_log:
+            apply_positive_log_axis(ax, "y")
+        add_panel_label(ax, chr(ord("A") + col_index))
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    if handles:
+        fig.legend(
+            handles,
+            labels,
+            loc="upper center",
+            ncol=4,
+            bbox_to_anchor=(0.5, 1.04),
+            frameon=False,
+            title=f"Grouped by {bubble_label}",
+            fontsize=11,
+            title_fontsize=11,
+        )
+
+    fig.suptitle(title, y=1.08, fontsize=15)
+    fig.tight_layout(rect=[0.06, 0.04, 1.00, 0.94])
+    save_figure(fig, output_dir / figure_name)
+    plt.close(fig)
+
+    return missing_rows
+
+
 def make_topology_metric_figure_set(epsilon_records, n_step_records, output_dir):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -3337,45 +3930,149 @@ def make_topology_metric_figure_set(epsilon_records, n_step_records, output_dir)
         ("coordination_change_max", "Max coordination change"),
     ]
 
-    for column, label in metrics:
-        rows = [
-            (
-                "Topology change",
-                lambda col=column: (lambda row: topology_scalar_values(row, col)),
-            ),
-            (
-                "Topology change",
-                lambda col=column: (lambda row: topology_scalar_values(row, col)),
-            ),
-        ]
+    displacement_getters = displacement_metric_getters()
+    delta_force_getters = delta_force_metric_getters()
 
-        make_distribution_figure(
-            epsilon_records,
-            output_dir,
-            f"{column}_by_epsilon",
-            label,
-            rows,
+    for column, label in metrics:
+        row = (
+            "After attack topology change",
+            lambda col=column: (lambda row: topology_scalar_values(row, col)),
         )
-        make_ci_figure(
-            epsilon_records,
-            output_dir,
-            f"{column}_ci_by_epsilon",
-            f"Median {label}",
-            rows,
+        metric_getter = topology_metric_getter(column)
+
+        make_single_row_distribution_figure(
+            records=epsilon_records,
+            output_dir=output_dir,
+            figure_name=f"{column}_by_epsilon",
+            ylabel=label,
+            row=row,
+            attacks_to_plot=ATTACK_ORDER,
         )
-        make_distribution_by_steps_figure(
-            n_step_records,
-            output_dir,
-            f"{column}_by_n_steps",
-            label,
-            rows,
+
+        make_single_row_ci_figure(
+            records=epsilon_records,
+            output_dir=output_dir,
+            figure_name=f"{column}_ci_by_epsilon",
+            ylabel=f"Median {label}",
+            row=row,
+            attacks_to_plot=ATTACK_ORDER,
         )
-        make_ci_by_steps_figure(
-            n_step_records,
-            output_dir,
-            f"{column}_ci_by_n_steps",
-            f"Median {label}",
-            rows,
+
+        make_single_row_whisker_span_figure(
+            records=epsilon_records,
+            output_dir=output_dir,
+            figure_name=f"{column}_whisker_span_by_epsilon",
+            ylabel=f"{label} whisker span",
+            row=row,
+            attacks_to_plot=ATTACK_ORDER,
+        )
+
+        make_single_row_distribution_by_steps_figure(
+            records=n_step_records,
+            output_dir=output_dir,
+            figure_name=f"{column}_by_n_steps",
+            ylabel=label,
+            row=row,
+            attacks_to_plot=STEP_ATTACK_ORDER,
+            epsilon=0.1,
+        )
+
+        make_single_row_ci_by_steps_figure(
+            records=n_step_records,
+            output_dir=output_dir,
+            figure_name=f"{column}_ci_by_n_steps",
+            ylabel=f"Median {label}",
+            row=row,
+            attacks_to_plot=STEP_ATTACK_ORDER,
+            epsilon=0.1,
+        )
+
+        make_single_row_whisker_span_by_steps_figure(
+            records=n_step_records,
+            output_dir=output_dir,
+            figure_name=f"{column}_whisker_span_by_n_steps",
+            ylabel=f"{label} whisker span",
+            row=row,
+            attacks_to_plot=STEP_ATTACK_ORDER,
+            epsilon=0.1,
+        )
+
+        make_single_row_parametric_figure(
+            records=epsilon_records,
+            output_dir=output_dir,
+            figure_name=f"convergence_vs_{column}_by_epsilon",
+            title=f"Convergence vs {label} by epsilon",
+            x_label=f"Median {label}",
+            y_label="Relaxation steps",
+            bubble_label="epsilon",
+            attacks_to_plot=ATTACK_ORDER,
+            x_getter=metric_getter,
+            y_getter=lambda row: scalar_distribution(row, "after_relax_steps"),
+        )
+
+        make_single_row_parametric_figure(
+            records=n_step_records,
+            output_dir=output_dir,
+            figure_name=f"convergence_vs_{column}_by_n_steps",
+            title=f"Convergence vs {label} by n_steps",
+            x_label=f"Median {label}",
+            y_label="Relaxation steps",
+            bubble_label="n_steps",
+            attacks_to_plot=STEP_ATTACK_ORDER,
+            x_getter=metric_getter,
+            y_getter=lambda row: scalar_distribution(row, "after_relax_steps"),
+        )
+
+        make_single_row_parametric_figure(
+            records=epsilon_records,
+            output_dir=output_dir,
+            figure_name=f"{column}_vs_displacement_by_epsilon",
+            title=f"{label} vs displacement by epsilon",
+            x_label=r"Median displacement ($\AA$)",
+            y_label=f"Median {label}",
+            bubble_label="epsilon",
+            attacks_to_plot=ATTACK_ORDER,
+            x_getter=displacement_getters[1],
+            y_getter=metric_getter,
+        )
+
+        make_single_row_parametric_figure(
+            records=n_step_records,
+            output_dir=output_dir,
+            figure_name=f"{column}_vs_displacement_by_n_steps",
+            title=f"{label} vs displacement by n_steps",
+            x_label=r"Median displacement ($\AA$)",
+            y_label=f"Median {label}",
+            bubble_label="n_steps",
+            attacks_to_plot=STEP_ATTACK_ORDER,
+            x_getter=displacement_getters[1],
+            y_getter=metric_getter,
+        )
+
+        make_single_row_parametric_figure(
+            records=epsilon_records,
+            output_dir=output_dir,
+            figure_name=f"{column}_vs_delta_force_by_epsilon",
+            title=f"{label} vs delta force by epsilon",
+            x_label=r"Median $\Delta$ force (eV/$\AA$)",
+            y_label=f"Median {label}",
+            bubble_label="epsilon",
+            attacks_to_plot=ATTACK_ORDER,
+            x_getter=delta_force_getters[1],
+            y_getter=metric_getter,
+        )
+
+        make_single_row_parametric_figure(
+            records=n_step_records,
+            output_dir=output_dir,
+            figure_name=f"{column}_vs_delta_force_by_n_steps",
+            title=f"{label} vs delta force by n_steps",
+            x_label=r"Median $\Delta$ force (eV/$\AA$)",
+            y_label=f"Median {label}",
+            bubble_label="n_steps",
+            attacks_to_plot=STEP_ATTACK_ORDER,
+            x_getter=delta_force_getters[1],
+            y_getter=metric_getter,
         )
 
 
@@ -3390,35 +4087,31 @@ def make_topology_lattice_axis_component_figures(epsilon_records, output_dir):
     ]
 
     for column, label in metrics:
-        rows = [
-            (
-                "Topology change",
-                lambda col=column: (lambda row: topology_scalar_values(row, col)),
-            ),
-            (
-                "Topology change",
-                lambda col=column: (lambda row: topology_scalar_values(row, col)),
-            ),
-        ]
+        row = (
+            "After attack topology change",
+            lambda col=column: (lambda row: topology_scalar_values(row, col)),
+        )
 
-        make_distribution_figure(
-            epsilon_records,
-            output_dir,
-            f"{column}_by_epsilon",
-            label,
-            rows,
+        make_single_row_distribution_figure(
+            records=epsilon_records,
+            output_dir=output_dir,
+            figure_name=f"{column}_by_epsilon",
+            ylabel=label,
+            row=row,
+            attacks_to_plot=ATTACK_ORDER,
             axis_specs=epsilon_component_axis_specs(
                 epsilon_records,
                 f"{column}_by_epsilon",
             ),
         )
 
-        make_ci_figure(
-            epsilon_records,
-            output_dir,
-            f"{column}_ci_by_epsilon",
-            f"Median {label}",
-            rows,
+        make_single_row_ci_figure(
+            records=epsilon_records,
+            output_dir=output_dir,
+            figure_name=f"{column}_ci_by_epsilon",
+            ylabel=f"Median {label}",
+            row=row,
+            attacks_to_plot=ATTACK_ORDER,
             axis_specs=epsilon_component_axis_specs(
                 epsilon_records,
                 f"{column}_ci_by_epsilon",
@@ -3971,6 +4664,12 @@ def main():
         ],
     )
 
+    force_angle_missing = make_delta_force_angle_figure_set(
+        epsilon_records,
+        n_step_records,
+        args.output_dir,
+    )
+
     for material_slug, material_records in records.groupby("material_slug"):
         material_output_dir = args.output_dir / str(material_slug)
         material_output_dir.mkdir(parents=True, exist_ok=True)
@@ -4315,6 +5014,13 @@ def main():
                 bubble_label="n_steps",
             )
 
+            if not material_epsilon_records.empty and not material_n_step_records.empty:
+                make_delta_force_angle_figure_set(
+                    material_epsilon_records,
+                    material_n_step_records,
+                    material_output_dir,
+                )
+
     missing_rows.extend(force_missing)
     missing_rows.extend(force_whisker_span_missing)
     missing_rows.extend(force_by_epsilon_missing)
@@ -4325,6 +5031,7 @@ def main():
     missing_rows.extend(force_by_steps_missing)
     missing_rows.extend(force_by_steps_whisker_span_missing)
     missing_rows.extend(force_by_steps_ci_missing)
+    missing_rows.extend(force_angle_missing)
     missing_rows.extend(displacement_by_steps_missing)
     missing_rows.extend(displacement_by_steps_whisker_span_missing)
     missing_rows.extend(displacement_by_steps_ci_missing)
