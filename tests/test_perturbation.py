@@ -1,14 +1,29 @@
 from pathlib import Path
+import os
 
+import pytest
 import numpy as np
 import pandas as pd
 
 
 def rows():
+    root = Path(
+        f"/scratch/{os.environ['USER']}/mlff_attack_data_collection"
+    )
+
+    paths = list(
+        root.glob("trial*_seed*/array_summaries/*_summary.csv")
+    )
+
+    if not paths:
+        pytest.skip("No calculation summaries found")
+
     data = pd.concat(
-        pd.read_csv(path) for path in Path(".").glob("outputs_*/summary.csv")
-    ).query("status == 'success'")
-    return data.iloc[::20]
+        [pd.read_csv(path) for path in paths],
+        ignore_index=True,
+    )
+
+    return data.query("status == 'success'").iloc[::20]
 
 
 def forces(path):
