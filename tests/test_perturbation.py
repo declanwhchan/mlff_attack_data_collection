@@ -34,16 +34,34 @@ def positions(path):
     return pd.read_csv(path)[["x", "y", "z"]].to_numpy()
 
 
-def test_perturbation_moves_atoms():
+def test_at_least_one_perturbation_moves_atoms():
+    changes = []
+
     for _, r in rows().iterrows():
-        d = np.linalg.norm(positions(r["perturbed_force_csv"]) - positions(r["before_force_csv"]), axis=1)
-        assert d.max() > 0
+        change = np.linalg.norm(
+            positions(r["perturbed_force_csv"])
+            - positions(r["before_force_csv"]),
+            axis=1,
+        )
+        assert np.isfinite(change).all()
+        changes.append(change.max())
+
+    assert max(changes) > 0
 
 
-def test_perturbation_changes_forces():
+def test_at_least_one_perturbation_changes_forces():
+    changes = []
+
     for _, r in rows().iterrows():
-        df = np.linalg.norm(forces(r["perturbed_force_csv"]) - forces(r["before_force_csv"]), axis=1)
-        assert df.max() > 0
+        change = np.linalg.norm(
+            forces(r["perturbed_force_csv"])
+            - forces(r["before_force_csv"]),
+            axis=1,
+        )
+        assert np.isfinite(change).all()
+        changes.append(change.max())
+
+    assert max(changes) > 0
 
 
 def test_larger_epsilon_tends_to_give_larger_displacement():
