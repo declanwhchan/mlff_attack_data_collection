@@ -14,6 +14,11 @@ from mlff_attack.relaxation import load_structure, run_relaxation, setup_calcula
 from mlff_attack.visualization import load_trajectory, create_visualization
 from ase.neighborlist import neighbor_list, natural_cutoffs
 
+try:
+    from ase.geometry.rdf import get_rdf
+except ImportError:
+    from ase.geometry.analysis import get_rdf
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 TEST_FILE = BASE_DIR / "tests_sample.csv"
@@ -320,24 +325,86 @@ def coordination_by_atom(edges, atoms):
     return counts
 
 
-def rdf_histogram(atoms, r_max=6.0, bins=60):
-    distances = atoms.get_all_distances(mic=True)
-    values = []
+RDF_METHOD = "ase_total_rdf_l1_v1"
 
-    for i in range(len(atoms)):
-        for j in range(i + 1, len(atoms)):
-            distance = float(distances[i, j])
-            if 0 < distance <= r_max:
-                values.append(distance)
 
-    hist, edges = np.histogram(values, bins=bins, range=(0.0, r_max), density=False)
-    hist = hist.astype(float)
+def rdf_analysis_cell(atoms, r_max=6.0):
+    """Repeat periodic cells until ASE can safely calculate RDF to r_max."""
+    expanded = atoms.copy()
 
-    total = hist.sum()
-    if total > 0:
-        hist /= total
+    if not np.any(expanded.pbc):
+        return expanded
 
-    return hist
+    cell = np.asarray(expanded.cell, dtype=float)
+    volume = abs(float(np.linalg.det(cell)))
+
+    if volume <= 1e-12:
+        raise ValueError("RDF requires a cell with nonzero volume")
+
+    repeats = [1, 1, 1]
+
+    for axis in range(3):
+        if not expanded.pbc[axis]:
+            continue
+
+        other_axes = [index for index in range(3) if index != axis]
+        face_area = np.linalg.norm(
+            np.cross(cell[other_axes[0]], cell[other_axes[1]])
+        )
+
+        if face_area <= 1e-12:
+            raise ValueError("RDF requires valid periodic cell vectors")
+
+        cell_height = volume / face_area
+        repeats[axis] = max(
+            1,
+            int(np.ceil((2.0 * r_max + 1e-8) / cell_height)),
+        )
+
+    return expanded.repeat(tuple(repeats))
+
+
+def rdf_values(atoms, r_max=6.0, bins=60):
+    """Return ASE's standard solid-state radial distribution function g(r)."""
+    analysis_atoms = rdf_analysis_cell(atoms, r_max=r_max)
+
+    rdf, radii = get_rdf(
+        analysis_atoms,
+        rmax=r_max,
+        nbins=bins,
+        no_dists=False,
+    )
+
+    rdf = np.asarray(rdf, dtype=float)
+    radii = np.asarray(radii, dtype=float)
+
+    if rdf.shape != (bins,) or radii.shape != (bins,):
+        raise ValueError("ASE returned an unexpected RDF shape")
+
+    if not np.all(np.isfinite(rdf)):
+        raise ValueError("ASE returned non-finite RDF values")
+
+    return rdf, radii
+
+
+def rdf_l1_distance(before_atoms, after_atoms, r_max=6.0, bins=60):
+    """Integrated absolute difference between two standard ASE RDF curves."""
+    before_rdf, before_radii = rdf_values(
+        before_atoms,
+        r_max=r_max,
+        bins=bins,
+    )
+    after_rdf, after_radii = rdf_values(
+        after_atoms,
+        r_max=r_max,
+        bins=bins,
+    )
+
+    if not np.allclose(before_radii, after_radii):
+        raise ValueError("Before and after RDF grids do not match")
+
+    dr = r_max / bins
+    return float(np.sum(np.abs(before_rdf - after_rdf)) * dr)
 
 
 def topology_change_metrics(before_atoms, after_atoms, output_dir):
@@ -349,7 +416,9 @@ def topology_change_metrics(before_atoms, after_atoms, output_dir):
     union_edges = before_edges | after_edges
 
     if union_edges:
-        neighbor_jaccard_distance = 1.0 - (len(before_edges & after_edges) / len(union_edges))
+        neighbor_jaccard_distance = 1.0 - (
+            len(before_edges & after_edges) / len(union_edges)
+        )
     else:
         neighbor_jaccard_distance = 0.0
 
@@ -358,11 +427,11 @@ def topology_change_metrics(before_atoms, after_atoms, output_dir):
 
     coord_delta = []
     for atom in sorted(set(before_coord) | set(after_coord)):
-        coord_delta.append(abs(after_coord.get(atom, 0) - before_coord.get(atom, 0)))
+        coord_delta.append(
+            abs(after_coord.get(atom, 0) - before_coord.get(atom, 0))
+        )
 
-    before_rdf = rdf_histogram(before_atoms)
-    after_rdf = rdf_histogram(after_atoms)
-    rdf_l1_distance = float(np.sum(np.abs(before_rdf - after_rdf)))
+    rdf_distance = rdf_l1_distance(before_atoms, after_atoms)
 
     edge_rows = []
     for edge in sorted(added_edges):
@@ -371,7 +440,10 @@ def topology_change_metrics(before_atoms, after_atoms, output_dir):
         edge_rows.append({"change": "removed", "edge": "-".join(edge)})
 
     edge_changes_csv = output_dir / "topology_edge_changes.csv"
-    pd.DataFrame(edge_rows, columns=["change", "edge"]).to_csv(edge_changes_csv, index=False)
+    pd.DataFrame(
+        edge_rows,
+        columns=["change", "edge"],
+    ).to_csv(edge_changes_csv, index=False)
 
     return {
         "topology_edge_changes_csv": str(edge_changes_csv),
@@ -381,9 +453,14 @@ def topology_change_metrics(before_atoms, after_atoms, output_dir):
         "neighbor_edges_removed": len(removed_edges),
         "neighbor_edge_change_count": len(added_edges) + len(removed_edges),
         "neighbor_jaccard_distance": float(neighbor_jaccard_distance),
-        "coordination_change_mean": float(np.mean(coord_delta)) if coord_delta else 0.0,
-        "coordination_change_max": float(np.max(coord_delta)) if coord_delta else 0.0,
-        "rdf_l1_distance": rdf_l1_distance,
+        "coordination_change_mean": (
+            float(np.mean(coord_delta)) if coord_delta else 0.0
+        ),
+        "coordination_change_max": (
+            float(np.max(coord_delta)) if coord_delta else 0.0
+        ),
+        "rdf_l1_distance": rdf_distance,
+        "rdf_method": RDF_METHOD,
     }
 
 

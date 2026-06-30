@@ -49,21 +49,20 @@ fi
 
 source ~/project/.venv-mace/bin/activate
 
-# Backfill topology immediately after attack, before relaxation.
+# Backfill standard ASE RDF values without rerunning attacks or relaxation.
 python -u - <<PY
 from pathlib import Path
-from tempfile import TemporaryDirectory
 import os
-import shutil
 import sys
 
 import pandas as pd
 from ase.io import read
 
 sys.path.insert(0, str(Path("$PROJECT_OUTPUT_ROOT") / "scripts_python"))
-from run_tests import topology_change_metrics
+from run_tests import RDF_METHOD, rdf_l1_distance
 
 summary_dir = Path("$SCRATCH_TRIAL_DIR") / "array_summaries"
+
 
 def usable_path(value, fallback):
     if value is not None and not pd.isna(value):
@@ -71,6 +70,7 @@ def usable_path(value, fallback):
         if path.exists():
             return path
     return fallback
+
 
 for summary_path in sorted(summary_dir.glob("*_summary.csv")):
     try:
@@ -85,8 +85,15 @@ for summary_path in sorted(summary_dir.glob("*_summary.csv")):
         if str(row.get("status", "")).strip().lower() != "success":
             continue
 
-        existing = row.get("perturbed_neighbor_jaccard_distance")
-        if existing is not None and not pd.isna(existing):
+        final_current = str(row.get("rdf_method", "")).strip()
+        perturbed_current = str(
+            row.get("perturbed_rdf_method", "")
+        ).strip()
+
+        need_final = final_current != RDF_METHOD
+        need_perturbed = perturbed_current != RDF_METHOD
+
+        if not need_final and not need_perturbed:
             continue
 
         run_dir_value = row.get("actual_output_dir")
@@ -104,42 +111,48 @@ for summary_path in sorted(summary_dir.glob("*_summary.csv")):
             row.get("output_cif"),
             run_dir / "perturbed.cif",
         )
+        final_path = usable_path(
+            row.get("final_relaxed_cif"),
+            run_dir / "final_relaxed.cif",
+        )
 
-        if not before_path.exists() or not perturbed_path.exists():
-            print(
-                f"Missing topology artifacts for {row.get('run_id')}: "
-                f"{before_path}, {perturbed_path}"
-            )
+        if not before_path.exists():
+            print(f"Missing baseline structure for {row.get('run_id')}")
             continue
 
         try:
             before_atoms = read(before_path, index=-1)
-            perturbed_atoms = read(perturbed_path)
 
-            with TemporaryDirectory() as temporary_directory:
-                metrics = topology_change_metrics(
-                    before_atoms,
-                    perturbed_atoms,
-                    Path(temporary_directory),
-                )
+            if need_perturbed:
+                if not perturbed_path.exists():
+                    raise FileNotFoundError(perturbed_path)
 
-                edge_target = (
-                    run_dir / "topology_edge_changes_perturbed.csv"
-                )
-                shutil.copy2(
-                    metrics["topology_edge_changes_csv"],
-                    edge_target,
-                )
-                metrics["topology_edge_changes_csv"] = str(edge_target)
+                perturbed_atoms = read(perturbed_path)
+                summary.loc[
+                    index,
+                    "perturbed_rdf_l1_distance",
+                ] = rdf_l1_distance(before_atoms, perturbed_atoms)
+                summary.loc[
+                    index,
+                    "perturbed_rdf_method",
+                ] = RDF_METHOD
+                changed = True
 
-            for key, value in metrics.items():
-                summary.loc[index, f"perturbed_{key}"] = value
+            if need_final:
+                if not final_path.exists():
+                    raise FileNotFoundError(final_path)
 
-            changed = True
+                final_atoms = read(final_path)
+                summary.loc[
+                    index,
+                    "rdf_l1_distance",
+                ] = rdf_l1_distance(before_atoms, final_atoms)
+                summary.loc[index, "rdf_method"] = RDF_METHOD
+                changed = True
 
         except Exception as error:
             print(
-                f"Could not backfill topology for "
+                f"Could not backfill RDF for "
                 f"{row.get('run_id')}: {error}"
             )
 
@@ -147,7 +160,7 @@ for summary_path in sorted(summary_dir.glob("*_summary.csv")):
         temporary_summary = summary_path.with_suffix(".csv.tmp")
         summary.to_csv(temporary_summary, index=False)
         os.replace(temporary_summary, summary_path)
-        print(f"Updated immediate topology: {summary_path}")
+        print(f"Updated ASE RDF values: {summary_path}")
 PY
 
 python -u - <<PY

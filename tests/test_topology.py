@@ -44,18 +44,47 @@ def test_removing_the_only_bond_has_jaccard_distance_one(tmp_path):
     assert metrics["coordination_change_max"] == 1.0
 
 
-def test_rdf_histogram_is_normalized():
+def test_standard_rdf_is_finite_and_nonnegative():
     atoms = Atoms(
-        "C3",
-        positions=[[0, 0, 0], [1.2, 0, 0], [0, 1.2, 0]],
-        cell=[10, 10, 10],
-        pbc=False,
+        "C4",
+        positions=[
+            [0.0, 0.0, 0.0],
+            [1.2, 0.0, 0.0],
+            [0.0, 1.2, 0.0],
+            [0.0, 0.0, 1.2],
+        ],
+        cell=[15.0, 15.0, 15.0],
+        pbc=True,
     )
 
-    histogram = topology.rdf_histogram(atoms)
+    rdf, radii = topology.rdf_values(atoms)
 
-    assert len(histogram) == 60
-    assert np.isclose(histogram.sum(), 1.0)
+    assert len(rdf) == 60
+    assert len(radii) == 60
+    assert np.all(np.isfinite(rdf))
+    assert np.all(rdf >= 0.0)
+    assert np.all(np.diff(radii) > 0.0)
+
+
+def test_moving_an_atom_changes_standard_rdf():
+    before = Atoms(
+        "C4",
+        positions=[
+            [0.0, 0.0, 0.0],
+            [1.2, 0.0, 0.0],
+            [0.0, 1.2, 0.0],
+            [0.0, 0.0, 1.2],
+        ],
+        cell=[15.0, 15.0, 15.0],
+        pbc=True,
+    )
+    after = before.copy()
+    after.positions[1, 0] = 1.6
+
+    distance = topology.rdf_l1_distance(before, after)
+
+    assert np.isfinite(distance)
+    assert distance > 0.0
 
 
 def test_edge_change_csv_lists_removed_bond(tmp_path):
