@@ -664,6 +664,36 @@ def load_summary(summary_path, base_dir, calculator):
             "mean_displacement": as_float(row.get("mean_displacement")),
             "max_displacement": as_float(row.get("max_displacement")),
             "final_energy": as_float(row.get("final_energy")),
+            "perturbed_topology_edge_changes_csv": clean_value(
+                row.get("perturbed_topology_edge_changes_csv")
+            ),
+            "perturbed_neighbor_edges_before": as_float(
+                row.get("perturbed_neighbor_edges_before")
+            ),
+            "perturbed_neighbor_edges_after": as_float(
+                row.get("perturbed_neighbor_edges_after")
+            ),
+            "perturbed_neighbor_edges_added": as_float(
+                row.get("perturbed_neighbor_edges_added")
+            ),
+            "perturbed_neighbor_edges_removed": as_float(
+                row.get("perturbed_neighbor_edges_removed")
+            ),
+            "perturbed_neighbor_edge_change_count": as_float(
+                row.get("perturbed_neighbor_edge_change_count")
+            ),
+            "perturbed_neighbor_jaccard_distance": as_float(
+                row.get("perturbed_neighbor_jaccard_distance")
+            ),
+            "perturbed_coordination_change_mean": as_float(
+                row.get("perturbed_coordination_change_mean")
+            ),
+            "perturbed_coordination_change_max": as_float(
+                row.get("perturbed_coordination_change_max")
+            ),
+            "perturbed_rdf_l1_distance": as_float(
+                row.get("perturbed_rdf_l1_distance")
+            ),
             "topology_edge_changes_csv": clean_value(row.get("topology_edge_changes_csv")),
             "neighbor_edges_before": as_float(row.get("neighbor_edges_before")),
             "neighbor_edges_after": as_float(row.get("neighbor_edges_after")),
@@ -3458,6 +3488,30 @@ def topology_metric_rows(column):
     ]
 
 
+def topology_stage_rows(column):
+    return [
+        (
+            "After attack, before relaxation",
+            lambda col=f"perturbed_{column}": (
+                lambda row: topology_scalar_values(row, col)
+            ),
+        ),
+        (
+            "After attack, after relaxation",
+            lambda col=column: (
+                lambda row: topology_scalar_values(row, col)
+            ),
+        ),
+    ]
+
+
+def topology_stage_getters(column):
+    return [
+        topology_metric_getter(f"perturbed_{column}"),
+        topology_metric_getter(column),
+    ]
+
+
 def force_angle_metric_getters():
     return [
         lambda row: metric_distribution(row, lambda item: force_angle_values(
@@ -3920,198 +3974,205 @@ def make_single_row_parametric_figure(records, output_dir, figure_name, title, x
     return missing_rows
 
 
-def make_topology_metric_figure_set(epsilon_records, n_step_records, output_dir):
+def make_topology_metric_figure_set(
+    epsilon_records,
+    n_step_records,
+    output_dir,
+):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     metrics = [
-        ("neighbor_jaccard_distance", "Neighbor Jaccard distance"),
-        ("rdf_l1_distance", "RDF L1 distance"),
-        ("coordination_change_max", "Max coordination change"),
+        (
+            "neighbor_jaccard_distance",
+            "Neighbor Jaccard distance",
+        ),
+        (
+            "rdf_l1_distance",
+            "RDF L1 distance",
+        ),
+        (
+            "coordination_change_max",
+            "Max coordination change",
+        ),
     ]
 
     displacement_getters = displacement_metric_getters()
     delta_force_getters = delta_force_metric_getters()
 
     for column, label in metrics:
-        row = (
-            "After attack topology change",
-            lambda col=column: (lambda row: topology_scalar_values(row, col)),
-        )
-        metric_getter = topology_metric_getter(column)
+        rows = topology_stage_rows(column)
+        metric_getters = topology_stage_getters(column)
 
-        make_single_row_distribution_figure(
+        make_distribution_figure(
             records=epsilon_records,
             output_dir=output_dir,
             figure_name=f"{column}_by_epsilon",
             ylabel=label,
-            row=row,
-            attacks_to_plot=ATTACK_ORDER,
+            rows=rows,
         )
 
-        make_single_row_ci_figure(
+        make_ci_figure(
             records=epsilon_records,
             output_dir=output_dir,
             figure_name=f"{column}_ci_by_epsilon",
             ylabel=f"Median {label}",
-            row=row,
-            attacks_to_plot=ATTACK_ORDER,
+            rows=rows,
         )
 
-        make_single_row_whisker_span_figure(
+        make_whisker_span_figure(
             records=epsilon_records,
             output_dir=output_dir,
             figure_name=f"{column}_whisker_span_by_epsilon",
             ylabel=f"{label} whisker span",
-            row=row,
-            attacks_to_plot=ATTACK_ORDER,
+            rows=rows,
         )
 
-        make_single_row_distribution_by_steps_figure(
+        make_distribution_by_steps_figure(
             records=n_step_records,
             output_dir=output_dir,
             figure_name=f"{column}_by_n_steps",
             ylabel=label,
-            row=row,
-            attacks_to_plot=STEP_ATTACK_ORDER,
+            rows=rows,
             epsilon=0.1,
         )
 
-        make_single_row_ci_by_steps_figure(
+        make_ci_by_steps_figure(
             records=n_step_records,
             output_dir=output_dir,
             figure_name=f"{column}_ci_by_n_steps",
             ylabel=f"Median {label}",
-            row=row,
-            attacks_to_plot=STEP_ATTACK_ORDER,
+            rows=rows,
             epsilon=0.1,
         )
 
-        make_single_row_whisker_span_by_steps_figure(
+        make_whisker_span_by_steps_figure(
             records=n_step_records,
             output_dir=output_dir,
             figure_name=f"{column}_whisker_span_by_n_steps",
             ylabel=f"{label} whisker span",
-            row=row,
-            attacks_to_plot=STEP_ATTACK_ORDER,
+            rows=rows,
             epsilon=0.1,
         )
 
-        make_single_row_parametric_figure(
-            records=epsilon_records,
-            output_dir=output_dir,
-            figure_name=f"convergence_vs_{column}_by_epsilon",
-            title=f"Convergence vs {label} by epsilon",
-            x_label=f"Median {label}",
-            y_label="Relaxation steps",
-            bubble_label="epsilon",
-            attacks_to_plot=ATTACK_ORDER,
-            x_getter=metric_getter,
-            y_getter=lambda row: scalar_distribution(row, "after_relax_steps"),
-        )
+        for suffix, records, attacks, bubble_label in [
+            (
+                "epsilon",
+                epsilon_records,
+                ATTACK_ORDER,
+                "epsilon",
+            ),
+            (
+                "n_steps",
+                n_step_records,
+                STEP_ATTACK_ORDER,
+                "n_steps",
+            ),
+        ]:
+            make_parametric_state_figure(
+                records=records,
+                output_dir=output_dir,
+                figure_name=(
+                    f"convergence_vs_{column}_by_{suffix}"
+                ),
+                title=(
+                    f"Convergence vs {label} by {bubble_label}"
+                ),
+                x_label=f"Median {label}",
+                y_label="Relaxation steps",
+                bubble_label=bubble_label,
+                attacks_to_plot=attacks,
+                x_getters=metric_getters,
+                y_getters=[
+                    lambda row: scalar_distribution(
+                        row,
+                        "after_relax_steps",
+                    ),
+                    lambda row: scalar_distribution(
+                        row,
+                        "after_relax_steps",
+                    ),
+                ],
+            )
 
-        make_single_row_parametric_figure(
-            records=n_step_records,
-            output_dir=output_dir,
-            figure_name=f"convergence_vs_{column}_by_n_steps",
-            title=f"Convergence vs {label} by n_steps",
-            x_label=f"Median {label}",
-            y_label="Relaxation steps",
-            bubble_label="n_steps",
-            attacks_to_plot=STEP_ATTACK_ORDER,
-            x_getter=metric_getter,
-            y_getter=lambda row: scalar_distribution(row, "after_relax_steps"),
-        )
+            make_parametric_state_figure(
+                records=records,
+                output_dir=output_dir,
+                figure_name=(
+                    f"{column}_vs_displacement_by_{suffix}"
+                ),
+                title=(
+                    f"{label} vs displacement by {bubble_label}"
+                ),
+                x_label=r"Median displacement ($\AA$)",
+                y_label=f"Median {label}",
+                bubble_label=bubble_label,
+                attacks_to_plot=attacks,
+                x_getters=displacement_getters,
+                y_getters=metric_getters,
+            )
 
-        make_single_row_parametric_figure(
-            records=epsilon_records,
-            output_dir=output_dir,
-            figure_name=f"{column}_vs_displacement_by_epsilon",
-            title=f"{label} vs displacement by epsilon",
-            x_label=r"Median displacement ($\AA$)",
-            y_label=f"Median {label}",
-            bubble_label="epsilon",
-            attacks_to_plot=ATTACK_ORDER,
-            x_getter=displacement_getters[1],
-            y_getter=metric_getter,
-        )
-
-        make_single_row_parametric_figure(
-            records=n_step_records,
-            output_dir=output_dir,
-            figure_name=f"{column}_vs_displacement_by_n_steps",
-            title=f"{label} vs displacement by n_steps",
-            x_label=r"Median displacement ($\AA$)",
-            y_label=f"Median {label}",
-            bubble_label="n_steps",
-            attacks_to_plot=STEP_ATTACK_ORDER,
-            x_getter=displacement_getters[1],
-            y_getter=metric_getter,
-        )
-
-        make_single_row_parametric_figure(
-            records=epsilon_records,
-            output_dir=output_dir,
-            figure_name=f"{column}_vs_delta_force_by_epsilon",
-            title=f"{label} vs delta force by epsilon",
-            x_label=r"Median $\Delta$ force (eV/$\AA$)",
-            y_label=f"Median {label}",
-            bubble_label="epsilon",
-            attacks_to_plot=ATTACK_ORDER,
-            x_getter=delta_force_getters[1],
-            y_getter=metric_getter,
-        )
-
-        make_single_row_parametric_figure(
-            records=n_step_records,
-            output_dir=output_dir,
-            figure_name=f"{column}_vs_delta_force_by_n_steps",
-            title=f"{label} vs delta force by n_steps",
-            x_label=r"Median $\Delta$ force (eV/$\AA$)",
-            y_label=f"Median {label}",
-            bubble_label="n_steps",
-            attacks_to_plot=STEP_ATTACK_ORDER,
-            x_getter=delta_force_getters[1],
-            y_getter=metric_getter,
-        )
+            make_parametric_state_figure(
+                records=records,
+                output_dir=output_dir,
+                figure_name=(
+                    f"{column}_vs_delta_force_by_{suffix}"
+                ),
+                title=(
+                    f"{label} vs delta force by {bubble_label}"
+                ),
+                x_label=r"Median $\Delta$ force (eV/$\AA$)",
+                y_label=f"Median {label}",
+                bubble_label=bubble_label,
+                attacks_to_plot=attacks,
+                x_getters=delta_force_getters,
+                y_getters=metric_getters,
+            )
 
 
-def make_topology_lattice_axis_component_figures(epsilon_records, output_dir):
+def make_topology_lattice_axis_component_figures(
+    epsilon_records,
+    output_dir,
+):
     output_dir = Path(output_dir) / "components"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     metrics = [
-        ("neighbor_jaccard_distance", "Neighbor Jaccard distance"),
-        ("rdf_l1_distance", "RDF L1 distance"),
-        ("coordination_change_max", "Max coordination change"),
+        (
+            "neighbor_jaccard_distance",
+            "Neighbor Jaccard distance",
+        ),
+        (
+            "rdf_l1_distance",
+            "RDF L1 distance",
+        ),
+        (
+            "coordination_change_max",
+            "Max coordination change",
+        ),
     ]
 
     for column, label in metrics:
-        row = (
-            "After attack topology change",
-            lambda col=column: (lambda row: topology_scalar_values(row, col)),
-        )
+        rows = topology_stage_rows(column)
 
-        make_single_row_distribution_figure(
+        make_distribution_figure(
             records=epsilon_records,
             output_dir=output_dir,
             figure_name=f"{column}_by_epsilon",
             ylabel=label,
-            row=row,
-            attacks_to_plot=ATTACK_ORDER,
+            rows=rows,
             axis_specs=epsilon_component_axis_specs(
                 epsilon_records,
                 f"{column}_by_epsilon",
             ),
         )
 
-        make_single_row_ci_figure(
+        make_ci_figure(
             records=epsilon_records,
             output_dir=output_dir,
             figure_name=f"{column}_ci_by_epsilon",
             ylabel=f"Median {label}",
-            row=row,
-            attacks_to_plot=ATTACK_ORDER,
+            rows=rows,
             axis_specs=epsilon_component_axis_specs(
                 epsilon_records,
                 f"{column}_ci_by_epsilon",

@@ -49,6 +49,107 @@ fi
 
 source ~/project/.venv-mace/bin/activate
 
+# Backfill topology immediately after attack, before relaxation.
+python -u - <<PY
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import os
+import shutil
+import sys
+
+import pandas as pd
+from ase.io import read
+
+sys.path.insert(0, str(Path("$PROJECT_OUTPUT_ROOT") / "scripts_python"))
+from run_tests import topology_change_metrics
+
+summary_dir = Path("$SCRATCH_TRIAL_DIR") / "array_summaries"
+
+def usable_path(value, fallback):
+    if value is not None and not pd.isna(value):
+        path = Path(str(value))
+        if path.exists():
+            return path
+    return fallback
+
+for summary_path in sorted(summary_dir.glob("*_summary.csv")):
+    try:
+        summary = pd.read_csv(summary_path)
+    except Exception as error:
+        print(f"Skipping unreadable summary {summary_path}: {error}")
+        continue
+
+    changed = False
+
+    for index, row in summary.iterrows():
+        if str(row.get("status", "")).strip().lower() != "success":
+            continue
+
+        existing = row.get("perturbed_neighbor_jaccard_distance")
+        if existing is not None and not pd.isna(existing):
+            continue
+
+        run_dir_value = row.get("actual_output_dir")
+        if run_dir_value is None or pd.isna(run_dir_value):
+            print(f"Missing output directory for {row.get('run_id')}")
+            continue
+
+        run_dir = Path(str(run_dir_value))
+
+        before_path = usable_path(
+            row.get("before_relax_traj"),
+            run_dir / "before_attack_relaxation.traj",
+        )
+        perturbed_path = usable_path(
+            row.get("output_cif"),
+            run_dir / "perturbed.cif",
+        )
+
+        if not before_path.exists() or not perturbed_path.exists():
+            print(
+                f"Missing topology artifacts for {row.get('run_id')}: "
+                f"{before_path}, {perturbed_path}"
+            )
+            continue
+
+        try:
+            before_atoms = read(before_path, index=-1)
+            perturbed_atoms = read(perturbed_path)
+
+            with TemporaryDirectory() as temporary_directory:
+                metrics = topology_change_metrics(
+                    before_atoms,
+                    perturbed_atoms,
+                    Path(temporary_directory),
+                )
+
+                edge_target = (
+                    run_dir / "topology_edge_changes_perturbed.csv"
+                )
+                shutil.copy2(
+                    metrics["topology_edge_changes_csv"],
+                    edge_target,
+                )
+                metrics["topology_edge_changes_csv"] = str(edge_target)
+
+            for key, value in metrics.items():
+                summary.loc[index, f"perturbed_{key}"] = value
+
+            changed = True
+
+        except Exception as error:
+            print(
+                f"Could not backfill topology for "
+                f"{row.get('run_id')}: {error}"
+            )
+
+    if changed:
+        temporary_summary = summary_path.with_suffix(".csv.tmp")
+        summary.to_csv(temporary_summary, index=False)
+        os.replace(temporary_summary, summary_path)
+        print(f"Updated immediate topology: {summary_path}")
+PY
+
 python -u - <<PY
 from pathlib import Path
 import shutil
