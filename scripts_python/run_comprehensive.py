@@ -4334,8 +4334,37 @@ def make_topology_figures(records, output_dir):
     for material_slug, material_records in clean.groupby("material_slug"):
         material_output_dir = output_dir / str(material_slug)
         material_output_dir.mkdir(parents=True, exist_ok=True)
+
         save_topology_summary(material_records, material_output_dir)
         make_topology_by_attack_type(material_records, material_output_dir)
+
+        material_epsilon_records = material_records[
+            ~material_records["run_id"].str.contains(
+                "_steps",
+                regex=False,
+                na=False,
+            )
+        ].copy()
+
+        material_n_step_records = material_records[
+            material_records["run_id"].str.contains(
+                "_steps",
+                regex=False,
+                na=False,
+            )
+        ].copy()
+
+        make_topology_metric_figure_set(
+            material_epsilon_records,
+            material_n_step_records,
+            material_output_dir,
+        )
+
+        if not material_epsilon_records.empty:
+            make_topology_lattice_axis_component_figures(
+                material_epsilon_records,
+                material_output_dir,
+            )
 
 
 def main():
