@@ -60,7 +60,7 @@ controller_mode() {
 
   PLOT_JOB_ID=$(sbatch --parsable \
     --dependency=afterok:$ARRAY_JOB_ID \
-    --time=04:00:00 \
+    --time=1-00:00:00 \
     --mem=16G \
     --cpus-per-task=8 \
     --output=supercell-plot-%j.out \
