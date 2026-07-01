@@ -19,7 +19,7 @@ SCRATCH_OUTPUT_ROOT="${SCRATCH_OUTPUT_ROOT:-/scratch/$USER/mlff_attack_data_coll
 SUPER_ROOT="$SCRATCH_OUTPUT_ROOT/outputs_supercell"
 
 # Final publication/comprehensive output goes here, like plot.sh project outputs.
-SUPER_COMPREHENSIVE_DIR="$PROJECT_OUTPUT_ROOT/outputs_comprehensive/supercell"
+SUPER_COMPREHENSIVE_DIR="$PROJECT_OUTPUT_ROOT/supercell"
 
 load_env() {
   if [ -f .env ]; then
@@ -118,7 +118,9 @@ run_mode() {
     exit 1
   fi
 
-  SUMMARY_FILE="$SUMMARY_FILE" python -u scripts_python/run_tests.py --tests "$TEST_CSV"
+  python -u scripts_python/runtime.py run \
+  --tests "$TEST_CSV" \
+  --summary-file "$SUMMARY_FILE"
 
   deactivate
 
@@ -148,6 +150,12 @@ plot_mode() {
     --mace-dir "$SUPER_ROOT/outputs_float64/mace" \
     --uma-dir "$SUPER_ROOT/outputs_float64/uma" \
     --output-dir "$SUPER_COMPREHENSIVE_DIR"
+
+  python -u scripts_python/runtime.py plot \
+    --mace-summary "$SUPER_ROOT/outputs_float64/mace/summary.csv" \
+    --uma-summary "$SUPER_ROOT/outputs_float64/uma/summary.csv" \
+    --output-dir "$SUPER_COMPREHENSIVE_DIR" \
+    --epsilon 0.1
 
   deactivate
 
