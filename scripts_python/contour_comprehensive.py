@@ -685,7 +685,7 @@ def plot_six_panel(material_slug, calculator, rows, output_dir):
         ax.grid(True, alpha=0.35)
 
     axes[1, 1].set_yscale("symlog", linthresh=1e-3)
-    
+
     axes[0, 0].axhline(0, color="#222222", lw=0.8, alpha=0.65)
     axes[0, 1].legend(loc="upper right")
     axes[0, 2].legend(loc="upper right")
