@@ -7,6 +7,14 @@ from matplotlib.ticker import MaxNLocator, ScalarFormatter
 import numpy as np
 import pandas as pd
 
+from ase.io import read as ase_read
+
+from run_tests import (
+    coordination_by_atom,
+    neighbor_edge_set,
+    rdf_l1_distance,
+)
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -327,6 +335,434 @@ def contour_metric_values(rows, metric):
                 .tolist()
             )
     return np.asarray(values, dtype=float)
+
+
+def median_force_angle(initial_forces, current_forces):
+    initial_forces = np.asarray(initial_forces, dtype=float)
+    current_forces = np.asarray(current_forces, dtype=float)
+
+    initial_norm = np.linalg.norm(initial_forces, axis=1)
+    current_norm = np.linalg.norm(current_forces, axis=1)
+
+    valid = (
+        np.isfinite(initial_norm)
+        & np.isfinite(current_norm)
+        & (initial_norm > 1e-12)
+        & (current_norm > 1e-12)
+    )
+
+    if not np.any(valid):
+        return np.nan
+
+    cosine = np.sum(
+        initial_forces[valid] * current_forces[valid],
+        axis=1,
+    ) / (
+        initial_norm[valid] * current_norm[valid]
+    )
+
+    angles = np.degrees(
+        np.arccos(np.clip(cosine, -1.0, 1.0))
+    )
+
+    return float(np.median(angles))
+
+
+def contour_topology_metrics(initial_atoms, current_atoms):
+    initial_edges = neighbor_edge_set(initial_atoms)
+    current_edges = neighbor_edge_set(current_atoms)
+    union_edges = initial_edges | current_edges
+
+    if union_edges:
+        jaccard = 1.0 - (
+            len(initial_edges & current_edges)
+            / len(union_edges)
+        )
+    else:
+        jaccard = 0.0
+
+    initial_coordination = coordination_by_atom(
+        initial_edges,
+        initial_atoms,
+    )
+    current_coordination = coordination_by_atom(
+        current_edges,
+        current_atoms,
+    )
+
+    coordination_changes = [
+        abs(
+            current_coordination.get(atom, 0)
+            - initial_coordination.get(atom, 0)
+        )
+        for atom in (
+            set(initial_coordination)
+            | set(current_coordination)
+        )
+    ]
+
+    coordination_max = (
+        float(np.max(coordination_changes))
+        if coordination_changes
+        else 0.0
+    )
+
+    return {
+        "contour_neighbor_jaccard_distance": float(jaccard),
+        "contour_coordination_change_max": coordination_max,
+        "contour_rdf_l1_distance": rdf_l1_distance(
+            initial_atoms,
+            current_atoms,
+        ),
+    }
+
+
+def contour_frame_table(summary_row, max_frames=101):
+    metrics = read_csv(summary_row["metrics_csv"])
+    trajectory_path = Path(summary_row["traj"])
+
+    if metrics is None or not trajectory_path.exists():
+        return pd.DataFrame()
+
+    try:
+        frames = ase_read(trajectory_path, ":")
+    except Exception as error:
+        print(
+            f"Could not read contour trajectory "
+            f"{trajectory_path}: {error}"
+        )
+        return pd.DataFrame()
+
+    count = min(len(metrics), len(frames))
+
+    if count == 0:
+        return pd.DataFrame()
+
+    sample_count = min(max_frames, count)
+    indices = np.unique(
+        np.linspace(
+            0,
+            count - 1,
+            sample_count,
+            dtype=int,
+        )
+    )
+
+    selected = metrics.iloc[indices].copy().reset_index(drop=True)
+    selected_frames = [frames[index] for index in indices]
+
+    initial_atoms = frames[0]
+    initial_forces = None
+
+    try:
+        initial_forces = initial_atoms.get_forces()
+    except Exception:
+        pass
+
+    jaccard_values = []
+    coordination_values = []
+    rdf_values = []
+    force_angle_values = []
+
+    for frame in selected_frames:
+        try:
+            topology = contour_topology_metrics(
+                initial_atoms,
+                frame,
+            )
+            jaccard_values.append(
+                topology["contour_neighbor_jaccard_distance"]
+            )
+            coordination_values.append(
+                topology["contour_coordination_change_max"]
+            )
+            rdf_values.append(
+                topology["contour_rdf_l1_distance"]
+            )
+        except Exception as error:
+            print(
+                f"Could not calculate contour topology for "
+                f"{trajectory_path}: {error}"
+            )
+            jaccard_values.append(np.nan)
+            coordination_values.append(np.nan)
+            rdf_values.append(np.nan)
+
+        if initial_forces is None:
+            force_angle_values.append(np.nan)
+        else:
+            try:
+                force_angle_values.append(
+                    median_force_angle(
+                        initial_forces,
+                        frame.get_forces(),
+                    )
+                )
+            except Exception:
+                force_angle_values.append(np.nan)
+
+    selected["contour_neighbor_jaccard_distance"] = (
+        jaccard_values
+    )
+    selected["contour_coordination_change_max"] = (
+        coordination_values
+    )
+    selected["contour_rdf_l1_distance"] = rdf_values
+    selected["contour_force_angle_deg"] = force_angle_values
+
+    selected["contour_convergence_mev_per_atom"] = (
+        pd.to_numeric(
+            selected["energy_deviation_mev_per_atom"],
+            errors="coerce",
+        ).abs()
+    )
+
+    selected["material_slug"] = summary_row["material_slug"]
+    selected["calculator"] = summary_row["calculator"]
+    selected["beta"] = float(summary_row["beta"])
+
+    return selected
+
+
+def build_contour_frame_dataset(summary_rows):
+    tables = []
+
+    for _, summary_row in summary_rows.iterrows():
+        table = contour_frame_table(summary_row)
+
+        if not table.empty:
+            tables.append(table)
+
+    if not tables:
+        return pd.DataFrame()
+
+    return pd.concat(tables, ignore_index=True, sort=False)
+
+
+def contour_trend(data, x_column, y_column, bins=15):
+    clean = data[[x_column, y_column]].copy()
+    clean[x_column] = pd.to_numeric(
+        clean[x_column],
+        errors="coerce",
+    )
+    clean[y_column] = pd.to_numeric(
+        clean[y_column],
+        errors="coerce",
+    )
+    clean = clean.replace(
+        [np.inf, -np.inf],
+        np.nan,
+    ).dropna()
+
+    if len(clean) < 2:
+        return pd.DataFrame()
+
+    unique_x = clean[x_column].nunique()
+
+    if unique_x < 2:
+        return pd.DataFrame()
+
+    number_of_bins = min(bins, unique_x)
+
+    try:
+        clean["_bin"] = pd.qcut(
+            clean[x_column],
+            q=number_of_bins,
+            duplicates="drop",
+        )
+    except ValueError:
+        return pd.DataFrame()
+
+    return (
+        clean.groupby("_bin", observed=True)
+        .agg(
+            x=(x_column, "median"),
+            y=(y_column, "median"),
+        )
+        .reset_index(drop=True)
+        .sort_values("x")
+    )
+
+
+def plot_contour_metric_vs_displacement(
+    data,
+    metric,
+    ylabel,
+    output_path,
+    title,
+):
+    required = {
+        "mean_displacement_from_initial_a",
+        metric,
+        "calculator",
+        "beta",
+    }
+
+    if data.empty or not required.issubset(data.columns):
+        return
+
+    betas = sorted(
+        pd.to_numeric(
+            data["beta"],
+            errors="coerce",
+        ).dropna().unique()
+    )
+
+    if not betas:
+        return
+
+    fig, axes = plt.subplots(
+        1,
+        len(betas),
+        figsize=(4.4 * len(betas), 4.0),
+        squeeze=False,
+    )
+    axes = axes.ravel()
+
+    for axis, beta in zip(axes, betas):
+        beta_data = data[
+            np.isclose(
+                pd.to_numeric(data["beta"], errors="coerce"),
+                beta,
+            )
+        ].copy()
+
+        for calculator in ["mace", "uma"]:
+            selected = beta_data[
+                beta_data["calculator"] == calculator
+            ].copy()
+
+            selected[
+                "mean_displacement_from_initial_a"
+            ] = pd.to_numeric(
+                selected["mean_displacement_from_initial_a"],
+                errors="coerce",
+            )
+            selected[metric] = pd.to_numeric(
+                selected[metric],
+                errors="coerce",
+            )
+
+            selected = selected.replace(
+                [np.inf, -np.inf],
+                np.nan,
+            ).dropna(
+                subset=[
+                    "mean_displacement_from_initial_a",
+                    metric,
+                ]
+            )
+
+            if selected.empty:
+                continue
+
+            color = CALC_COLORS.get(calculator, "#444444")
+
+            axis.scatter(
+                selected["mean_displacement_from_initial_a"],
+                selected[metric],
+                s=12,
+                alpha=0.16,
+                color=color,
+                edgecolor="none",
+            )
+
+            trend = contour_trend(
+                selected,
+                "mean_displacement_from_initial_a",
+                metric,
+            )
+
+            if not trend.empty:
+                axis.plot(
+                    trend["x"],
+                    trend["y"],
+                    color=color,
+                    linewidth=1.8,
+                    marker="o",
+                    markersize=3,
+                    label=calculator.upper(),
+                )
+
+        axis.set_title(rf"$\beta={beta:.2f}$")
+        axis.set_xlabel(
+            r"Mean displacement from initial structure ($\AA$)"
+        )
+        axis.set_ylabel(ylabel)
+        axis.grid(True, alpha=0.30)
+
+        handles, labels = axis.get_legend_handles_labels()
+        if handles:
+            axis.legend()
+
+    label_axes(axes)
+    fig.suptitle(title, y=1.03, fontsize=11)
+    fig.tight_layout()
+    fig.savefig(
+        output_path,
+        dpi=500,
+        bbox_inches="tight",
+    )
+    plt.close(fig)
+
+
+CONTOUR_DISPLACEMENT_PLOTS = [
+    (
+        "contour_neighbor_jaccard_distance",
+        "Neighbor Jaccard distance",
+        "jaccard_vs_displacement.png",
+        "Contour neighbor change vs displacement",
+    ),
+    (
+        "contour_rdf_l1_distance",
+        "Integrated ASE RDF difference",
+        "rdf_vs_displacement.png",
+        "Contour RDF change vs displacement",
+    ),
+    (
+        "contour_coordination_change_max",
+        "Maximum coordination-number change",
+        "coordination_vs_displacement.png",
+        "Contour coordination change vs displacement",
+    ),
+    (
+        "mean_force_delta_from_initial_ev_a",
+        r"Mean force change (eV/$\AA$)",
+        "delta_force_vs_displacement.png",
+        "Contour force change vs displacement",
+    ),
+    (
+        "contour_convergence_mev_per_atom",
+        r"$|E-E_{\mathrm{target}}|$ (meV/atom)",
+        "convergence_vs_displacement.png",
+        "Contour energy-target convergence vs displacement",
+    ),
+    (
+        "contour_force_angle_deg",
+        "Median force-vector angle change (degrees)",
+        "delta_force_angle_vs_displacement.png",
+        "Contour force-angle change vs displacement",
+    ),
+]
+
+
+def make_contour_displacement_plots(
+    frame_data,
+    output_dir,
+):
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for metric, ylabel, filename, title in (
+        CONTOUR_DISPLACEMENT_PLOTS
+    ):
+        plot_contour_metric_vs_displacement(
+            data=frame_data,
+            metric=metric,
+            ylabel=ylabel,
+            output_path=output_dir / filename,
+            title=title,
+        )
 
 
 def contour_stats(rows, metric):
@@ -1101,7 +1537,33 @@ def main():
         return
 
     all_rows = pd.concat(summaries, ignore_index=True)
-    all_rows.to_csv(args.output_dir / "contour_summary_combined.csv", index=False)
+    all_rows.to_csv(
+        args.output_dir / "contour_summary_combined.csv",
+        index=False,
+    )
+
+    contour_frames = build_contour_frame_dataset(all_rows)
+
+    if not contour_frames.empty:
+        contour_frames.to_csv(
+            args.output_dir / "contour_frame_metrics.csv",
+            index=False,
+        )
+
+        make_contour_displacement_plots(
+            contour_frames,
+            args.output_dir,
+        )
+
+        for material_slug, material_frames in (
+            contour_frames.groupby("material_slug")
+        ):
+            make_contour_displacement_plots(
+                material_frames,
+                args.output_dir / str(material_slug),
+            )
+    else:
+        print("No contour trajectory frames were available.")
 
     attacks = load_attack_dataset(args.comprehensive_dir)
     comparison_tables = []

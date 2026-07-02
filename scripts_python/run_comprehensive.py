@@ -6,7 +6,9 @@ import math
 import re
 
 import matplotlib.pyplot as plt
-from matplotlib.patches import Ellipse
+from matplotlib.colors import LogNorm, Normalize
+from matplotlib.lines import Line2D
+from matplotlib.patches import Ellipse, FancyArrowPatch
 from matplotlib.ticker import MaxNLocator, ScalarFormatter, FuncFormatter, FixedLocator, NullLocator
 import numpy as np
 import pandas as pd
@@ -1544,98 +1546,718 @@ def make_parametric_state_figure(
     return missing_rows
 
 
-def make_parametric_figure_set(records, output_dir, suffix, attacks_to_plot, bubble_label):
-    convergence_displacement_missing = make_parametric_state_figure(
-        records=records,
-        output_dir=output_dir,
-        figure_name=f"figure_7_convergence_vs_displacement_by_{suffix}",
-        title=f"Convergence vs displacement by {bubble_label}",
-        x_label=r"Median displacement ($\AA$)",
-        y_label="Relaxation steps",
-        bubble_label=bubble_label,
-        attacks_to_plot=attacks_to_plot,
-        x_getters=[
-            lambda row: metric_distribution(row, lambda item: displacement_values(
-                item["run_dir"],
-                "before_forces.csv",
-                "perturbed_forces.csv",
-            )),
-            lambda row: metric_distribution(row, lambda item: displacement_values(
-                item["run_dir"],
-                "before_forces.csv",
-                "after_forces.csv",
-            )),
-        ],
-        y_getters=[
-            lambda row: scalar_distribution(row, "after_relax_steps"),
-            lambda row: scalar_distribution(row, "after_relax_steps"),
-        ],
+def paired_relaxation_rows(
+    records,
+    x_getters,
+    y_getters,
+):
+    rows = []
+
+    for _, row in records.iterrows():
+        x_before, _ = x_getters[0](row)
+        x_after, _ = x_getters[1](row)
+        y_before, _ = y_getters[0](row)
+        y_after, _ = y_getters[1](row)
+
+        if any(
+            value is None
+            for value in [
+                x_before,
+                x_after,
+                y_before,
+                y_after,
+            ]
+        ):
+            continue
+
+        epsilon = as_float(row.get("epsilon"))
+
+        if epsilon is None or epsilon <= 0:
+            continue
+
+        values = [
+            float(x_before[0]),
+            float(x_after[0]),
+            float(y_before[0]),
+            float(y_after[0]),
+        ]
+
+        if not np.all(np.isfinite(values)):
+            continue
+
+        rows.append({
+            "run_id": row.get("run_id"),
+            "material_slug": row.get("material_slug"),
+            "calculator": row.get("calculator"),
+            "attack_label": row.get("attack_label"),
+            "epsilon": float(epsilon),
+            "x_before": values[0],
+            "x_after": values[1],
+            "y_before": values[2],
+            "y_after": values[3],
+        })
+
+    columns = [
+        "run_id",
+        "material_slug",
+        "calculator",
+        "attack_label",
+        "epsilon",
+        "x_before",
+        "x_after",
+        "y_before",
+        "y_after",
+    ]
+
+    return pd.DataFrame(rows, columns=columns)
+
+
+def robust_iqr_scale(values):
+    values = clean_numeric_array(values)
+
+    if len(values) == 0:
+        return 1.0
+
+    q1, q3 = np.percentile(values, [25, 75])
+    scale = float(q3 - q1)
+
+    if np.isfinite(scale) and scale > 1e-12:
+        return scale
+
+    low, high = np.percentile(values, [5, 95])
+    scale = float(high - low)
+
+    if np.isfinite(scale) and scale > 1e-12:
+        return scale
+
+    scale = float(np.std(values))
+
+    if np.isfinite(scale) and scale > 1e-12:
+        return scale
+
+    return 1.0
+
+
+def bootstrap_median_interval(
+    values,
+    iterations=2000,
+    seed=20260702,
+):
+    values = clean_numeric_array(values)
+
+    if len(values) == 0:
+        return np.nan, np.nan, np.nan
+
+    center = float(np.median(values))
+
+    if len(values) < 2:
+        return center, np.nan, np.nan
+
+    rng = np.random.default_rng(seed)
+    sample_indices = rng.integers(
+        0,
+        len(values),
+        size=(iterations, len(values)),
+    )
+    samples = values[sample_indices]
+    medians = np.median(samples, axis=1)
+
+    lower, upper = np.percentile(
+        medians,
+        [2.5, 97.5],
     )
 
-    convergence_force_missing = make_parametric_state_figure(
-        records=records,
-        output_dir=output_dir,
-        figure_name=f"figure_8_convergence_vs_delta_force_by_{suffix}",
-        title=f"Convergence vs delta force by {bubble_label}",
-        x_label=r"Median $\Delta$ force (eV/$\AA$)",
-        y_label="Relaxation steps",
-        bubble_label=bubble_label,
-        attacks_to_plot=attacks_to_plot,
-        x_getters=[
-            lambda row: metric_distribution(row, lambda item: force_delta_values(
-                item["run_dir"],
-                "before_forces.csv",
-                "perturbed_forces.csv",
-            )),
-            lambda row: metric_distribution(row, lambda item: force_delta_values(
-                item["run_dir"],
-                "before_forces.csv",
-                "after_forces.csv",
-            )),
-        ],
-        y_getters=[
-            lambda row: scalar_distribution(row, "after_relax_steps"),
-            lambda row: scalar_distribution(row, "after_relax_steps"),
-        ],
-        x_log=True,
+    return center, float(lower), float(upper)
+
+
+def epsilon_color_mapping(values):
+    values = clean_numeric_array(values)
+    values = values[values > 0]
+
+    if len(values) == 0:
+        return plt.get_cmap("viridis"), Normalize(0.0, 1.0)
+
+    minimum = float(np.min(values))
+    maximum = float(np.max(values))
+
+    if np.isclose(minimum, maximum):
+        norm = Normalize(
+            vmin=minimum * 0.9,
+            vmax=maximum * 1.1,
+        )
+    else:
+        norm = LogNorm(
+            vmin=minimum,
+            vmax=maximum,
+        )
+
+    return plt.get_cmap("viridis"), norm
+
+
+def grouped_relaxation_vectors(data):
+    return (
+        data.groupby(
+            [
+                "attack_label",
+                "calculator",
+                "epsilon",
+            ],
+            as_index=False,
+        )
+        .agg({
+            "x_before": "median",
+            "x_after": "median",
+            "y_before": "median",
+            "y_after": "median",
+        })
     )
 
-    force_displacement_missing = make_parametric_state_figure(
-        records=records,
-        output_dir=output_dir,
-        figure_name=f"figure_9_delta_force_vs_displacement_by_{suffix}",
-        title=f"Delta force vs displacement by {bubble_label}",
-        x_label=r"Median displacement ($\AA$)",
-        y_label=r"Median $\Delta$ force (eV/$\AA$)",
-        bubble_label=bubble_label,
-        attacks_to_plot=attacks_to_plot,
-        x_getters=[
-            lambda row: metric_distribution(row, lambda item: displacement_values(
-                item["run_dir"],
-                "before_forces.csv",
-                "perturbed_forces.csv",
-            )),
-            lambda row: metric_distribution(row, lambda item: displacement_values(
-                item["run_dir"],
-                "before_forces.csv",
-                "after_forces.csv",
-            )),
-        ],
-        y_getters=[
-            lambda row: metric_distribution(row, lambda item: force_delta_values(
-                item["run_dir"],
-                "before_forces.csv",
-                "perturbed_forces.csv",
-            )),
-            lambda row: metric_distribution(row, lambda item: force_delta_values(
-                item["run_dir"],
-                "before_forces.csv",
-                "after_forces.csv",
-            )),
-        ],
-        x_log=True,
-        y_log=True,
+
+def draw_relaxation_vector_panel(
+    ax,
+    grouped,
+    attack,
+    cmap,
+    norm,
+    x_label,
+    y_label,
+    x_log=False,
+    y_log=False,
+):
+    subset = grouped[
+        grouped["attack_label"] == attack
+    ].copy()
+
+    if subset.empty:
+        ax.text(
+            0.5,
+            0.5,
+            "No paired data",
+            transform=ax.transAxes,
+            ha="center",
+            va="center",
+        )
+        ax.set_title(attack)
+        return
+
+    marker_by_calculator = {
+        "mace": "o",
+        "uma": "s",
+    }
+    linestyle_by_calculator = {
+        "mace": "-",
+        "uma": "--",
+    }
+
+    for calculator in ["mace", "uma"]:
+        calculator_data = subset[
+            subset["calculator"] == calculator
+        ].sort_values("epsilon")
+
+        for _, item in calculator_data.iterrows():
+            color = cmap(norm(item["epsilon"]))
+
+            arrow = FancyArrowPatch(
+                (item["x_before"], item["y_before"]),
+                (item["x_after"], item["y_after"]),
+                arrowstyle="-|>",
+                mutation_scale=9,
+                linewidth=1.15,
+                linestyle=linestyle_by_calculator[calculator],
+                color=color,
+                alpha=0.72,
+                zorder=2,
+            )
+            ax.add_patch(arrow)
+
+            marker = marker_by_calculator[calculator]
+
+            ax.scatter(
+                item["x_before"],
+                item["y_before"],
+                marker=marker,
+                s=30,
+                facecolor="white",
+                edgecolor=color,
+                linewidth=1.1,
+                zorder=3,
+            )
+            ax.scatter(
+                item["x_after"],
+                item["y_after"],
+                marker=marker,
+                s=30,
+                facecolor=color,
+                edgecolor="white",
+                linewidth=0.55,
+                zorder=4,
+            )
+
+    ax.set_title(attack)
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+    ax.grid(True, alpha=0.32)
+
+    if x_log:
+        apply_positive_log_axis(ax, "x")
+
+    if y_log:
+        apply_positive_log_axis(ax, "y")
+
+
+def draw_standardized_delta_panel(
+    ax,
+    paired,
+    attack,
+):
+    subset = paired[
+        paired["attack_label"] == attack
+    ].copy()
+
+    if subset.empty:
+        ax.text(
+            0.5,
+            0.5,
+            "No paired data",
+            transform=ax.transAxes,
+            ha="center",
+            va="center",
+        )
+        ax.set_title(attack)
+        return
+
+    styles = {
+        "delta_x": ("-", "o", r"$\Delta x / \mathrm{IQR}(x)$"),
+        "delta_y": ("--", "s", r"$\Delta y / \mathrm{IQR}(y)$"),
+    }
+
+    for calculator in ["mace", "uma"]:
+        calculator_data = subset[
+            subset["calculator"] == calculator
+        ].copy()
+
+        if calculator_data.empty:
+            continue
+
+        color = CALCULATOR_COLORS[calculator]
+
+        for value_column, (
+            linestyle,
+            marker,
+            coordinate_label,
+        ) in styles.items():
+            points = []
+
+            for epsilon, group in calculator_data.groupby(
+                "epsilon",
+                sort=True,
+            ):
+                center, lower, upper = (
+                    bootstrap_median_interval(
+                        group[value_column].to_numpy(),
+                        seed=(
+                            20260702
+                            + int(round(float(epsilon) * 100000))
+                            + (0 if calculator == "mace" else 1)
+                            + (0 if value_column == "delta_x" else 2)
+                        ),
+                    )
+                )
+
+                points.append({
+                    "epsilon": float(epsilon),
+                    "center": center,
+                    "lower": lower,
+                    "upper": upper,
+                })
+
+            point_data = pd.DataFrame(points).sort_values(
+                "epsilon"
+            )
+
+            if point_data.empty:
+                continue
+
+            label = (
+                f"{calculator.upper()} {coordinate_label}"
+            )
+
+            ax.plot(
+                point_data["epsilon"],
+                point_data["center"],
+                color=color,
+                linestyle=linestyle,
+                marker=marker,
+                markersize=3.5,
+                linewidth=1.6,
+                label=label,
+                zorder=3,
+            )
+
+            finite_interval = (
+                point_data["lower"].notna()
+                & point_data["upper"].notna()
+            )
+
+            if finite_interval.any():
+                interval = point_data[finite_interval]
+
+                ax.fill_between(
+                    interval["epsilon"],
+                    interval["lower"],
+                    interval["upper"],
+                    color=color,
+                    alpha=0.12,
+                    linewidth=0,
+                    zorder=1,
+                )
+
+    ax.axhline(
+        0.0,
+        color="#555555",
+        linewidth=0.9,
+        linestyle=":",
+        zorder=2,
     )
+    ax.set_xscale("log")
+    ax.set_title(attack)
+    ax.set_xlabel(r"$\epsilon$ ($\AA$)")
+    ax.set_ylabel("Standardized relaxation shift")
+    ax.grid(True, alpha=0.32)
+
+
+def make_paired_relaxation_figure(
+    records,
+    output_dir,
+    figure_name,
+    title,
+    x_label,
+    y_label,
+    x_getters,
+    y_getters,
+    attacks_to_plot=ATTACK_ORDER,
+    x_log=False,
+    y_log=False,
+):
+    paired = paired_relaxation_rows(
+        records,
+        x_getters,
+        y_getters,
+    )
+
+    if paired.empty:
+        return
+
+    x_scale = robust_iqr_scale(
+        np.concatenate([
+            paired["x_before"].to_numpy(),
+            paired["x_after"].to_numpy(),
+        ])
+    )
+    y_scale = robust_iqr_scale(
+        np.concatenate([
+            paired["y_before"].to_numpy(),
+            paired["y_after"].to_numpy(),
+        ])
+    )
+
+    paired["delta_x"] = (
+        paired["x_after"] - paired["x_before"]
+    ) / x_scale
+    paired["delta_y"] = (
+        paired["y_after"] - paired["y_before"]
+    ) / y_scale
+
+    grouped = grouped_relaxation_vectors(paired)
+    cmap, norm = epsilon_color_mapping(
+        grouped["epsilon"]
+    )
+
+    number_of_columns = len(attacks_to_plot)
+    fig, axes = plt.subplots(
+        2,
+        number_of_columns,
+        figsize=(5.1 * number_of_columns, 8.2),
+        squeeze=False,
+    )
+
+    for column, attack in enumerate(attacks_to_plot):
+        draw_relaxation_vector_panel(
+            ax=axes[0, column],
+            grouped=grouped,
+            attack=attack,
+            cmap=cmap,
+            norm=norm,
+            x_label=x_label,
+            y_label=y_label,
+            x_log=x_log,
+            y_log=y_log,
+        )
+
+        draw_standardized_delta_panel(
+            ax=axes[1, column],
+            paired=paired,
+            attack=attack,
+        )
+
+        add_panel_label(
+            axes[0, column],
+            chr(ord("A") + column),
+        )
+        add_panel_label(
+            axes[1, column],
+            chr(ord("A") + number_of_columns + column),
+        )
+
+    legend_handles = [
+        Line2D(
+            [0],
+            [0],
+            color=CALCULATOR_COLORS["mace"],
+            linestyle="-",
+            marker="o",
+            markerfacecolor="white",
+            label="MACE",
+        ),
+        Line2D(
+            [0],
+            [0],
+            color=CALCULATOR_COLORS["uma"],
+            linestyle="--",
+            marker="s",
+            markerfacecolor="white",
+            label="UMA",
+        ),
+        Line2D(
+            [0],
+            [0],
+            color="#333333",
+            marker="o",
+            linestyle="none",
+            markerfacecolor="white",
+            label="Top: immediate",
+        ),
+        Line2D(
+            [0],
+            [0],
+            color="#333333",
+            marker="o",
+            linestyle="none",
+            markerfacecolor="#333333",
+            label="Top: relaxed",
+        ),
+        Line2D(
+            [0],
+            [0],
+            color="#333333",
+            linestyle="-",
+            marker="o",
+            label=r"Bottom: $\Delta x/\mathrm{IQR}(x)$",
+        ),
+        Line2D(
+            [0],
+            [0],
+            color="#333333",
+            linestyle="--",
+            marker="s",
+            label=r"Bottom: $\Delta y/\mathrm{IQR}(y)$",
+        ),
+    ]
+
+    fig.legend(
+        handles=legend_handles,
+        loc="upper center",
+        ncol=3,
+        bbox_to_anchor=(0.5, 0.995),
+        frameon=False,
+    )
+
+    scalar_mappable = plt.cm.ScalarMappable(
+        norm=norm,
+        cmap=cmap,
+    )
+    scalar_mappable.set_array([])
+
+    colorbar_axis = fig.add_axes([
+        0.92,
+        0.55,
+        0.014,
+        0.27,
+    ])
+    colorbar = fig.colorbar(
+        scalar_mappable,
+        cax=colorbar_axis,
+    )
+    colorbar.set_label(r"$\epsilon$ ($\AA$)")
+
+    fig.suptitle(
+        title,
+        y=1.035,
+        fontsize=15,
+    )
+    fig.text(
+        0.5,
+        0.505,
+        "Top: immediate-to-relaxed vectors",
+        ha="center",
+        va="center",
+        fontsize=9,
+        color="#555555",
+    )
+    fig.text(
+        0.5,
+        0.02,
+        (
+            "Bottom: signed paired median changes; "
+            "shading is material-bootstrap 95% CI"
+        ),
+        ha="center",
+        va="bottom",
+        fontsize=9,
+        color="#555555",
+    )
+
+    fig.tight_layout(
+        rect=[0.03, 0.05, 0.90, 0.95]
+    )
+    save_figure(
+        fig,
+        Path(output_dir) / figure_name,
+    )
+    plt.close(fig)
+
+
+def make_parametric_figure_set(
+    records,
+    output_dir,
+    suffix,
+    attacks_to_plot,
+    bubble_label,
+):
+    displacement_getters = displacement_metric_getters()
+    force_getters = delta_force_metric_getters()
+    convergence_getters = [
+        lambda row: scalar_distribution(
+            row,
+            "before_relax_steps",
+        ),
+        lambda row: scalar_distribution(
+            row,
+            "after_relax_steps",
+        ),
+    ]
+
+    convergence_displacement_missing = (
+        make_parametric_state_figure(
+            records=records,
+            output_dir=output_dir,
+            figure_name=(
+                f"figure_7_convergence_vs_displacement_by_{suffix}"
+            ),
+            title=(
+                f"Convergence vs displacement by {bubble_label}"
+            ),
+            x_label=r"Median displacement ($\AA$)",
+            y_label="Relaxation steps",
+            bubble_label=bubble_label,
+            attacks_to_plot=attacks_to_plot,
+            x_getters=displacement_getters,
+            y_getters=convergence_getters,
+        )
+    )
+
+    convergence_force_missing = (
+        make_parametric_state_figure(
+            records=records,
+            output_dir=output_dir,
+            figure_name=(
+                f"figure_8_convergence_vs_delta_force_by_{suffix}"
+            ),
+            title=(
+                f"Convergence vs delta force by {bubble_label}"
+            ),
+            x_label=r"Median $\Delta$ force (eV/$\AA$)",
+            y_label="Relaxation steps",
+            bubble_label=bubble_label,
+            attacks_to_plot=attacks_to_plot,
+            x_getters=force_getters,
+            y_getters=convergence_getters,
+            x_log=True,
+        )
+    )
+
+    force_displacement_missing = (
+        make_parametric_state_figure(
+            records=records,
+            output_dir=output_dir,
+            figure_name=(
+                f"figure_9_delta_force_vs_displacement_by_{suffix}"
+            ),
+            title=(
+                f"Delta force vs displacement by {bubble_label}"
+            ),
+            x_label=r"Median displacement ($\AA$)",
+            y_label=r"Median $\Delta$ force (eV/$\AA$)",
+            bubble_label=bubble_label,
+            attacks_to_plot=attacks_to_plot,
+            x_getters=displacement_getters,
+            y_getters=force_getters,
+            x_log=True,
+            y_log=True,
+        )
+    )
+
+    if suffix == "epsilon":
+        make_paired_relaxation_figure(
+            records=records,
+            output_dir=output_dir,
+            figure_name=(
+                "figure_7_1_convergence_vs_displacement_"
+                "relaxation_by_epsilon"
+            ),
+            title=(
+                "Relaxation change: convergence vs displacement"
+            ),
+            x_label=r"Median displacement ($\AA$)",
+            y_label="Relaxation steps",
+            x_getters=displacement_getters,
+            y_getters=convergence_getters,
+        )
+
+        make_paired_relaxation_figure(
+            records=records,
+            output_dir=output_dir,
+            figure_name=(
+                "figure_8_1_convergence_vs_delta_force_"
+                "relaxation_by_epsilon"
+            ),
+            title=(
+                "Relaxation change: convergence vs delta force"
+            ),
+            x_label=r"Median $\Delta$ force (eV/$\AA$)",
+            y_label="Relaxation steps",
+            x_getters=force_getters,
+            y_getters=convergence_getters,
+            x_log=True,
+        )
+
+        make_paired_relaxation_figure(
+            records=records,
+            output_dir=output_dir,
+            figure_name=(
+                "figure_9_1_delta_force_vs_displacement_"
+                "relaxation_by_epsilon"
+            ),
+            title=(
+                "Relaxation change: delta force vs displacement"
+            ),
+            x_label=r"Median displacement ($\AA$)",
+            y_label=r"Median $\Delta$ force (eV/$\AA$)",
+            x_getters=displacement_getters,
+            y_getters=force_getters,
+            x_log=True,
+            y_log=True,
+        )
 
     return (
         convergence_displacement_missing
@@ -3678,6 +4300,49 @@ def make_delta_force_angle_figure_set(epsilon_records, n_step_records, output_di
         y_getters=angle_getters,
     ))
 
+    convergence_getters = [
+        lambda row: scalar_distribution(
+            row,
+            "before_relax_steps",
+        ),
+        lambda row: scalar_distribution(
+            row,
+            "after_relax_steps",
+        ),
+    ]
+
+    make_paired_relaxation_figure(
+        records=epsilon_records,
+        output_dir=output_dir,
+        figure_name=(
+            "figure_8_1_convergence_vs_delta_force_angle_"
+            "relaxation_by_epsilon"
+        ),
+        title=(
+            "Relaxation change: convergence vs force-vector angle"
+        ),
+        x_label="Median force-vector angle (deg)",
+        y_label="Relaxation steps",
+        x_getters=angle_getters,
+        y_getters=convergence_getters,
+    )
+
+    make_paired_relaxation_figure(
+        records=epsilon_records,
+        output_dir=output_dir,
+        figure_name=(
+            "figure_9_1_delta_force_angle_vs_displacement_"
+            "relaxation_by_epsilon"
+        ),
+        title=(
+            "Relaxation change: force-vector angle vs displacement"
+        ),
+        x_label=r"Median displacement ($\AA$)",
+        y_label="Median force-vector angle (deg)",
+        x_getters=displacement_getters,
+        y_getters=angle_getters,
+    )
+
     return missing
 
 
@@ -4055,6 +4720,17 @@ def make_topology_metric_figure_set(
             epsilon=0.1,
         )
 
+        convergence_getters = [
+            lambda row: scalar_distribution(
+                row,
+                "before_relax_steps",
+            ),
+            lambda row: scalar_distribution(
+                row,
+                "after_relax_steps",
+            ),
+        ]
+
         for suffix, records, attacks, bubble_label in [
             (
                 "epsilon",
@@ -4083,16 +4759,7 @@ def make_topology_metric_figure_set(
                 bubble_label=bubble_label,
                 attacks_to_plot=attacks,
                 x_getters=metric_getters,
-                y_getters=[
-                    lambda row: scalar_distribution(
-                        row,
-                        "after_relax_steps",
-                    ),
-                    lambda row: scalar_distribution(
-                        row,
-                        "after_relax_steps",
-                    ),
-                ],
+                y_getters=convergence_getters,
             )
 
             make_parametric_state_figure(
@@ -4128,6 +4795,56 @@ def make_topology_metric_figure_set(
                 x_getters=delta_force_getters,
                 y_getters=metric_getters,
             )
+
+            if suffix == "epsilon":
+                make_paired_relaxation_figure(
+                    records=records,
+                    output_dir=output_dir,
+                    figure_name=(
+                        f"convergence_vs_{column}_"
+                        "relaxation_by_epsilon"
+                    ),
+                    title=(
+                        f"Relaxation change: convergence vs {label}"
+                    ),
+                    x_label=f"Median {label}",
+                    y_label="Relaxation steps",
+                    x_getters=metric_getters,
+                    y_getters=convergence_getters,
+                )
+
+                make_paired_relaxation_figure(
+                    records=records,
+                    output_dir=output_dir,
+                    figure_name=(
+                        f"{column}_vs_displacement_"
+                        "relaxation_by_epsilon"
+                    ),
+                    title=(
+                        f"Relaxation change: {label} vs displacement"
+                    ),
+                    x_label=r"Median displacement ($\AA$)",
+                    y_label=f"Median {label}",
+                    x_getters=displacement_getters,
+                    y_getters=metric_getters,
+                )
+
+                make_paired_relaxation_figure(
+                    records=records,
+                    output_dir=output_dir,
+                    figure_name=(
+                        f"{column}_vs_delta_force_"
+                        "relaxation_by_epsilon"
+                    ),
+                    title=(
+                        f"Relaxation change: {label} vs delta force"
+                    ),
+                    x_label=r"Median $\Delta$ force (eV/$\AA$)",
+                    y_label=f"Median {label}",
+                    x_getters=delta_force_getters,
+                    y_getters=metric_getters,
+                    x_log=True,
+                )
 
 
 def make_topology_lattice_axis_component_figures(
