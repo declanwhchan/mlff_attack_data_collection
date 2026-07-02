@@ -1183,6 +1183,52 @@ def _tight_limit(values, pad=0.14, lower_percentile=5, upper_percentile=95):
 
 
 def tighten_axes_for_publication(fig):
+    def safe_limits(ax, axis_name):
+        values = _artist_values_for_axis(ax, axis_name)
+        values = clean_numeric_array(values)
+
+        if len(values) == 0:
+            return None
+
+        scale = (
+            ax.get_xscale()
+            if axis_name == "x"
+            else ax.get_yscale()
+        )
+
+        if scale == "log":
+            values = values[values > 0]
+
+            if len(values) == 0:
+                return None
+
+        limits = _tight_limit(values)
+
+        if limits is None:
+            return None
+
+        low, high = limits
+
+        if scale == "log":
+            smallest_positive = float(np.min(values))
+
+            if not np.isfinite(low) or low <= 0:
+                low = smallest_positive * 0.8
+
+            if not np.isfinite(high) or high <= low:
+                high = max(
+                    float(np.max(values)) * 1.2,
+                    low * 1.2,
+                )
+
+        if not np.isfinite(low) or not np.isfinite(high):
+            return None
+
+        if high <= low:
+            return None
+
+        return low, high
+
     for ax in fig.axes:
         if not ax.has_data():
             continue
@@ -1193,13 +1239,16 @@ def tighten_axes_for_publication(fig):
         ):
             continue
 
-        y_limits = _tight_limit(_artist_values_for_axis(ax, "y"))
+        y_limits = safe_limits(ax, "y")
+
         if y_limits is not None:
             ax.set_ylim(*y_limits)
 
         xlabel = ax.get_xlabel().lower()
+
         if "displacement" in xlabel or "rdf" in xlabel:
-            x_limits = _tight_limit(_artist_values_for_axis(ax, "x"))
+            x_limits = safe_limits(ax, "x")
+
             if x_limits is not None:
                 ax.set_xlim(*x_limits)
 
@@ -2117,8 +2166,13 @@ def make_paired_relaxation_figure(
         color="#555555",
     )
 
-    fig.tight_layout(
-        rect=[0.03, 0.05, 0.90, 0.95]
+    fig.subplots_adjust(
+        left=0.07,
+        right=0.89,
+        bottom=0.08,
+        top=0.88,
+        wspace=0.28,
+        hspace=0.38,
     )
     save_figure(
         fig,

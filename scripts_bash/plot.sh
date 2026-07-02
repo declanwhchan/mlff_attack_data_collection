@@ -54,6 +54,7 @@ python -u - <<PY
 from pathlib import Path
 import os
 import sys
+import time
 
 import numpy as np
 import pandas as pd
@@ -71,14 +72,32 @@ from run_tests import (
 summary_dir = Path("$SCRATCH_TRIAL_DIR") / "array_summaries"
 
 
+def path_exists(path, attempts=3, delay=2.0):
+    path = Path(path)
+
+    for attempt in range(1, attempts + 1):
+        try:
+            return path.exists()
+        except OSError as error:
+            print(
+                f"Filesystem check failed "
+                f"({attempt}/{attempts}) for {path}: {error}"
+            )
+
+            if attempt < attempts:
+                time.sleep(delay)
+
+    return False
+
+
 def usable_path(value, fallback):
     if value is not None and not pd.isna(value):
-        path = Path(str(value))
+        candidate = Path(str(value))
 
-        if path.exists():
-            return path
+        if path_exists(candidate):
+            return candidate
 
-    return fallback
+    return Path(fallback)
 
 
 def topology_values(before_atoms, after_atoms):
@@ -174,11 +193,15 @@ for summary_path in sorted(summary_dir.glob("*_summary.csv")):
         )
 
         try:
-            if not before_path.exists():
-                raise FileNotFoundError(before_path)
+            if not path_exists(before_path):
+                raise FileNotFoundError(
+                    f"Baseline structure is inaccessible: {before_path}"
+                )
 
-            if not perturbed_path.exists():
-                raise FileNotFoundError(perturbed_path)
+            if not path_exists(perturbed_path):
+                raise FileNotFoundError(
+                    f"Perturbed structure is inaccessible: {perturbed_path}"
+                )
 
             before_atoms = read(before_path, index=-1)
             perturbed_atoms = read(perturbed_path)
@@ -211,8 +234,10 @@ for summary_path in sorted(summary_dir.glob("*_summary.csv")):
             ).strip()
 
             if final_method != RDF_METHOD:
-                if not final_path.exists():
-                    raise FileNotFoundError(final_path)
+                if not path_exists(final_path):
+                    raise FileNotFoundError(
+                        f"Final structure is inaccessible: {final_path}"
+                    )
 
                 final_atoms = read(final_path)
 
