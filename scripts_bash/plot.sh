@@ -49,17 +49,24 @@ fi
 
 source ~/project/.venv-mace/bin/activate
 
-# Backfill standard ASE RDF values without rerunning attacks or relaxation.
+# Backfill immediate-attack topology metrics without rerunning calculations.
 python -u - <<PY
 from pathlib import Path
 import os
 import sys
 
+import numpy as np
 import pandas as pd
 from ase.io import read
 
 sys.path.insert(0, str(Path("$PROJECT_OUTPUT_ROOT") / "scripts_python"))
-from run_tests import RDF_METHOD, rdf_l1_distance
+
+from run_tests import (
+    RDF_METHOD,
+    coordination_by_atom,
+    neighbor_edge_set,
+    rdf_l1_distance,
+)
 
 summary_dir = Path("$SCRATCH_TRIAL_DIR") / "array_summaries"
 
@@ -67,9 +74,69 @@ summary_dir = Path("$SCRATCH_TRIAL_DIR") / "array_summaries"
 def usable_path(value, fallback):
     if value is not None and not pd.isna(value):
         path = Path(str(value))
+
         if path.exists():
             return path
+
     return fallback
+
+
+def topology_values(before_atoms, after_atoms):
+    before_edges = neighbor_edge_set(before_atoms)
+    after_edges = neighbor_edge_set(after_atoms)
+
+    added_edges = after_edges - before_edges
+    removed_edges = before_edges - after_edges
+    union_edges = before_edges | after_edges
+
+    if union_edges:
+        jaccard_distance = 1.0 - (
+            len(before_edges & after_edges) / len(union_edges)
+        )
+    else:
+        jaccard_distance = 0.0
+
+    before_coordination = coordination_by_atom(
+        before_edges,
+        before_atoms,
+    )
+    after_coordination = coordination_by_atom(
+        after_edges,
+        after_atoms,
+    )
+
+    atom_keys = sorted(
+        set(before_coordination) | set(after_coordination)
+    )
+
+    coordination_changes = [
+        abs(
+            after_coordination.get(atom, 0)
+            - before_coordination.get(atom, 0)
+        )
+        for atom in atom_keys
+    ]
+
+    return {
+        "neighbor_edges_before": len(before_edges),
+        "neighbor_edges_after": len(after_edges),
+        "neighbor_edges_added": len(added_edges),
+        "neighbor_edges_removed": len(removed_edges),
+        "neighbor_edge_change_count": (
+            len(added_edges) + len(removed_edges)
+        ),
+        "neighbor_jaccard_distance": float(jaccard_distance),
+        "coordination_change_mean": (
+            float(np.mean(coordination_changes))
+            if coordination_changes
+            else 0.0
+        ),
+        "coordination_change_max": (
+            float(np.max(coordination_changes))
+            if coordination_changes
+            else 0.0
+        ),
+    }
 
 
 for summary_path in sorted(summary_dir.glob("*_summary.csv")):
@@ -85,18 +152,8 @@ for summary_path in sorted(summary_dir.glob("*_summary.csv")):
         if str(row.get("status", "")).strip().lower() != "success":
             continue
 
-        final_current = str(row.get("rdf_method", "")).strip()
-        perturbed_current = str(
-            row.get("perturbed_rdf_method", "")
-        ).strip()
-
-        need_final = final_current != RDF_METHOD
-        need_perturbed = perturbed_current != RDF_METHOD
-
-        if not need_final and not need_perturbed:
-            continue
-
         run_dir_value = row.get("actual_output_dir")
+
         if run_dir_value is None or pd.isna(run_dir_value):
             print(f"Missing output directory for {row.get('run_id')}")
             continue
@@ -116,43 +173,63 @@ for summary_path in sorted(summary_dir.glob("*_summary.csv")):
             run_dir / "final_relaxed.cif",
         )
 
-        if not before_path.exists():
-            print(f"Missing baseline structure for {row.get('run_id')}")
-            continue
-
         try:
+            if not before_path.exists():
+                raise FileNotFoundError(before_path)
+
+            if not perturbed_path.exists():
+                raise FileNotFoundError(perturbed_path)
+
             before_atoms = read(before_path, index=-1)
+            perturbed_atoms = read(perturbed_path)
 
-            if need_perturbed:
-                if not perturbed_path.exists():
-                    raise FileNotFoundError(perturbed_path)
+            immediate = topology_values(
+                before_atoms,
+                perturbed_atoms,
+            )
 
-                perturbed_atoms = read(perturbed_path)
+            for column, value in immediate.items():
                 summary.loc[
                     index,
-                    "perturbed_rdf_l1_distance",
-                ] = rdf_l1_distance(before_atoms, perturbed_atoms)
-                summary.loc[
-                    index,
-                    "perturbed_rdf_method",
-                ] = RDF_METHOD
-                changed = True
+                    f"perturbed_{column}",
+                ] = value
 
-            if need_final:
+            summary.loc[
+                index,
+                "perturbed_rdf_l1_distance",
+            ] = rdf_l1_distance(
+                before_atoms,
+                perturbed_atoms,
+            )
+            summary.loc[
+                index,
+                "perturbed_rdf_method",
+            ] = RDF_METHOD
+
+            final_method = str(
+                row.get("rdf_method", "")
+            ).strip()
+
+            if final_method != RDF_METHOD:
                 if not final_path.exists():
                     raise FileNotFoundError(final_path)
 
                 final_atoms = read(final_path)
+
                 summary.loc[
                     index,
                     "rdf_l1_distance",
-                ] = rdf_l1_distance(before_atoms, final_atoms)
+                ] = rdf_l1_distance(
+                    before_atoms,
+                    final_atoms,
+                )
                 summary.loc[index, "rdf_method"] = RDF_METHOD
-                changed = True
+
+            changed = True
 
         except Exception as error:
             print(
-                f"Could not backfill RDF for "
+                f"Could not backfill topology for "
                 f"{row.get('run_id')}: {error}"
             )
 
@@ -160,7 +237,7 @@ for summary_path in sorted(summary_dir.glob("*_summary.csv")):
         temporary_summary = summary_path.with_suffix(".csv.tmp")
         summary.to_csv(temporary_summary, index=False)
         os.replace(temporary_summary, summary_path)
-        print(f"Updated ASE RDF values: {summary_path}")
+        print(f"Updated topology metrics: {summary_path}")
 PY
 
 python -u - <<PY
