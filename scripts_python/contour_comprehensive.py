@@ -89,22 +89,6 @@ def style_numeric_axis(ax, xbins=5, ybins=5):
     ax.tick_params(axis="both", labelsize=8, pad=2)
 
 
-def sparse_numeric_ticks(values, max_ticks=6):
-    values = np.asarray(values, dtype=float)
-    values = values[np.isfinite(values) & (values > 0)]
-
-    if len(values) == 0:
-        return []
-
-    values = sorted(set(float(value) for value in values))
-
-    if len(values) <= max_ticks:
-        return values
-
-    indices = np.linspace(0, len(values) - 1, max_ticks, dtype=int)
-    return [values[index] for index in indices]
-
-
 def positive_finite_values(values):
     values = np.asarray(values, dtype=float)
     return values[np.isfinite(values) & (values > 0)]
@@ -238,16 +222,6 @@ def tight_axis_limits(values, pad=0.14):
         low = 0.0 if np.nanmin(values) < 0.08 * span else max(0.0, low)
 
     return low, high
-
-
-def tighten_contour_axes(fig):
-    for ax in fig.axes:
-        if not ax.has_data():
-            continue
-
-        limits = tight_axis_limits(clean_axis_values(ax, "y"))
-        if limits is not None:
-            ax.set_ylim(*limits)
 
 
 def read_csv(path):
@@ -888,16 +862,6 @@ def make_contour_displacement_plots(
             output_path=output_dir / filename,
             title=title,
         )
-
-
-def contour_stats(rows, metric):
-    values = contour_metric_values(rows, metric)
-    if values.size == 0:
-        return None
-    return {
-        "p05": float(np.percentile(values, 5)),
-        "p95": float(np.percentile(values, 95)),
-    }
 
 
 def contour_frame_stats(frame_data, metric):

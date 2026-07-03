@@ -6,9 +6,8 @@ import math
 import re
 
 import matplotlib.pyplot as plt
-from matplotlib.colors import LogNorm, Normalize
 from matplotlib.lines import Line2D
-from matplotlib.patches import Ellipse, FancyArrowPatch
+from matplotlib.patches import Ellipse
 from matplotlib.ticker import MaxNLocator, ScalarFormatter, FuncFormatter, FixedLocator, NullLocator
 import numpy as np
 import pandas as pd
@@ -229,17 +228,6 @@ def sparse_tick_indices(count, max_labels=6):
     return set(np.linspace(0, count - 1, max_labels, dtype=int).tolist())
 
 
-def style_epsilon_tick_labels(ax, rotate=False, max_labels=6):
-    labels = ax.get_xticklabels()
-    keep = sparse_tick_indices(len(labels), max_labels=max_labels)
-
-    for index, label in enumerate(labels):
-        label.set_visible(index in keep)
-        label.set_horizontalalignment("center")
-
-    ax.tick_params(axis="x", labelrotation=0, pad=2)
-
-
 def read_csv(path):
     path = Path(path)
     if not path.exists():
@@ -266,28 +254,6 @@ def as_float(value):
     if value is None:
         return None
     return float(value)
-
-
-def epsilon_reference_length_from_summary_row(row):
-    input_path = clean_value(row.get("input_path"))
-    if input_path is None:
-        return np.nan, "Missing input_path"
-
-    path = Path(str(input_path))
-    if not path.is_absolute():
-        path = BASE_DIR / path
-
-    try:
-        atoms = read_structure(path)
-        lengths = np.asarray(atoms.cell.lengths(), dtype=float)
-    except Exception as exc:
-        return np.nan, f"Could not read structure with ASE: {exc}"
-
-    lengths = lengths[np.isfinite(lengths) & (lengths > 0)]
-    if len(lengths) == 0:
-        return np.nan, "No positive lattice lengths"
-
-    return float(np.min(lengths)), None
 
 
 def epsilon_lattice_lengths_from_summary_row(row):
@@ -341,10 +307,6 @@ def percent_displacement_from_epsilon(epsilon, reference_length_a):
     if epsilon is None or reference_length_a is None or reference_length_a <= 0:
         return np.nan
     return 100.0 * epsilon / reference_length_a
-
-
-def percent_figure_name(figure_name):
-    return f"{figure_name}{EPSILON_PERCENT_SUFFIX}"
 
 
 def epsilon_percent_axis_specs(records):
@@ -1048,19 +1010,6 @@ def style_relaxation_steps_axis(ax, log_scale=False, tight_linear=False):
     ax.tick_params(axis="y", labelsize=8, pad=2)
 
 
-def apply_displacement_symlog_axis(ax, linthresh=0.05):
-    xlabel = ax.get_xlabel().lower()
-    if "displacement" not in xlabel:
-        return
-
-    ax.set_xscale("symlog", linthresh=linthresh)
-
-    ticks = [0, 0.01, 0.1, 1, 10]
-    ax.set_xticks(ticks)
-    ax.set_xticklabels(["0", "0.01", "0.1", "1", "10"])
-    ax.tick_params(axis="x", labelrotation=0, pad=2)
-
-
 def apply_positive_log_axis(ax, axis_name):
     values = positive_finite_values(_artist_values_for_axis(ax, axis_name))
     if len(values) == 0:
@@ -1661,88 +1610,6 @@ def paired_relaxation_rows(
     return pd.DataFrame(rows, columns=columns)
 
 
-def robust_iqr_scale(values):
-    values = clean_numeric_array(values)
-
-    if len(values) == 0:
-        return 1.0
-
-    q1, q3 = np.percentile(values, [25, 75])
-    scale = float(q3 - q1)
-
-    if np.isfinite(scale) and scale > 1e-12:
-        return scale
-
-    low, high = np.percentile(values, [5, 95])
-    scale = float(high - low)
-
-    if np.isfinite(scale) and scale > 1e-12:
-        return scale
-
-    scale = float(np.std(values))
-
-    if np.isfinite(scale) and scale > 1e-12:
-        return scale
-
-    return 1.0
-
-
-def bootstrap_median_interval(
-    values,
-    iterations=2000,
-    seed=20260702,
-):
-    values = clean_numeric_array(values)
-
-    if len(values) == 0:
-        return np.nan, np.nan, np.nan
-
-    center = float(np.median(values))
-
-    if len(values) < 2:
-        return center, np.nan, np.nan
-
-    rng = np.random.default_rng(seed)
-    sample_indices = rng.integers(
-        0,
-        len(values),
-        size=(iterations, len(values)),
-    )
-    samples = values[sample_indices]
-    medians = np.median(samples, axis=1)
-
-    lower, upper = np.percentile(
-        medians,
-        [2.5, 97.5],
-    )
-
-    return center, float(lower), float(upper)
-
-
-def epsilon_color_mapping(values):
-    values = clean_numeric_array(values)
-    values = values[values > 0]
-
-    if len(values) == 0:
-        return plt.get_cmap("viridis"), Normalize(0.0, 1.0)
-
-    minimum = float(np.min(values))
-    maximum = float(np.max(values))
-
-    if np.isclose(minimum, maximum):
-        norm = Normalize(
-            vmin=minimum * 0.9,
-            vmax=maximum * 1.1,
-        )
-    else:
-        norm = LogNorm(
-            vmin=minimum,
-            vmax=maximum,
-        )
-
-    return plt.get_cmap("viridis"), norm
-
-
 def grouped_relaxation_vectors(data):
     return (
         data.groupby(
@@ -1760,219 +1627,6 @@ def grouped_relaxation_vectors(data):
             "y_after": "median",
         })
     )
-
-
-def draw_relaxation_vector_panel(
-    ax,
-    grouped,
-    attack,
-    cmap,
-    norm,
-    x_label,
-    y_label,
-    x_log=False,
-    y_log=False,
-):
-    subset = grouped[
-        grouped["attack_label"] == attack
-    ].copy()
-
-    if subset.empty:
-        ax.text(
-            0.5,
-            0.5,
-            "No paired data",
-            transform=ax.transAxes,
-            ha="center",
-            va="center",
-        )
-        ax.set_title(attack)
-        return
-
-    marker_by_calculator = {
-        "mace": "o",
-        "uma": "s",
-    }
-    linestyle_by_calculator = {
-        "mace": "-",
-        "uma": "--",
-    }
-
-    for calculator in ["mace", "uma"]:
-        calculator_data = subset[
-            subset["calculator"] == calculator
-        ].sort_values("epsilon")
-
-        for _, item in calculator_data.iterrows():
-            color = cmap(norm(item["epsilon"]))
-
-            arrow = FancyArrowPatch(
-                (item["x_before"], item["y_before"]),
-                (item["x_after"], item["y_after"]),
-                arrowstyle="-|>",
-                mutation_scale=9,
-                linewidth=1.15,
-                linestyle=linestyle_by_calculator[calculator],
-                color=color,
-                alpha=0.72,
-                zorder=2,
-            )
-            ax.add_patch(arrow)
-
-            marker = marker_by_calculator[calculator]
-
-            ax.scatter(
-                item["x_before"],
-                item["y_before"],
-                marker=marker,
-                s=30,
-                facecolor="white",
-                edgecolor=color,
-                linewidth=1.1,
-                zorder=3,
-            )
-            ax.scatter(
-                item["x_after"],
-                item["y_after"],
-                marker=marker,
-                s=30,
-                facecolor=color,
-                edgecolor="white",
-                linewidth=0.55,
-                zorder=4,
-            )
-
-    ax.set_title(attack)
-    ax.set_xlabel(x_label)
-    ax.set_ylabel(y_label)
-    ax.grid(True, alpha=0.32)
-
-    if x_log:
-        apply_positive_log_axis(ax, "x")
-
-    if y_log:
-        apply_positive_log_axis(ax, "y")
-
-
-def draw_standardized_delta_panel(
-    ax,
-    paired,
-    attack,
-):
-    subset = paired[
-        paired["attack_label"] == attack
-    ].copy()
-
-    if subset.empty:
-        ax.text(
-            0.5,
-            0.5,
-            "No paired data",
-            transform=ax.transAxes,
-            ha="center",
-            va="center",
-        )
-        ax.set_title(attack)
-        return
-
-    styles = {
-        "delta_x": ("-", "o", r"$\Delta x / \mathrm{IQR}(x)$"),
-        "delta_y": ("--", "s", r"$\Delta y / \mathrm{IQR}(y)$"),
-    }
-
-    for calculator in ["mace", "uma"]:
-        calculator_data = subset[
-            subset["calculator"] == calculator
-        ].copy()
-
-        if calculator_data.empty:
-            continue
-
-        color = CALCULATOR_COLORS[calculator]
-
-        for value_column, (
-            linestyle,
-            marker,
-            coordinate_label,
-        ) in styles.items():
-            points = []
-
-            for epsilon, group in calculator_data.groupby(
-                "epsilon",
-                sort=True,
-            ):
-                center, lower, upper = (
-                    bootstrap_median_interval(
-                        group[value_column].to_numpy(),
-                        seed=(
-                            20260702
-                            + int(round(float(epsilon) * 100000))
-                            + (0 if calculator == "mace" else 1)
-                            + (0 if value_column == "delta_x" else 2)
-                        ),
-                    )
-                )
-
-                points.append({
-                    "epsilon": float(epsilon),
-                    "center": center,
-                    "lower": lower,
-                    "upper": upper,
-                })
-
-            point_data = pd.DataFrame(points).sort_values(
-                "epsilon"
-            )
-
-            if point_data.empty:
-                continue
-
-            label = (
-                f"{calculator.upper()} {coordinate_label}"
-            )
-
-            ax.plot(
-                point_data["epsilon"],
-                point_data["center"],
-                color=color,
-                linestyle=linestyle,
-                marker=marker,
-                markersize=3.5,
-                linewidth=1.6,
-                label=label,
-                zorder=3,
-            )
-
-            finite_interval = (
-                point_data["lower"].notna()
-                & point_data["upper"].notna()
-            )
-
-            if finite_interval.any():
-                interval = point_data[finite_interval]
-
-                ax.fill_between(
-                    interval["epsilon"],
-                    interval["lower"],
-                    interval["upper"],
-                    color=color,
-                    alpha=0.12,
-                    linewidth=0,
-                    zorder=1,
-                )
-
-    ax.axhline(
-        0.0,
-        color="#555555",
-        linewidth=0.9,
-        linestyle=":",
-        zorder=2,
-    )
-    ax.set_xscale("log")
-    ax.set_title(attack)
-    ax.set_xlabel(r"$\epsilon$ ($\AA$)")
-    ax.set_ylabel("Standardized relaxation shift")
-    ax.grid(True, alpha=0.32)
 
 
 def make_paired_relaxation_figure(
@@ -3586,50 +3240,6 @@ def normalized_topology_data(records):
     return data
 
 
-def topology_discovery_data(records):
-    data = normalized_topology_data(records)
-    required = [
-        "material_slug",
-        "calculator",
-        "attack_label",
-        "neighbor_jaccard_distance",
-        "rdf_l1_distance",
-        "coordination_change_max",
-        "jaccard_norm",
-        "rdf_norm",
-        "coord_norm",
-        "topology_score",
-        "epsilon",
-        "n_steps",
-    ]
-
-    available = [column for column in required if column in data.columns]
-    data = data[available].replace([np.inf, -np.inf], np.nan)
-
-    metric_cols = [
-        "neighbor_jaccard_distance",
-        "rdf_l1_distance",
-        "coordination_change_max",
-        "jaccard_norm",
-        "rdf_norm",
-        "coord_norm",
-        "topology_score",
-    ]
-
-    for column in metric_cols + ["epsilon", "n_steps"]:
-        if column in data.columns:
-            data[column] = pd.to_numeric(data[column], errors="coerce")
-
-    return data.dropna(subset=[
-        "material_slug",
-        "calculator",
-        "attack_label",
-        "neighbor_jaccard_distance",
-        "rdf_l1_distance",
-        "coordination_change_max",
-    ]).copy()
-
-
 def topology_metric_axes(ax, xlabel=None, ylabel=None, title=None):
     if xlabel:
         ax.set_xlabel(xlabel)
@@ -3643,69 +3253,6 @@ def topology_metric_axes(ax, xlabel=None, ylabel=None, title=None):
 def finite_metric_data(data, columns):
     clean = data.replace([np.inf, -np.inf], np.nan).dropna(subset=columns)
     return clean.copy()
-
-
-def topology_scatter(ax, data, x_col, y_col, xlabel, ylabel, title):
-    plotted = False
-
-    for calculator, color in CALCULATOR_COLORS.items():
-        subset = data[data["calculator"] == calculator].copy()
-        subset = subset[[x_col, y_col, "attack_label"]].replace([np.inf, -np.inf], np.nan).dropna()
-        if subset.empty:
-            continue
-
-        ax.scatter(
-            subset[x_col],
-            subset[y_col],
-            s=18,
-            alpha=0.28,
-            color=color,
-            edgecolor="none",
-            label=f"{calculator.upper()} runs",
-        )
-        plotted = True
-
-        if len(subset) >= 6 and subset[x_col].nunique() >= 3:
-            ordered = subset.sort_values(x_col)
-            bins = min(8, max(3, int(np.sqrt(len(ordered)))))
-            ordered["_bin"] = pd.qcut(ordered[x_col], q=bins, duplicates="drop")
-            trend = ordered.groupby("_bin", observed=True).agg(
-                x=(x_col, "median"),
-                y=(y_col, "median"),
-            ).dropna()
-
-            if len(trend) >= 2:
-                ax.plot(
-                    trend["x"],
-                    trend["y"],
-                    color=color,
-                    linewidth=2.0,
-                    marker="o",
-                    markersize=4,
-                    label=f"{calculator.upper()} median trend",
-                )
-
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel(ylabel)
-    ax.set_title(title)
-    ax.grid(True, alpha=0.28)
-
-    y_values = _artist_values_for_axis(ax, "y")
-    if len(y_values) and np.nanmax(np.abs(y_values)) <= 1e-12:
-        ax.set_ylim(-0.0005, 0.0005)
-        ax.text(
-            0.5,
-            0.88,
-            "No measurable topology change in this subset",
-            transform=ax.transAxes,
-            ha="center",
-            va="center",
-            fontsize=8,
-            color="#555555",
-        )
-
-    if not plotted:
-        ax.text(0.5, 0.5, "No topology data", transform=ax.transAxes, ha="center", va="center")
 
 
 def make_topology_by_attack_type(records, output_dir):
@@ -3851,43 +3398,6 @@ def vector_component_values(run_dir, before_name, after_name, columns, component
         values = np.abs(values)
 
     return values, None
-
-
-def displacement_component_values(row, before_name, after_name, component, absolute=False):
-    reference = as_float(row.get("epsilon_reference_length_a"))
-    if reference is None or reference <= 0:
-        return None, "Missing positive epsilon_reference_length_a"
-
-    return vector_component_values(
-        row["run_dir"],
-        before_name,
-        after_name,
-        ["x", "y", "z"],
-        component,
-        scale=100.0 / reference,
-        absolute=absolute,
-    )
-
-
-def force_component_values(run_dir, before_name, after_name, component, absolute=False):
-    force_component = {
-        "x": "fx",
-        "y": "fy",
-        "z": "fz",
-    }.get(component)
-
-    if force_component is None:
-        return None, f"Unknown force component: {component}"
-
-    return vector_component_values(
-        run_dir,
-        before_name,
-        after_name,
-        ["fx", "fy", "fz"],
-        force_component,
-        scale=1.0,
-        absolute=absolute,
-    )
 
 
 def force_angle_values(run_dir, before_name, after_name):
@@ -4101,27 +3611,6 @@ def topology_scalar_values(row, column):
     return np.array([value], dtype=float), None
 
 
-def delta_force_rows():
-    return [
-        (
-            "After attack, before relaxation",
-            lambda: (lambda row: force_delta_values(
-                row["run_dir"],
-                "before_forces.csv",
-                "perturbed_forces.csv",
-            )),
-        ),
-        (
-            "After attack, after relaxation",
-            lambda: (lambda row: force_delta_values(
-                row["run_dir"],
-                "before_forces.csv",
-                "after_forces.csv",
-            )),
-        ),
-    ]
-
-
 def force_angle_rows():
     return [
         (
@@ -4160,19 +3649,6 @@ def displacement_rows():
                 "before_forces.csv",
                 "after_forces.csv",
             )),
-        ),
-    ]
-
-
-def topology_metric_rows(column):
-    return [
-        (
-            "Topology change",
-            lambda col=column: (lambda row: topology_scalar_values(row, col)),
-        ),
-        (
-            "Topology change",
-            lambda col=column: (lambda row: topology_scalar_values(row, col)),
         ),
     ]
 
@@ -4411,299 +3887,6 @@ def make_delta_force_angle_figure_set(epsilon_records, n_step_records, output_di
     )
 
     return missing
-
-
-def make_single_row_distribution_figure(records, output_dir, figure_name, ylabel, row, attacks_to_plot, axis_specs=None):
-    all_missing = []
-
-    if axis_specs is None:
-        axis_specs = epsilon_axis_specs(records, figure_name)
-
-    row_title, getter_factory = row
-
-    for axis_mode, x_col, output_figure_name in axis_specs:
-        fig, axes = plt.subplots(1, len(attacks_to_plot), figsize=(2.8 * len(attacks_to_plot), 2.8), sharex=False, sharey=False)
-        axes = np.atleast_1d(axes)
-
-        for col_index, attack in enumerate(attacks_to_plot):
-            ax = axes[col_index]
-            attack_missing = []
-
-            draw_grouped_boxplot(
-                ax=ax,
-                records=records,
-                attack=attack,
-                value_getter=getter_factory(),
-                ylabel=ylabel,
-                missing_rows=attack_missing,
-                x_col=x_col,
-                axis_mode=axis_mode,
-            )
-
-            for missing in attack_missing:
-                missing["figure"] = output_figure_name
-                missing["panel"] = f"{row_title} / {attack}"
-            all_missing.extend(attack_missing)
-
-            ax.set_title(attack)
-            add_panel_label(ax, chr(ord("A") + col_index))
-
-        apply_shared_figure_header(fig, subtitle=row_title, left=0.04)
-        save_figure(fig, output_dir / output_figure_name)
-        plt.close(fig)
-
-    return all_missing
-
-
-def make_single_row_ci_figure(records, output_dir, figure_name, ylabel, row, attacks_to_plot, axis_specs=None):
-    all_missing = []
-
-    if axis_specs is None:
-        axis_specs = epsilon_axis_specs(records, figure_name)
-
-    row_title, getter_factory = row
-
-    for axis_mode, x_col, output_figure_name in axis_specs:
-        fig, axes = plt.subplots(1, len(attacks_to_plot), figsize=(2.8 * len(attacks_to_plot), 2.8), sharex=False, sharey=False)
-        axes = np.atleast_1d(axes)
-
-        for col_index, attack in enumerate(attacks_to_plot):
-            ax = axes[col_index]
-            attack_missing = []
-
-            draw_grouped_ci(
-                ax=ax,
-                records=records,
-                attack=attack,
-                value_getter=getter_factory(),
-                ylabel=ylabel,
-                missing_rows=attack_missing,
-                x_col=x_col,
-                axis_mode=axis_mode,
-            )
-
-            for missing in attack_missing:
-                missing["figure"] = output_figure_name
-                missing["panel"] = f"{row_title} / {attack}"
-            all_missing.extend(attack_missing)
-
-            ax.set_title(attack)
-            add_panel_label(ax, chr(ord("A") + col_index))
-
-        apply_shared_figure_header(fig, subtitle=f"{row_title}; line = median, shaded band = 95% CI", left=0.04)
-        save_figure(fig, output_dir / output_figure_name)
-        plt.close(fig)
-
-    return all_missing
-
-
-def make_single_row_whisker_span_figure(records, output_dir, figure_name, ylabel, row, attacks_to_plot, axis_specs=None):
-    all_missing = []
-
-    if axis_specs is None:
-        axis_specs = epsilon_axis_specs(records, figure_name)
-
-    row_title, getter_factory = row
-
-    for axis_mode, x_col, output_figure_name in axis_specs:
-        fig, axes = plt.subplots(1, len(attacks_to_plot), figsize=(2.8 * len(attacks_to_plot), 2.8), sharex=False, sharey=False)
-        axes = np.atleast_1d(axes)
-
-        for col_index, attack in enumerate(attacks_to_plot):
-            ax = axes[col_index]
-            attack_missing = []
-
-            draw_whisker_span(
-                ax=ax,
-                records=records,
-                attack=attack,
-                value_getter=getter_factory(),
-                ylabel=ylabel,
-                missing_rows=attack_missing,
-                x_col=x_col,
-                axis_mode=axis_mode,
-            )
-
-            for missing in attack_missing:
-                missing["figure"] = output_figure_name
-                missing["panel"] = f"{row_title} / {attack}"
-            all_missing.extend(attack_missing)
-
-            ax.set_title(attack)
-            add_panel_label(ax, chr(ord("A") + col_index))
-
-        apply_shared_figure_header(fig, subtitle=f"{row_title}; each dot = upper whisker - lower whisker", left=0.04)
-        save_figure(fig, output_dir / output_figure_name)
-        plt.close(fig)
-
-    return all_missing
-
-
-def make_single_row_distribution_by_steps_figure(records, output_dir, figure_name, ylabel, row, attacks_to_plot=STEP_ATTACK_ORDER, epsilon=0.1):
-    fig, axes = plt.subplots(1, len(attacks_to_plot), figsize=(3.3 * len(attacks_to_plot), 2.8), sharex=False, sharey=False)
-    axes = np.atleast_1d(axes)
-
-    all_missing = []
-    row_title, getter_factory = row
-
-    for col_index, attack in enumerate(attacks_to_plot):
-        ax = axes[col_index]
-        attack_missing = []
-
-        draw_grouped_boxplot_by_steps(
-            ax=ax,
-            records=records,
-            attack=attack,
-            epsilon=epsilon,
-            value_getter=getter_factory(),
-            ylabel=ylabel,
-            missing_rows=attack_missing,
-        )
-
-        for missing in attack_missing:
-            missing["figure"] = figure_name
-            missing["panel"] = f"{row_title} / {attack}"
-        all_missing.extend(attack_missing)
-
-        ax.set_title(attack)
-        add_panel_label(ax, chr(ord("A") + col_index))
-
-    apply_shared_figure_header(fig, subtitle=rf"{row_title}; fixed $\epsilon$ = {epsilon:g} $\AA$", left=0.08)
-    save_figure(fig, output_dir / figure_name)
-    plt.close(fig)
-
-    return all_missing
-
-
-def make_single_row_ci_by_steps_figure(records, output_dir, figure_name, ylabel, row, attacks_to_plot=STEP_ATTACK_ORDER, epsilon=0.1):
-    fig, axes = plt.subplots(1, len(attacks_to_plot), figsize=(3.3 * len(attacks_to_plot), 2.8), sharex=False, sharey=False)
-    axes = np.atleast_1d(axes)
-
-    all_missing = []
-    row_title, getter_factory = row
-
-    for col_index, attack in enumerate(attacks_to_plot):
-        ax = axes[col_index]
-        attack_missing = []
-
-        draw_grouped_ci_by_steps(
-            ax=ax,
-            records=records,
-            attack=attack,
-            epsilon=epsilon,
-            value_getter=getter_factory(),
-            ylabel=ylabel,
-            missing_rows=attack_missing,
-        )
-
-        for missing in attack_missing:
-            missing["figure"] = figure_name
-            missing["panel"] = f"{row_title} / {attack}"
-        all_missing.extend(attack_missing)
-
-        ax.set_title(attack)
-        add_panel_label(ax, chr(ord("A") + col_index))
-
-    apply_shared_figure_header(fig, subtitle=rf"{row_title}; fixed $\epsilon$ = {epsilon:g} $\AA$; line = median, shaded band = 95% CI", left=0.08)
-    save_figure(fig, output_dir / figure_name)
-    plt.close(fig)
-
-    return all_missing
-
-
-def make_single_row_whisker_span_by_steps_figure(records, output_dir, figure_name, ylabel, row, attacks_to_plot=STEP_ATTACK_ORDER, epsilon=0.1):
-    fig, axes = plt.subplots(1, len(attacks_to_plot), figsize=(3.3 * len(attacks_to_plot), 2.8), sharex=False, sharey=False)
-    axes = np.atleast_1d(axes)
-
-    all_missing = []
-    row_title, getter_factory = row
-
-    for col_index, attack in enumerate(attacks_to_plot):
-        ax = axes[col_index]
-        attack_missing = []
-
-        draw_whisker_span_by_steps(
-            ax=ax,
-            records=records,
-            attack=attack,
-            epsilon=epsilon,
-            value_getter=getter_factory(),
-            ylabel=ylabel,
-            missing_rows=attack_missing,
-        )
-
-        for missing in attack_missing:
-            missing["figure"] = figure_name
-            missing["panel"] = f"{row_title} / {attack}"
-        all_missing.extend(attack_missing)
-
-        ax.set_title(attack)
-        add_panel_label(ax, chr(ord("A") + col_index))
-
-    apply_shared_figure_header(fig, subtitle=rf"{row_title}; fixed $\epsilon$ = {epsilon:g} $\AA$; each dot = upper whisker - lower whisker", left=0.08)
-    save_figure(fig, output_dir / figure_name)
-    plt.close(fig)
-
-    return all_missing
-
-
-def make_single_row_parametric_figure(records, output_dir, figure_name, title, x_label, y_label, bubble_label, attacks_to_plot, x_getter, y_getter, x_log=False, y_log=False):
-    missing_rows = []
-    data = parametric_rows(
-        records=records,
-        x_getter=x_getter,
-        y_getter=y_getter,
-        bubble_col="epsilon" if "epsilon" in figure_name else "n_steps",
-        missing_rows=missing_rows,
-        figure_name=figure_name,
-    )
-
-    if data.empty:
-        return missing_rows
-
-    fig, axes = plt.subplots(1, len(attacks_to_plot), figsize=(5.2 * len(attacks_to_plot), 4.6), sharex=False, sharey=False)
-    axes = np.atleast_1d(axes)
-
-    for col_index, attack in enumerate(attacks_to_plot):
-        ax = axes[col_index]
-        draw_parametric_panel(
-            ax=ax,
-            data=data,
-            attack=attack,
-            x_label=x_label,
-            y_label=y_label,
-            show_ylabel=(col_index == 0),
-        )
-        ax.title.set_fontsize(13)
-        ax.xaxis.label.set_fontsize(12)
-        ax.yaxis.label.set_fontsize(12)
-        style_numeric_axis(ax, xbins=4, ybins=5)
-        if x_log:
-            apply_positive_log_axis(ax, "x")
-        if y_log:
-            apply_positive_log_axis(ax, "y")
-        add_panel_label(ax, chr(ord("A") + col_index))
-
-    handles, labels = axes[0].get_legend_handles_labels()
-    if handles:
-        fig.legend(
-            handles,
-            labels,
-            loc="upper center",
-            ncol=4,
-            bbox_to_anchor=(0.5, 1.04),
-            frameon=False,
-            title=f"Grouped by {bubble_label}",
-            fontsize=11,
-            title_fontsize=11,
-        )
-
-    fig.suptitle(title, y=1.08, fontsize=15)
-    fig.tight_layout(rect=[0.06, 0.04, 1.00, 0.94])
-    save_figure(fig, output_dir / figure_name)
-    plt.close(fig)
-
-    return missing_rows
 
 
 def make_topology_metric_figure_set(
