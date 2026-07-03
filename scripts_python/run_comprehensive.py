@@ -222,12 +222,6 @@ def apply_step_axis(ax, steps, plotted_positions=None):
     ax.set_xlabel("n_steps")
 
 
-def sparse_tick_indices(count, max_labels=6):
-    if count <= max_labels:
-        return set(range(count))
-    return set(np.linspace(0, count - 1, max_labels, dtype=int).tolist())
-
-
 def read_csv(path):
     path = Path(path)
     if not path.exists():
@@ -3382,22 +3376,6 @@ def make_topology_material_ranking(records, output_dir, max_materials=20):
 
 
 COMPONENTS = ["x", "y", "z"]
-
-def vector_component_values(run_dir, before_name, after_name, columns, component, scale=1.0, absolute=False):
-    merged, reason = merge_atom_csvs(run_dir, before_name, after_name, columns)
-    if merged is None:
-        return None, reason
-
-    before = merged[[f"{col}_before" for col in columns]].to_numpy(dtype=float)
-    after = merged[[f"{col}_after" for col in columns]].to_numpy(dtype=float)
-    delta = after - before
-    index = columns.index(component)
-    values = delta[:, index] * float(scale)
-
-    if absolute:
-        values = np.abs(values)
-
-    return values, None
 
 
 def force_angle_values(run_dir, before_name, after_name):

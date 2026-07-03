@@ -194,36 +194,6 @@ def clean_axis_values(ax, axis_name):
     return series.to_numpy(dtype=float)
 
 
-def tight_axis_limits(values, pad=0.14):
-    values = np.asarray(values, dtype=float)
-    values = values[np.isfinite(values)]
-
-    if len(values) == 0:
-        return None
-
-    if np.allclose(values, values[0]):
-        center = float(values[0])
-        span = max(abs(center) * 0.20, 1e-9)
-        if center >= 0 and center - span < 0:
-            return 0.0, center + span
-        return center - span, center + span
-
-    low = float(np.percentile(values, 0.5))
-    high = float(np.percentile(values, 99.5))
-    span = high - low
-
-    if span <= 0 or not np.isfinite(span):
-        return None
-
-    low -= pad * span
-    high += pad * span
-
-    if np.nanmin(values) >= 0 and low < 0:
-        low = 0.0 if np.nanmin(values) < 0.08 * span else max(0.0, low)
-
-    return low, high
-
-
 def read_csv(path):
     path = Path(path)
     if not path.exists():
@@ -326,20 +296,6 @@ def attack_force_angle(row, before_name, after_name):
         before_forces,
         after_forces,
     )
-
-
-def contour_metric_values(rows, metric):
-    values = []
-    for _, row in rows.iterrows():
-        metrics = read_csv(row["metrics_csv"])
-        if metrics is not None and metric in metrics.columns:
-            values.extend(
-                metrics[metric]
-                .replace([np.inf, -np.inf], np.nan)
-                .dropna()
-                .tolist()
-            )
-    return np.asarray(values, dtype=float)
 
 
 def median_force_angle(initial_forces, current_forces):
