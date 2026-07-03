@@ -31,6 +31,22 @@ fi
 PROJECT_OUTPUT_ROOT="${PROJECT_OUTPUT_ROOT:-$PWD}"
 SCRATCH_OUTPUT_ROOT="${SCRATCH_OUTPUT_ROOT:-/scratch/$USER/mlff_attack_data_collection}"
 
+if [ "$SLURM_ARRAY_TASK_ID" -eq 1 ]; then
+  RANDOM_SEED_JOB=$(sbatch \
+    --parsable \
+    --account=rrg-j3goals \
+    --dependency="afterok:${SLURM_ARRAY_JOB_ID}" \
+    --time=02:00:00 \
+    --mem=8G \
+    --cpus-per-task=4 \
+    --output=random-seed-%j.out \
+    --export=ALL,PROJECT_OUTPUT_ROOT="$PROJECT_OUTPUT_ROOT" \
+    --wrap="cd '$PROJECT_OUTPUT_ROOT' && '$HOME/project/.venv-mace/bin/python' -u scripts_python/random_seed_comprehensive.py --project-root '$PROJECT_OUTPUT_ROOT' --output-dir '$PROJECT_OUTPUT_ROOT/random_seed'")
+
+  echo "Submitted random-seed comparison job: $RANDOM_SEED_JOB"
+  echo "It will run after plot array ${SLURM_ARRAY_JOB_ID} completes successfully."
+fi
+
 TRIAL_NAME="${TRIALS[$TASK_INDEX]}"
 
 SCRATCH_TRIAL_DIR="$SCRATCH_OUTPUT_ROOT/$TRIAL_NAME"
