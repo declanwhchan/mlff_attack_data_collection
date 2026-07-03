@@ -323,6 +323,37 @@ def attack_force_delta(row, before_name, after_name):
     return np.linalg.norm(after_f - before_f, axis=1)
 
 
+def attack_force_angle(row, before_name, after_name):
+    run_dir = Path(row["run_dir"])
+    before = load_force_csv(run_dir / before_name)
+    after = load_force_csv(run_dir / after_name)
+
+    if before is None or after is None:
+        return np.nan
+
+    merged = before.merge(
+        after,
+        on="atom_index",
+        suffixes=("_before", "_after"),
+    )
+
+    if merged.empty:
+        return np.nan
+
+    before_forces = merged[
+        ["fx_before", "fy_before", "fz_before"]
+    ].to_numpy(dtype=float)
+
+    after_forces = merged[
+        ["fx_after", "fy_after", "fz_after"]
+    ].to_numpy(dtype=float)
+
+    return median_force_angle(
+        before_forces,
+        after_forces,
+    )
+
+
 def contour_metric_values(rows, metric):
     values = []
     for _, row in rows.iterrows():
@@ -452,19 +483,55 @@ def contour_frame_table(summary_row, max_frames=101):
     selected_frames = [frames[index] for index in indices]
 
     initial_atoms = frames[0]
-    initial_forces = None
+    initial_positions = initial_atoms.get_positions()
 
     try:
         initial_forces = initial_atoms.get_forces()
     except Exception:
-        pass
+        initial_forces = None
 
+    median_displacements = []
+    median_force_changes = []
     jaccard_values = []
     coordination_values = []
     rdf_values = []
     force_angle_values = []
 
     for frame in selected_frames:
+        current_positions = frame.get_positions()
+        displacement = np.linalg.norm(
+            current_positions - initial_positions,
+            axis=1,
+        )
+        median_displacements.append(
+            float(np.median(displacement))
+        )
+
+        current_forces = None
+
+        try:
+            current_forces = frame.get_forces()
+        except Exception:
+            pass
+
+        if initial_forces is None or current_forces is None:
+            median_force_changes.append(np.nan)
+            force_angle_values.append(np.nan)
+        else:
+            force_change = np.linalg.norm(
+                current_forces - initial_forces,
+                axis=1,
+            )
+            median_force_changes.append(
+                float(np.median(force_change))
+            )
+            force_angle_values.append(
+                median_force_angle(
+                    initial_forces,
+                    current_forces,
+                )
+            )
+
         try:
             topology = contour_topology_metrics(
                 initial_atoms,
@@ -488,19 +555,12 @@ def contour_frame_table(summary_row, max_frames=101):
             coordination_values.append(np.nan)
             rdf_values.append(np.nan)
 
-        if initial_forces is None:
-            force_angle_values.append(np.nan)
-        else:
-            try:
-                force_angle_values.append(
-                    median_force_angle(
-                        initial_forces,
-                        frame.get_forces(),
-                    )
-                )
-            except Exception:
-                force_angle_values.append(np.nan)
-
+    selected["contour_median_displacement_a"] = (
+        median_displacements
+    )
+    selected["contour_median_force_delta_ev_a"] = (
+        median_force_changes
+    )
     selected["contour_neighbor_jaccard_distance"] = (
         jaccard_values
     )
@@ -539,8 +599,66 @@ def build_contour_frame_dataset(summary_rows):
     return pd.concat(tables, ignore_index=True, sort=False)
 
 
-def contour_trend(data, x_column, y_column, bins=15):
-    clean = data[[x_column, y_column]].copy()
+CONTOUR_DISPLACEMENT_PLOTS = [
+    (
+        "contour_neighbor_jaccard_distance",
+        "neighbor_jaccard_distance",
+        "Neighbor Jaccard distance",
+        "Neighbor Jaccard distance",
+        "jaccard_vs_displacement.png",
+        "Neighbor Jaccard distance vs median displacement",
+    ),
+    (
+        "contour_rdf_l1_distance",
+        "rdf_l1_distance",
+        "RDF L1 distance",
+        "RDF L1 distance",
+        "rdf_vs_displacement.png",
+        "RDF L1 distance vs median displacement",
+    ),
+    (
+        "contour_coordination_change_max",
+        "coordination_change_max",
+        "Maximum coordination-number change",
+        "Maximum coordination-number change",
+        "coordination_vs_displacement.png",
+        "Coordination change vs median displacement",
+    ),
+    (
+        "contour_median_force_delta_ev_a",
+        "after_attack_after_relaxation_median_force_delta_ev_a",
+        r"Median force change (eV/$\AA$)",
+        r"Median force change (eV/$\AA$)",
+        "delta_force_vs_displacement.png",
+        "Median force change vs median displacement",
+    ),
+    (
+        "contour_convergence_mev_per_atom",
+        "after_attack_after_relaxation_steps",
+        r"$|E-E_{\mathrm{target}}|$ (meV/atom)",
+        "Relaxation steps",
+        "convergence_vs_displacement.png",
+        "Contour target error and attack convergence",
+    ),
+    (
+        "contour_force_angle_deg",
+        "after_attack_after_relaxation_force_angle_deg",
+        "Median force-vector angle change (degrees)",
+        "Median force-vector angle change (degrees)",
+        "delta_force_angle_vs_displacement.png",
+        "Force-angle change vs median displacement",
+    ),
+]
+
+
+def clean_scatter_data(data, x_column, y_column):
+    if data.empty:
+        return pd.DataFrame()
+
+    if x_column not in data.columns or y_column not in data.columns:
+        return pd.DataFrame()
+
+    clean = data.copy()
     clean[x_column] = pd.to_numeric(
         clean[x_column],
         errors="coerce",
@@ -549,155 +667,193 @@ def contour_trend(data, x_column, y_column, bins=15):
         clean[y_column],
         errors="coerce",
     )
-    clean = clean.replace(
+
+    return clean.replace(
         [np.inf, -np.inf],
         np.nan,
-    ).dropna()
+    ).dropna(subset=[x_column, y_column])
 
-    if len(clean) < 2:
-        return pd.DataFrame()
 
-    unique_x = clean[x_column].nunique()
-
-    if unique_x < 2:
-        return pd.DataFrame()
-
-    number_of_bins = min(bins, unique_x)
-
-    try:
-        clean["_bin"] = pd.qcut(
-            clean[x_column],
-            q=number_of_bins,
-            duplicates="drop",
-        )
-    except ValueError:
-        return pd.DataFrame()
-
-    return (
-        clean.groupby("_bin", observed=True)
-        .agg(
-            x=(x_column, "median"),
-            y=(y_column, "median"),
-        )
-        .reset_index(drop=True)
-        .sort_values("x")
+def draw_contour_scatter(
+    axis,
+    data,
+    beta,
+    metric,
+    ylabel,
+):
+    beta_values = pd.to_numeric(
+        data["beta"],
+        errors="coerce",
     )
+
+    beta_data = data[
+        np.isclose(beta_values, beta)
+    ].copy()
+
+    for calculator in ["mace", "uma"]:
+        selected = clean_scatter_data(
+            beta_data[
+                beta_data["calculator"] == calculator
+            ],
+            "contour_median_displacement_a",
+            metric,
+        )
+
+        if selected.empty:
+            continue
+
+        axis.scatter(
+            selected["contour_median_displacement_a"],
+            selected[metric],
+            s=18,
+            alpha=0.28,
+            color=CALC_COLORS[calculator],
+            marker="o" if calculator == "mace" else "s",
+            edgecolor="none",
+            label=calculator.upper(),
+        )
+
+    axis.set_title(rf"$\beta={beta:.2f}$")
+    axis.set_xlabel(
+        r"Median displacement from initial structure ($\AA$)"
+    )
+    axis.set_ylabel(ylabel)
+    axis.grid(True, alpha=0.30)
+
+
+def draw_attack_scatter(
+    axis,
+    data,
+    attack,
+    metric,
+    ylabel,
+):
+    attack_data = data[
+        (data["attack_label"] == attack)
+        & (~data["is_step_sweep"])
+    ].copy()
+
+    for calculator in ["mace", "uma"]:
+        selected = clean_scatter_data(
+            attack_data[
+                attack_data["calculator"] == calculator
+            ],
+            "after_attack_after_relaxation_median_displacement_a",
+            metric,
+        )
+
+        if selected.empty:
+            continue
+
+        axis.scatter(
+            selected[
+                "after_attack_after_relaxation_median_displacement_a"
+            ],
+            selected[metric],
+            s=22,
+            alpha=0.42,
+            color=CALC_COLORS[calculator],
+            marker="o" if calculator == "mace" else "s",
+            edgecolor="none",
+            label=calculator.upper(),
+        )
+
+    axis.set_title(attack)
+    axis.set_xlabel(
+        r"Median displacement from initial structure ($\AA$)"
+    )
+    axis.set_ylabel(ylabel)
+    axis.grid(True, alpha=0.30)
 
 
 def plot_contour_metric_vs_displacement(
-    data,
-    metric,
-    ylabel,
+    contour_data,
+    attack_data,
+    contour_metric,
+    attack_metric,
+    contour_ylabel,
+    attack_ylabel,
     output_path,
     title,
 ):
-    required = {
-        "mean_displacement_from_initial_a",
-        metric,
-        "calculator",
-        "beta",
-    }
-
-    if data.empty or not required.issubset(data.columns):
-        return
-
-    betas = sorted(
-        pd.to_numeric(
-            data["beta"],
-            errors="coerce",
-        ).dropna().unique()
-    )
-
-    if not betas:
+    if contour_data.empty or attack_data.empty:
         return
 
     fig, axes = plt.subplots(
-        1,
-        len(betas),
-        figsize=(4.4 * len(betas), 4.0),
+        2,
+        3,
+        figsize=(13.2, 8.0),
         squeeze=False,
     )
-    axes = axes.ravel()
 
-    for axis, beta in zip(axes, betas):
-        beta_data = data[
-            np.isclose(
-                pd.to_numeric(data["beta"], errors="coerce"),
-                beta,
-            )
-        ].copy()
-
-        for calculator in ["mace", "uma"]:
-            selected = beta_data[
-                beta_data["calculator"] == calculator
-            ].copy()
-
-            selected[
-                "mean_displacement_from_initial_a"
-            ] = pd.to_numeric(
-                selected["mean_displacement_from_initial_a"],
-                errors="coerce",
-            )
-            selected[metric] = pd.to_numeric(
-                selected[metric],
-                errors="coerce",
-            )
-
-            selected = selected.replace(
-                [np.inf, -np.inf],
-                np.nan,
-            ).dropna(
-                subset=[
-                    "mean_displacement_from_initial_a",
-                    metric,
-                ]
-            )
-
-            if selected.empty:
-                continue
-
-            color = CALC_COLORS.get(calculator, "#444444")
-
-            axis.scatter(
-                selected["mean_displacement_from_initial_a"],
-                selected[metric],
-                s=12,
-                alpha=0.16,
-                color=color,
-                edgecolor="none",
-            )
-
-            trend = contour_trend(
-                selected,
-                "mean_displacement_from_initial_a",
-                metric,
-            )
-
-            if not trend.empty:
-                axis.plot(
-                    trend["x"],
-                    trend["y"],
-                    color=color,
-                    linewidth=1.8,
-                    marker="o",
-                    markersize=3,
-                    label=calculator.upper(),
-                )
-
-        axis.set_title(rf"$\beta={beta:.2f}$")
-        axis.set_xlabel(
-            r"Mean displacement from initial structure ($\AA$)"
+    for column, beta in enumerate([0.00, 0.05, 0.10]):
+        draw_contour_scatter(
+            axes[0, column],
+            contour_data,
+            beta,
+            contour_metric,
+            contour_ylabel,
         )
-        axis.set_ylabel(ylabel)
-        axis.grid(True, alpha=0.30)
 
-        handles, labels = axis.get_legend_handles_labels()
-        if handles:
-            axis.legend()
+        draw_attack_scatter(
+            axes[1, column],
+            attack_data,
+            ATTACK_ORDER[column],
+            attack_metric,
+            attack_ylabel,
+        )
 
-    label_axes(axes)
-    fig.suptitle(title, y=1.03, fontsize=11)
-    fig.tight_layout()
+    label_axes(axes.ravel())
+
+    handles = [
+        plt.Line2D(
+            [0],
+            [0],
+            marker="o",
+            linestyle="none",
+            color=CALC_COLORS["mace"],
+            label="MACE",
+        ),
+        plt.Line2D(
+            [0],
+            [0],
+            marker="s",
+            linestyle="none",
+            color=CALC_COLORS["uma"],
+            label="UMA",
+        ),
+    ]
+
+    fig.legend(
+        handles=handles,
+        loc="upper center",
+        ncol=2,
+        frameon=False,
+        bbox_to_anchor=(0.5, 0.985),
+    )
+
+    fig.text(
+        0.012,
+        0.72,
+        "Contour exploration",
+        rotation=90,
+        va="center",
+        fontsize=11,
+        fontweight="bold",
+    )
+    fig.text(
+        0.012,
+        0.28,
+        "After attack and relaxation",
+        rotation=90,
+        va="center",
+        fontsize=11,
+        fontweight="bold",
+    )
+
+    fig.suptitle(title, y=1.015, fontsize=13)
+    fig.tight_layout(rect=[0.035, 0.03, 1.0, 0.94])
+
     fig.savefig(
         output_path,
         dpi=500,
@@ -706,60 +862,29 @@ def plot_contour_metric_vs_displacement(
     plt.close(fig)
 
 
-CONTOUR_DISPLACEMENT_PLOTS = [
-    (
-        "contour_neighbor_jaccard_distance",
-        "Neighbor Jaccard distance",
-        "jaccard_vs_displacement.png",
-        "Contour neighbor change vs displacement",
-    ),
-    (
-        "contour_rdf_l1_distance",
-        "Integrated ASE RDF difference",
-        "rdf_vs_displacement.png",
-        "Contour RDF change vs displacement",
-    ),
-    (
-        "contour_coordination_change_max",
-        "Maximum coordination-number change",
-        "coordination_vs_displacement.png",
-        "Contour coordination change vs displacement",
-    ),
-    (
-        "mean_force_delta_from_initial_ev_a",
-        r"Mean force change (eV/$\AA$)",
-        "delta_force_vs_displacement.png",
-        "Contour force change vs displacement",
-    ),
-    (
-        "contour_convergence_mev_per_atom",
-        r"$|E-E_{\mathrm{target}}|$ (meV/atom)",
-        "convergence_vs_displacement.png",
-        "Contour energy-target convergence vs displacement",
-    ),
-    (
-        "contour_force_angle_deg",
-        "Median force-vector angle change (degrees)",
-        "delta_force_angle_vs_displacement.png",
-        "Contour force-angle change vs displacement",
-    ),
-]
-
-
 def make_contour_displacement_plots(
     frame_data,
+    attack_data,
     output_dir,
 ):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    for metric, ylabel, filename, title in (
-        CONTOUR_DISPLACEMENT_PLOTS
-    ):
+    for (
+        contour_metric,
+        attack_metric,
+        contour_ylabel,
+        attack_ylabel,
+        filename,
+        title,
+    ) in CONTOUR_DISPLACEMENT_PLOTS:
         plot_contour_metric_vs_displacement(
-            data=frame_data,
-            metric=metric,
-            ylabel=ylabel,
+            contour_data=frame_data,
+            attack_data=attack_data,
+            contour_metric=contour_metric,
+            attack_metric=attack_metric,
+            contour_ylabel=contour_ylabel,
+            attack_ylabel=attack_ylabel,
             output_path=output_dir / filename,
             title=title,
         )
@@ -771,6 +896,25 @@ def contour_stats(rows, metric):
         return None
     return {
         "p05": float(np.percentile(values, 5)),
+        "p95": float(np.percentile(values, 95)),
+    }
+
+
+def contour_frame_stats(frame_data, metric):
+    if frame_data.empty or metric not in frame_data.columns:
+        return None
+
+    values = pd.to_numeric(
+        frame_data[metric],
+        errors="coerce",
+    ).replace([np.inf, -np.inf], np.nan).dropna()
+
+    if values.empty:
+        return None
+
+    return {
+        "p05": float(np.percentile(values, 5)),
+        "median": float(np.median(values)),
         "p95": float(np.percentile(values, 95)),
     }
 
@@ -824,74 +968,123 @@ def attack_metric_table(attacks):
     rows = []
 
     for _, row in attacks.iterrows():
-        after_attack_before_relaxation_disp = attack_displacement(
+        before_displacement = attack_displacement(
             row,
             "before_forces.csv",
             "perturbed_forces.csv",
         )
-        after_attack_before_relaxation_force = attack_force_delta(
+        before_force_delta = attack_force_delta(
             row,
             "before_forces.csv",
             "perturbed_forces.csv",
         )
 
-        after_attack_after_relaxation_disp = attack_displacement(
+        final_displacement = attack_displacement(
             row,
             "before_forces.csv",
             "after_forces.csv",
         )
-        after_attack_after_relaxation_force = attack_force_delta(
+        final_force_delta = attack_force_delta(
             row,
             "before_forces.csv",
             "after_forces.csv",
         )
 
         run_id = str(row.get("run_id", ""))
-        is_step_sweep = "_steps" in run_id
-
-        after_attack_before_relaxation_median_displacement = (
-            float(np.median(after_attack_before_relaxation_disp))
-            if after_attack_before_relaxation_disp.size
-            else np.nan
-        )
-        after_attack_before_relaxation_median_force_delta = (
-            float(np.median(after_attack_before_relaxation_force))
-            if after_attack_before_relaxation_force.size
-            else np.nan
-        )
 
         rows.append({
             "material_slug": row.get("material_slug"),
             "calculator": row.get("calculator"),
             "attack_label": attack_label_from_row(row),
-            "epsilon": float(row["epsilon"]) if pd.notna(row.get("epsilon")) else np.nan,
-            "n_steps": int(float(row["n_steps"])) if pd.notna(row.get("n_steps")) else np.nan,
-            "is_step_sweep": is_step_sweep,
+            "epsilon": pd.to_numeric(
+                row.get("epsilon"),
+                errors="coerce",
+            ),
+            "n_steps": pd.to_numeric(
+                row.get("n_steps"),
+                errors="coerce",
+            ),
+            "is_step_sweep": "_steps" in run_id,
 
-            "after_attack_before_relaxation_median_displacement_a": after_attack_before_relaxation_median_displacement,
-            "after_attack_before_relaxation_median_force_delta_ev_a": after_attack_before_relaxation_median_force_delta,
+            "after_attack_before_relaxation_median_displacement_a": (
+                float(np.median(before_displacement))
+                if before_displacement.size
+                else np.nan
+            ),
+            "after_attack_before_relaxation_median_force_delta_ev_a": (
+                float(np.median(before_force_delta))
+                if before_force_delta.size
+                else np.nan
+            ),
             "after_attack_after_relaxation_median_displacement_a": (
-                float(np.median(after_attack_after_relaxation_disp))
-                if after_attack_after_relaxation_disp.size
+                float(np.median(final_displacement))
+                if final_displacement.size
                 else np.nan
             ),
             "after_attack_after_relaxation_median_force_delta_ev_a": (
-                float(np.median(after_attack_after_relaxation_force))
-                if after_attack_after_relaxation_force.size
+                float(np.median(final_force_delta))
+                if final_force_delta.size
                 else np.nan
             ),
+            "after_attack_after_relaxation_force_angle_deg": (
+                attack_force_angle(
+                    row,
+                    "before_forces.csv",
+                    "after_forces.csv",
+                )
+            ),
+            "after_attack_after_relaxation_steps": pd.to_numeric(
+                row.get("after_relax_steps"),
+                errors="coerce",
+            ),
+            "neighbor_jaccard_distance": pd.to_numeric(
+                row.get("neighbor_jaccard_distance"),
+                errors="coerce",
+            ),
+            "coordination_change_max": pd.to_numeric(
+                row.get("coordination_change_max"),
+                errors="coerce",
+            ),
+            "rdf_l1_distance": pd.to_numeric(
+                row.get("rdf_l1_distance"),
+                errors="coerce",
+            ),
 
-            # Keep existing per-material plots unchanged.
-            "attack_median_displacement_a": after_attack_before_relaxation_median_displacement,
-            "attack_median_force_delta_ev_a": after_attack_before_relaxation_median_force_delta,
+            # Compatibility with existing contour/attack plots.
+            "attack_median_displacement_a": (
+                float(np.median(before_displacement))
+                if before_displacement.size
+                else np.nan
+            ),
+            "attack_median_force_delta_ev_a": (
+                float(np.median(before_force_delta))
+                if before_force_delta.size
+                else np.nan
+            ),
         })
 
     return pd.DataFrame(rows)
 
 
-def draw_attack_panels(fig, axes, data, x_col, x_label, calculator, contour_rows, title, attacks_to_plot):
-    disp_stats = contour_stats(contour_rows, "mean_displacement_from_initial_a")
-    force_stats = contour_stats(contour_rows, "mean_force_delta_from_initial_ev_a")
+def draw_attack_panels(
+    fig,
+    axes,
+    data,
+    x_col,
+    x_label,
+    calculator,
+    contour_frames,
+    title,
+    attacks_to_plot,
+):
+    disp_stats = contour_frame_stats(
+        contour_frames,
+        "contour_median_displacement_a",
+    )
+    force_stats = contour_frame_stats(
+        contour_frames,
+        "contour_median_force_delta_ev_a",
+    )
     color = CALC_COLORS.get(calculator, "#333333")
 
     for col, attack in enumerate(attacks_to_plot):
@@ -918,7 +1111,7 @@ def draw_attack_panels(fig, axes, data, x_col, x_label, calculator, contour_rows
                 markersize=4,
                 linewidth=1.6,
                 color=color,
-                label="gradient median",
+                label="attack median",
                 zorder=3,
             )
 
@@ -929,7 +1122,7 @@ def draw_attack_panels(fig, axes, data, x_col, x_label, calculator, contour_rows
                 markersize=4,
                 linewidth=1.6,
                 color=color,
-                label="gradient median",
+                label="attack median",
                 zorder=3,
             )
 
@@ -1001,7 +1194,14 @@ def draw_attack_panels(fig, axes, data, x_col, x_label, calculator, contour_rows
     fig.suptitle(title, y=1.08, fontsize=10)
 
 
-def plot_contour_vs_attack(material_slug, calculator, contour_rows, attacks, output_dir):
+def plot_contour_vs_attack(
+    material_slug,
+    calculator,
+    contour_rows,
+    contour_frames,
+    attacks,
+    output_dir,
+):
     attacks = attacks[
         (attacks["material_slug"] == material_slug)
         & (attacks["calculator"] == calculator)
@@ -1025,7 +1225,7 @@ def plot_contour_vs_attack(material_slug, calculator, contour_rows, attacks, out
             x_col="epsilon",
             x_label=r"$\epsilon$ ($\AA$)",
             calculator=calculator,
-            contour_rows=contour_rows,
+            contour_frames=contour_frames,
             title=f"{material_slug} {calculator.upper()}: attacks vs contour baseline by epsilon",
             attacks_to_plot=ATTACK_ORDER,
         )
@@ -1047,7 +1247,7 @@ def plot_contour_vs_attack(material_slug, calculator, contour_rows, attacks, out
             x_col="n_steps",
             x_label="n_steps",
             calculator=calculator,
-            contour_rows=contour_rows,
+            contour_frames=contour_frames,
             title=f"{material_slug} {calculator.upper()}: attacks vs contour baseline by n_steps",
             attacks_to_plot=["I-FGSM", "PGD"],
         )
@@ -1059,9 +1259,29 @@ def plot_contour_vs_attack(material_slug, calculator, contour_rows, attacks, out
         )
         plt.close(fig)
 
-    disp_stats = contour_stats(contour_rows, "mean_displacement_from_initial_a")
-    force_stats = contour_stats(contour_rows, "mean_force_delta_from_initial_ev_a")
-    energy_values = contour_metric_values(contour_rows, "energy_deviation_mev_per_atom")
+    disp_stats = contour_frame_stats(
+        contour_frames,
+        "contour_median_displacement_a",
+    )
+    force_stats = contour_frame_stats(
+        contour_frames,
+        "contour_median_force_delta_ev_a",
+    )
+
+    if (
+        contour_frames.empty
+        or "energy_deviation_mev_per_atom"
+        not in contour_frames.columns
+    ):
+        energy_values = np.array([], dtype=float)
+    else:
+        energy_values = pd.to_numeric(
+            contour_frames["energy_deviation_mev_per_atom"],
+            errors="coerce",
+        ).replace(
+            [np.inf, -np.inf],
+            np.nan,
+        ).dropna().to_numpy(dtype=float)
 
     table["contour_displacement_p05_a"] = np.nan if disp_stats is None else disp_stats["p05"]
     table["contour_displacement_p95_a"] = np.nan if disp_stats is None else disp_stats["p95"]
@@ -1317,7 +1537,7 @@ def plot_global_relaxation_state(records, output_dir, displacement_col, force_co
         x_col="contour_displacement_p95_a",
         y_col=displacement_col,
         xlabel=r"Contour p95 ($\AA$)",
-        ylabel=r"Gradient median ($\AA$)",
+        ylabel=r"Attack median ($\AA$)",
         title="Displacement",
     )
 
@@ -1327,7 +1547,7 @@ def plot_global_relaxation_state(records, output_dir, displacement_col, force_co
         x_col="contour_force_delta_p95_ev_a",
         y_col=force_col,
         xlabel=r"Contour p95 (eV/$\AA$)",
-        ylabel=r"Gradient median (eV/$\AA$)",
+        ylabel=r"Attack median (eV/$\AA$)",
         title=r"$\Delta$ force",
     )
 
@@ -1497,7 +1717,7 @@ def plot_global(records, output_dir):
         before_col="after_attack_before_relaxation_median_displacement_a",
         after_col="after_attack_after_relaxation_median_displacement_a",
         xlabel=r"Contour p95 ($\AA$)",
-        ylabel=r"Gradient median ($\AA$)",
+        ylabel=r"Attack median ($\AA$)",
         title="Relaxation vs contour exploration by attack type: displacement",
         output_name="global_relaxation_vs_contour_exploration_by_attack_type_displacement.png",
     )
@@ -1509,7 +1729,7 @@ def plot_global(records, output_dir):
         before_col="after_attack_before_relaxation_median_force_delta_ev_a",
         after_col="after_attack_after_relaxation_median_force_delta_ev_a",
         xlabel=r"Contour p95 (eV/$\AA$)",
-        ylabel=r"Gradient median (eV/$\AA$)",
+        ylabel=r"Attack median (eV/$\AA$)",
         title=r"Relaxation vs contour exploration by attack type: $\Delta$ force",
         output_name="global_relaxation_vs_contour_exploration_by_attack_type_delta_force.png",
     )
@@ -1544,6 +1764,13 @@ def main():
 
     contour_frames = build_contour_frame_dataset(all_rows)
 
+    attacks = load_attack_dataset(args.comprehensive_dir)
+    attack_metrics = (
+        attack_metric_table(attacks)
+        if not attacks.empty
+        else pd.DataFrame()
+    )
+
     if not contour_frames.empty:
         contour_frames.to_csv(
             args.output_dir / "contour_frame_metrics.csv",
@@ -1552,27 +1779,59 @@ def main():
 
         make_contour_displacement_plots(
             contour_frames,
+            attack_metrics,
             args.output_dir,
         )
 
         for material_slug, material_frames in (
             contour_frames.groupby("material_slug")
         ):
+            if (
+                attack_metrics.empty
+                or "material_slug" not in attack_metrics.columns
+            ):
+                material_attacks = pd.DataFrame()
+            else:
+                material_attacks = attack_metrics[
+                    attack_metrics["material_slug"]
+                    == material_slug
+                ].copy()
+
             make_contour_displacement_plots(
                 material_frames,
+                material_attacks,
                 args.output_dir / str(material_slug),
             )
     else:
         print("No contour trajectory frames were available.")
 
-    attacks = load_attack_dataset(args.comprehensive_dir)
     comparison_tables = []
 
     for (material_slug, calculator), rows in all_rows.groupby(["material_slug", "calculator"]):
         plot_six_panel(material_slug, calculator, rows, args.output_dir)
 
         if not attacks.empty:
-            table = plot_contour_vs_attack(material_slug, calculator, rows, attacks, args.output_dir)
+            if (
+                contour_frames.empty
+                or "material_slug" not in contour_frames.columns
+                or "calculator" not in contour_frames.columns
+            ):
+                matching_frames = pd.DataFrame()
+            else:
+                matching_frames = contour_frames[
+                    (contour_frames["material_slug"] == material_slug)
+                    & (contour_frames["calculator"] == calculator)
+                ].copy()
+
+            table = plot_contour_vs_attack(
+                material_slug=material_slug,
+                calculator=calculator,
+                contour_rows=rows,
+                contour_frames=matching_frames,
+                attacks=attacks,
+                output_dir=args.output_dir,
+            )
+
             if not table.empty:
                 comparison_tables.append(table)
 
