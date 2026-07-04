@@ -3214,33 +3214,6 @@ def save_topology_summary(records, output_dir):
     pd.DataFrame(rows).to_csv(output_dir / "topology_summary.csv", index=False)
 
 
-def normalized_topology_data(records):
-    data = records.copy()
-    for column in TOPOLOGY_METRICS + ["mean_displacement", "epsilon", "n_steps"]:
-        if column in data.columns:
-            data[column] = pd.to_numeric(data[column], errors="coerce")
-
-    components = {
-        "jaccard_norm": "neighbor_jaccard_distance",
-        "rdf_norm": "rdf_l1_distance",
-        "coord_norm": "coordination_change_max",
-    }
-
-    for norm_col, raw_col in components.items():
-        values = data[raw_col].replace([np.inf, -np.inf], np.nan)
-        max_value = values.max(skipna=True)
-        if pd.isna(max_value) or max_value <= 0:
-            data[norm_col] = 0.0
-        else:
-            data[norm_col] = values / max_value
-
-    data["topology_score"] = data[
-        ["jaccard_norm", "rdf_norm", "coord_norm"]
-    ].mean(axis=1)
-
-    return data
-
-
 def topology_metric_axes(ax, xlabel=None, ylabel=None, title=None):
     if xlabel:
         ax.set_xlabel(xlabel)
@@ -3325,61 +3298,147 @@ def make_topology_by_attack_type(records, output_dir):
     plt.close(fig)
 
 
-def make_topology_material_ranking(records, output_dir, max_materials=20):
-    data = finite_metric_data(
-        normalized_topology_data(records),
-        ["material_slug", "jaccard_norm", "rdf_norm", "coord_norm", "topology_score"],
-    )
+def make_topology_material_rankings(
+    records,
+    output_dir,
+    max_materials=20,
+):
+    """Create separate material rankings using raw topology metrics."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    if data.empty:
-        return
+    old_path = output_dir / "topology_material_ranking.png"
+    if old_path.exists():
+        old_path.unlink()
 
-    ranked = (
-        data.groupby("material_slug", as_index=False)
-        .agg(
-            jaccard_norm=("jaccard_norm", "mean"),
-            rdf_norm=("rdf_norm", "mean"),
-            coord_norm=("coord_norm", "mean"),
-            topology_score=("topology_score", "mean"),
-        )
-        .sort_values("topology_score", ascending=False)
-        .head(max_materials)
-        .sort_values("topology_score", ascending=True)
-    )
-
-    if ranked.empty:
-        return
-
-    fig_height = max(4.0, 0.30 * len(ranked) + 1.5)
-    fig, ax = plt.subplots(figsize=(7.4, fig_height))
-
-    y = np.arange(len(ranked))
-    left = np.zeros(len(ranked))
-
-    components = [
-        ("jaccard_norm", "Jaccard", "#0072B2"),
-        ("rdf_norm", "RDF", "#009E73"),
-        ("coord_norm", "Coordination", "#D55E00"),
+    metrics = [
+        {
+            "column": "neighbor_jaccard_distance",
+            "xlabel": "Mean neighbor Jaccard distance",
+            "title": "Material ranking: neighbor Jaccard distance",
+            "filename": "material_jaccard_distance.png",
+        },
+        {
+            "column": "rdf_l1_distance",
+            "xlabel": "Mean RDF L1 distance",
+            "title": "Material ranking: RDF L1 distance",
+            "filename": "material_rdf_l1_distance.png",
+        },
+        {
+            "column": "coordination_change_max",
+            "xlabel": "Mean maximum coordination-number change",
+            "title": "Material ranking: coordination-number change",
+            "filename": "material_coordination_change.png",
+        },
     ]
 
-    for column, label, color in components:
-        values = ranked[column].to_numpy(dtype=float)
-        ax.barh(y, values, left=left, color=color, alpha=0.78, label=label)
-        left += values
+    for metric in metrics:
+        column = metric["column"]
 
-    ax.set_yticks(y)
-    ax.set_yticklabels(ranked["material_slug"])
-    topology_metric_axes(
-        ax,
-        xlabel="Mean normalized topology contribution",
-        ylabel="Material",
-        title="Most topology-sensitive materials",
-    )
-    ax.legend(frameon=False, ncol=3, loc="lower right")
+        if column not in records.columns:
+            continue
 
-    fig.tight_layout()
-    fig.savefig(output_dir / "topology_material_ranking.png", dpi=300, bbox_inches="tight")
-    plt.close(fig)
+        data = records[
+            ["material_slug", "calculator", column]
+        ].copy()
+
+        data[column] = pd.to_numeric(
+            data[column],
+            errors="coerce",
+        )
+
+        data = (
+            data.replace([np.inf, -np.inf], np.nan)
+            .dropna(
+                subset=[
+                    "material_slug",
+                    "calculator",
+                    column,
+                ]
+            )
+        )
+
+        if data.empty:
+            continue
+
+        material_model_means = (
+            data.groupby(
+                ["material_slug", "calculator"],
+                as_index=False,
+            )[column]
+            .mean()
+        )
+
+        ranking = (
+            material_model_means
+            .groupby("material_slug")[column]
+            .mean()
+            .sort_values(ascending=False)
+            .head(max_materials)
+        )
+
+        if ranking.empty:
+            continue
+
+        material_order = list(ranking.index[::-1])
+
+        model_values = material_model_means.pivot(
+            index="material_slug",
+            columns="calculator",
+            values=column,
+        ).reindex(material_order)
+
+        figure_height = max(
+            4.5,
+            0.34 * len(material_order) + 1.5,
+        )
+
+        fig, ax = plt.subplots(
+            figsize=(7.8, figure_height)
+        )
+
+        y = np.arange(len(material_order))
+        bar_height = 0.36
+
+        for calculator, offset in [
+            ("mace", -bar_height / 2),
+            ("uma", bar_height / 2),
+        ]:
+            if calculator not in model_values.columns:
+                continue
+
+            ax.barh(
+                y + offset,
+                model_values[calculator].to_numpy(dtype=float),
+                height=bar_height,
+                color=CALCULATOR_COLORS[calculator],
+                alpha=0.78,
+                label=calculator.upper(),
+            )
+
+        ax.set_yticks(y)
+        ax.set_yticklabels(material_order)
+
+        topology_metric_axes(
+            ax,
+            xlabel=metric["xlabel"],
+            ylabel="Material",
+            title=metric["title"],
+        )
+
+        ax.legend(
+            frameon=False,
+            ncol=2,
+            loc="lower right",
+        )
+
+        fig.tight_layout()
+        fig.savefig(
+            output_dir / metric["filename"],
+            dpi=300,
+            bbox_inches="tight",
+        )
+        plt.close(fig)
 
 
 COMPONENTS = ["x", "y", "z"]
@@ -4206,76 +4265,419 @@ def make_supercell_metadata(records, output_dir):
     pd.DataFrame(rows).to_csv(output_dir / "supercell_metadata.csv", index=False)
 
 
-def tukey_outlier_rows(data, group_cols, value_col):
-    rows = []
-    clean = data.replace([np.inf, -np.inf], np.nan).dropna(subset=[value_col]).copy()
+OUTLIER_MIN_EPSILON_PERCENT = 10.0
 
-    if clean.empty:
-        return rows
 
-    for group_key, group in clean.groupby(group_cols, dropna=False):
-        values = pd.to_numeric(group[value_col], errors="coerce").dropna()
-        if len(values) < 4:
+def collect_10pct_boxplot_outliers(
+    records,
+    metric_name,
+    stage,
+    value_getter,
+):
+    """Find box-plot outliers above 10% minimum-lattice epsilon."""
+    data = records.copy()
+
+    data["epsilon_percent_displacement"] = pd.to_numeric(
+        data["epsilon_percent_displacement"],
+        errors="coerce",
+    )
+
+    data = data[
+        (
+            data["epsilon_percent_displacement"]
+            > OUTLIER_MIN_EPSILON_PERCENT
+        )
+        & ~data["run_id"].astype(str).str.contains(
+            "_steps",
+            regex=False,
+        )
+    ].copy()
+
+    if data.empty:
+        return []
+
+    # Use the same quarter-decade grouping as the percent plots.
+    data["epsilon_percent_box"] = data[
+        "epsilon_percent_displacement"
+    ].map(percent_displacement_plot_x)
+
+    group_columns = [
+        "calculator",
+        "attack_label",
+        "epsilon_percent_box",
+    ]
+
+    outlier_rows = []
+
+    for group_key, group in data.groupby(
+        group_columns,
+        dropna=False,
+    ):
+        observations = []
+
+        for _, run in group.iterrows():
+            values, reason = value_getter(run)
+
+            if values is None:
+                continue
+
+            values = np.asarray(
+                values,
+                dtype=float,
+            ).reshape(-1)
+
+            for value_index, value in enumerate(values):
+                if not np.isfinite(value):
+                    continue
+
+                observations.append({
+                    "run": run,
+                    "value_index": value_index,
+                    "value": float(value),
+                })
+
+        if len(observations) < 4:
             continue
 
-        q1 = values.quantile(0.25)
-        q3 = values.quantile(0.75)
+        values = np.asarray(
+            [item["value"] for item in observations],
+            dtype=float,
+        )
+
+        q1 = float(np.quantile(values, 0.25))
+        q3 = float(np.quantile(values, 0.75))
         iqr = q3 - q1
-        if not np.isfinite(iqr) or iqr <= 0:
+
+        if not np.isfinite(iqr):
             continue
 
-        lower = q1 - 1.5 * iqr
-        upper = q3 + 1.5 * iqr
-        outliers = group[(group[value_col] < lower) | (group[value_col] > upper)].copy()
+        lower_bound = q1 - 1.5 * iqr
+        upper_bound = q3 + 1.5 * iqr
 
-        for _, row in outliers.iterrows():
-            item = row.to_dict()
-            item["outlier_metric"] = value_col
-            item["outlier_lower_bound"] = float(lower)
-            item["outlier_upper_bound"] = float(upper)
-            rows.append(item)
+        for observation in observations:
+            value = observation["value"]
 
-    return rows
+            if lower_bound <= value <= upper_bound:
+                continue
+
+            result = observation["run"].to_dict()
+
+            result.update({
+                "outlier_metric": metric_name,
+                "outlier_stage": stage,
+                "outlier_value": value,
+                "outlier_value_index": observation[
+                    "value_index"
+                ],
+                "outlier_q1": q1,
+                "outlier_q3": q3,
+                "outlier_iqr": iqr,
+                "outlier_lower_bound": lower_bound,
+                "outlier_upper_bound": upper_bound,
+                "epsilon_percent_box": group_key[2],
+                "minimum_epsilon_percent": (
+                    OUTLIER_MIN_EPSILON_PERCENT
+                ),
+            })
+
+            outlier_rows.append(result)
+
+    return outlier_rows
 
 
 def make_outlier_reports(records, output_dir):
+    """Write response outliers above 10% minimum-lattice epsilon."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    metric_cols = [
-        "epsilon",
-        "epsilon_percent_displacement",
-        "mean_displacement",
-        "max_displacement",
-        "before_relax_steps",
-        "after_relax_steps",
-        "neighbor_jaccard_distance",
-        "coordination_change_mean",
-        "coordination_change_max",
-        "rdf_l1_distance",
+    # Remove reports from the previous implementation, including
+    # outliers_epsilon.csv.
+    for old_path in output_dir.glob("outliers*.csv"):
+        old_path.unlink()
+
+    metrics = [
+        {
+            "name": "before_relax_steps",
+            "stage": "before_attack",
+            "getter": lambda row: topology_scalar_values(
+                row,
+                "before_relax_steps",
+            ),
+        },
+        {
+            "name": "after_relax_steps",
+            "stage": "after_relaxation",
+            "getter": lambda row: topology_scalar_values(
+                row,
+                "after_relax_steps",
+            ),
+        },
+        {
+            "name": "delta_force",
+            "stage": "before_relaxation",
+            "getter": lambda row: force_delta_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "perturbed_forces.csv",
+            ),
+        },
+        {
+            "name": "delta_force",
+            "stage": "after_relaxation",
+            "getter": lambda row: force_delta_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "after_forces.csv",
+            ),
+        },
+        {
+            "name": "delta_force_angle",
+            "stage": "before_relaxation",
+            "getter": lambda row: force_angle_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "perturbed_forces.csv",
+            ),
+        },
+        {
+            "name": "delta_force_angle",
+            "stage": "after_relaxation",
+            "getter": lambda row: force_angle_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "after_forces.csv",
+            ),
+        },
+        {
+            "name": "displacement",
+            "stage": "before_relaxation",
+            "getter": lambda row: displacement_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "perturbed_forces.csv",
+            ),
+        },
+        {
+            "name": "displacement",
+            "stage": "after_relaxation",
+            "getter": lambda row: displacement_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "after_forces.csv",
+            ),
+        },
+        {
+            "name": "neighbor_jaccard_distance",
+            "stage": "before_relaxation",
+            "getter": lambda row: topology_scalar_values(
+                row,
+                "perturbed_neighbor_jaccard_distance",
+            ),
+        },
+        {
+            "name": "neighbor_jaccard_distance",
+            "stage": "after_relaxation",
+            "getter": lambda row: topology_scalar_values(
+                row,
+                "neighbor_jaccard_distance",
+            ),
+        },
+        {
+            "name": "rdf_l1_distance",
+            "stage": "before_relaxation",
+            "getter": lambda row: topology_scalar_values(
+                row,
+                "perturbed_rdf_l1_distance",
+            ),
+        },
+        {
+            "name": "rdf_l1_distance",
+            "stage": "after_relaxation",
+            "getter": lambda row: topology_scalar_values(
+                row,
+                "rdf_l1_distance",
+            ),
+        },
+        {
+            "name": "coordination_change_mean",
+            "stage": "before_relaxation",
+            "getter": lambda row: topology_scalar_values(
+                row,
+                "perturbed_coordination_change_mean",
+            ),
+        },
+        {
+            "name": "coordination_change_mean",
+            "stage": "after_relaxation",
+            "getter": lambda row: topology_scalar_values(
+                row,
+                "coordination_change_mean",
+            ),
+        },
+        {
+            "name": "coordination_change_max",
+            "stage": "before_relaxation",
+            "getter": lambda row: topology_scalar_values(
+                row,
+                "perturbed_coordination_change_max",
+            ),
+        },
+        {
+            "name": "coordination_change_max",
+            "stage": "after_relaxation",
+            "getter": lambda row: topology_scalar_values(
+                row,
+                "coordination_change_max",
+            ),
+        },
+    ]
+
+    extra_columns = [
+        "outlier_metric",
+        "outlier_stage",
+        "outlier_value",
+        "outlier_value_index",
+        "outlier_q1",
+        "outlier_q3",
+        "outlier_iqr",
+        "outlier_lower_bound",
+        "outlier_upper_bound",
+        "epsilon_percent_box",
+        "minimum_epsilon_percent",
+    ]
+
+    output_columns = list(records.columns) + [
+        column
+        for column in extra_columns
+        if column not in records.columns
     ]
 
     all_rows = []
     summary_rows = []
 
-    group_cols = ["calculator", "attack_label"]
-    for column in metric_cols:
-        if column not in records.columns:
-            continue
+    for metric in metrics:
+        rows = collect_10pct_boxplot_outliers(
+            records=records,
+            metric_name=metric["name"],
+            stage=metric["stage"],
+            value_getter=metric["getter"],
+        )
 
-        data = records.copy()
-        data[column] = pd.to_numeric(data[column], errors="coerce")
-        rows = tukey_outlier_rows(data, group_cols, column)
+        filename = (
+            f"outliers_10pct_{metric['name']}_"
+            f"{metric['stage']}.csv"
+        )
 
-        pd.DataFrame(rows).to_csv(output_dir / f"outliers_{column}.csv", index=False)
+        pd.DataFrame(
+            rows,
+            columns=output_columns,
+        ).to_csv(
+            output_dir / filename,
+            index=False,
+        )
+
         summary_rows.append({
-            "metric": column,
-            "n_outliers": len(rows),
+            "metric": metric["name"],
+            "stage": metric["stage"],
+            "minimum_epsilon_percent": (
+                OUTLIER_MIN_EPSILON_PERCENT
+            ),
+            "outlier_observations": len(rows),
+            "outlier_runs": len({
+                row.get("run_id")
+                for row in rows
+                if row.get("run_id") is not None
+            }),
+            "outlier_materials": len({
+                row.get("material_slug")
+                for row in rows
+                if row.get("material_slug") is not None
+            }),
         })
+
         all_rows.extend(rows)
 
-    pd.DataFrame(all_rows).to_csv(output_dir / "outliers_all_metrics.csv", index=False)
-    pd.DataFrame(summary_rows).to_csv(output_dir / "outliers_summary.csv", index=False)
+    pd.DataFrame(
+        all_rows,
+        columns=output_columns,
+    ).to_csv(
+        output_dir / "outliers_10pct_all_metrics.csv",
+        index=False,
+    )
+
+    pd.DataFrame(summary_rows).to_csv(
+        output_dir / "outliers_10pct_summary.csv",
+        index=False,
+    )
+
+    if all_rows:
+        material_summary = (
+            pd.DataFrame(all_rows)
+            .groupby(
+                [
+                    "material_slug",
+                    "outlier_metric",
+                    "outlier_stage",
+                ],
+                dropna=False,
+            )
+            .agg(
+                outlier_observations=(
+                    "outlier_value",
+                    "size",
+                ),
+                outlier_runs=(
+                    "run_id",
+                    "nunique",
+                ),
+                calculators=(
+                    "calculator",
+                    "nunique",
+                ),
+                attacks=(
+                    "attack_label",
+                    "nunique",
+                ),
+                minimum_outlier_value=(
+                    "outlier_value",
+                    "min",
+                ),
+                median_outlier_value=(
+                    "outlier_value",
+                    "median",
+                ),
+                maximum_outlier_value=(
+                    "outlier_value",
+                    "max",
+                ),
+            )
+            .reset_index()
+            .sort_values(
+                [
+                    "outlier_runs",
+                    "outlier_observations",
+                ],
+                ascending=False,
+            )
+        )
+    else:
+        material_summary = pd.DataFrame(columns=[
+            "material_slug",
+            "outlier_metric",
+            "outlier_stage",
+            "outlier_observations",
+            "outlier_runs",
+            "calculators",
+            "attacks",
+            "minimum_outlier_value",
+            "median_outlier_value",
+            "maximum_outlier_value",
+        ])
+
+    material_summary.to_csv(
+        output_dir / "outliers_10pct_by_material.csv",
+        index=False,
+    )
 
 
 def make_topology_figures(records, output_dir):
@@ -4292,7 +4694,7 @@ def make_topology_figures(records, output_dir):
 
     save_topology_summary(clean, output_dir)
     make_topology_by_attack_type(clean, output_dir)
-    make_topology_material_ranking(clean, output_dir)
+    make_topology_material_rankings(clean, output_dir)
 
     for material_slug, material_records in clean.groupby("material_slug"):
         material_output_dir = output_dir / str(material_slug)
