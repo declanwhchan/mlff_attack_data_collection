@@ -50,7 +50,7 @@ controller_mode() {
   deactivate
 
   ARRAY_JOB_ID=$(sbatch --parsable \
-    --array=1-320%40 \
+    --array=1-320%80 \
     --time=7-00:00:00 \
     --mem=16G \
     --cpus-per-task=8 \
