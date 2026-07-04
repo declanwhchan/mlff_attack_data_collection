@@ -1636,6 +1636,10 @@ def make_paired_relaxation_figure(
     x_log=False,
     y_log=False,
 ):
+    # Relaxation differences may be zero or negative.
+    # Therefore, logarithmic axes are intentionally not used.
+    _ = x_log, y_log
+
     paired = paired_relaxation_rows(
         records,
         x_getters,
@@ -1645,21 +1649,56 @@ def make_paired_relaxation_figure(
     if paired.empty:
         return
 
-    grouped = grouped_relaxation_vectors(paired)
-    number_of_columns = len(attacks_to_plot)
+    paired["delta_x"] = (
+        paired["x_after"] - paired["x_before"]
+    )
+    paired["delta_y"] = (
+        paired["y_after"] - paired["y_before"]
+    )
+
+    grouped = (
+        paired.groupby(
+            [
+                "attack_label",
+                "calculator",
+                "epsilon",
+            ],
+            as_index=False,
+        )
+        .agg({
+            "delta_x": "median",
+            "delta_y": "median",
+        })
+    )
 
     fig, axes = plt.subplots(
         1,
-        number_of_columns,
-        figsize=(5.0 * number_of_columns, 4.8),
+        len(attacks_to_plot),
+        figsize=(5.0 * len(attacks_to_plot), 4.8),
         squeeze=False,
     )
     axes = axes.ravel()
 
-    marker_by_calculator = {
-        "mace": "o",
-        "uma": "s",
-    }
+    def full_limits(values):
+        values = np.asarray(values, dtype=float)
+        values = values[np.isfinite(values)]
+
+        if len(values) == 0:
+            return -1.0, 1.0
+
+        minimum = min(float(np.min(values)), 0.0)
+        maximum = max(float(np.max(values)), 0.0)
+        span = maximum - minimum
+
+        if not np.isfinite(span) or span <= 0:
+            span = max(
+                abs(minimum),
+                abs(maximum),
+                1.0,
+            )
+
+        padding = 0.10 * span
+        return minimum - padding, maximum + padding
 
     for column, attack in enumerate(attacks_to_plot):
         ax = axes[column]
@@ -1677,127 +1716,94 @@ def make_paired_relaxation_figure(
                 ha="center",
                 va="center",
             )
-            ax.set_title(attack)
-            add_panel_label(
-                ax,
-                chr(ord("A") + column),
+        else:
+            for calculator in ["mace", "uma"]:
+                calculator_data = attack_data[
+                    attack_data["calculator"] == calculator
+                ]
+
+                if calculator_data.empty:
+                    continue
+
+                ax.scatter(
+                    calculator_data["delta_x"],
+                    calculator_data["delta_y"],
+                    s=48,
+                    marker="o",
+                    color=CALCULATOR_COLORS[calculator],
+                    edgecolor="white",
+                    linewidth=0.7,
+                    alpha=0.90,
+                    zorder=3,
+                )
+
+            ax.set_xlim(
+                full_limits(attack_data["delta_x"])
             )
-            continue
-
-        for calculator in ["mace", "uma"]:
-            calculator_data = attack_data[
-                attack_data["calculator"] == calculator
-            ].sort_values("epsilon")
-
-            if calculator_data.empty:
-                continue
-
-            color = CALCULATOR_COLORS[calculator]
-            marker = marker_by_calculator[calculator]
-
-            # Immediate attack trend.
-            ax.plot(
-                calculator_data["x_before"],
-                calculator_data["y_before"],
-                color=color,
-                linestyle="--",
-                linewidth=1.25,
-                alpha=0.58,
-                zorder=2,
-            )
-            ax.scatter(
-                calculator_data["x_before"],
-                calculator_data["y_before"],
-                marker=marker,
-                s=34,
-                facecolor="white",
-                edgecolor=color,
-                linewidth=1.2,
-                alpha=0.78,
-                zorder=3,
+            ax.set_ylim(
+                full_limits(attack_data["delta_y"])
             )
 
-            # Final trend after relaxation.
-            ax.plot(
-                calculator_data["x_after"],
-                calculator_data["y_after"],
-                color=color,
-                linestyle="-",
-                linewidth=2.2,
-                alpha=0.92,
-                zorder=4,
-            )
-            ax.scatter(
-                calculator_data["x_after"],
-                calculator_data["y_after"],
-                marker=marker,
-                s=38,
-                facecolor=color,
-                edgecolor="white",
-                linewidth=0.7,
-                alpha=0.95,
-                zorder=5,
-            )
+        ax.axvline(
+            0.0,
+            color="#666666",
+            linestyle=":",
+            linewidth=0.9,
+            zorder=1,
+        )
+        ax.axhline(
+            0.0,
+            color="#666666",
+            linestyle=":",
+            linewidth=0.9,
+            zorder=1,
+        )
+
+        # Preserve the complete range when save_figure() is called.
+        ax._preserve_manual_limits = True
 
         ax.set_title(attack)
-        ax.set_xlabel(x_label)
-        ax.set_ylabel(y_label)
-        ax.grid(True, alpha=0.25)
-
-        if x_log:
-            apply_positive_log_axis(ax, "x")
-
-        if y_log:
-            apply_positive_log_axis(ax, "y")
+        ax.set_xlabel(
+            f"Relaxation change in {x_label}"
+        )
+        ax.set_ylabel(
+            f"Relaxation change in {y_label}"
+        )
+        ax.grid(True, alpha=0.22)
 
         add_panel_label(
             ax,
             chr(ord("A") + column),
         )
 
+    # Exactly two legend entries.
     legend_handles = [
         Line2D(
             [0],
             [0],
-            color=CALCULATOR_COLORS["mace"],
-            linestyle="--",
             marker="o",
-            markerfacecolor="white",
-            label="MACE, immediate",
-        ),
-        Line2D(
-            [0],
-            [0],
-            color=CALCULATOR_COLORS["mace"],
-            linestyle="-",
-            marker="o",
+            linestyle="none",
+            markersize=7,
             markerfacecolor=CALCULATOR_COLORS["mace"],
-            label="MACE, relaxed",
+            markeredgecolor="white",
+            label="MACE",
         ),
         Line2D(
             [0],
             [0],
-            color=CALCULATOR_COLORS["uma"],
-            linestyle="--",
-            marker="s",
-            markerfacecolor="white",
-            label="UMA, immediate",
-        ),
-        Line2D(
-            [0],
-            [0],
-            color=CALCULATOR_COLORS["uma"],
-            linestyle="-",
-            marker="s",
+            marker="o",
+            linestyle="none",
+            markersize=7,
             markerfacecolor=CALCULATOR_COLORS["uma"],
-            label="UMA, relaxed",
+            markeredgecolor="white",
+            label="UMA",
         ),
     ]
 
     fig.legend(
         handles=legend_handles,
         loc="upper center",
-        ncol=4,
+        ncol=2,
         bbox_to_anchor=(0.5, 0.985),
         frameon=False,
     )
@@ -1810,10 +1816,11 @@ def make_paired_relaxation_figure(
 
     fig.text(
         0.5,
-        0.015,
+        0.012,
         (
-            "Points are grouped medians across materials and "
-            "ordered by increasing epsilon"
+            "Each circle = median(after perturbation and relaxation "
+            "- after perturbation before relaxation) "
+            "across materials at one epsilon"
         ),
         ha="center",
         fontsize=8.5,
@@ -1821,7 +1828,7 @@ def make_paired_relaxation_figure(
     )
 
     fig.tight_layout(
-        rect=[0.03, 0.05, 1.0, 0.89]
+        rect=[0.03, 0.06, 1.0, 0.89]
     )
 
     save_figure(
