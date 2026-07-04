@@ -3229,216 +3229,396 @@ def finite_metric_data(data, columns):
     return clean.copy()
 
 
-def make_topology_by_attack_type(records, output_dir):
-    data = records[
-        records["attack_label"].notna()
-        & records["neighbor_jaccard_distance"].notna()
-        & records["coordination_change_max"].notna()
-        & records["rdf_l1_distance"].notna()
-    ].copy()
+def material_ranking_value(row, value_getter):
+    """Return one median value per run."""
+    values, reason = value_getter(row)
 
-    if data.empty:
-        return
+    if values is None:
+        return np.nan
 
-    data["has_topology_change"] = (
-        (data["neighbor_jaccard_distance"].abs() > 1e-12)
-        | (data["coordination_change_max"].abs() > 1e-12)
-        | (data["rdf_l1_distance"].abs() > 1e-12)
+    values = np.asarray(values, dtype=float).reshape(-1)
+    values = values[np.isfinite(values)]
+
+    if len(values) == 0:
+        return np.nan
+
+    return float(np.median(values))
+
+
+def save_material_ranking_plot(
+    records,
+    output_path,
+    title,
+    xlabel,
+    value_getter,
+    max_materials=20,
+):
+    """Rank materials using median run values and raw units."""
+    rows = []
+
+    for _, row in records.iterrows():
+        value = material_ranking_value(
+            row,
+            value_getter,
+        )
+
+        if not np.isfinite(value):
+            continue
+
+        rows.append({
+            "material_slug": row.get("material_slug"),
+            "calculator": row.get("calculator"),
+            "value": value,
+        })
+
+    data = pd.DataFrame(
+        rows,
+        columns=[
+            "material_slug",
+            "calculator",
+            "value",
+        ],
     )
 
-    attacks = [attack for attack in ATTACK_ORDER if attack in set(data["attack_label"])]
-    positions = np.arange(len(attacks))
+    if not data.empty:
+        data = data.dropna(
+            subset=[
+                "material_slug",
+                "calculator",
+                "value",
+            ]
+        )
 
-    fig, ax = plt.subplots(figsize=(7.2, 4.2))
-    width = 0.34
+    if data.empty:
+        fig, ax = plt.subplots(figsize=(7.8, 4.5))
+        ax.text(
+            0.5,
+            0.5,
+            "No available data",
+            transform=ax.transAxes,
+            ha="center",
+            va="center",
+        )
+        ax.set_title(title)
+        ax.set_axis_off()
+        fig.tight_layout()
+        fig.savefig(
+            output_path,
+            dpi=300,
+            bbox_inches="tight",
+        )
+        plt.close(fig)
+        return
 
-    for offset, calculator in [(-width / 2, "mace"), (width / 2, "uma")]:
-        calc_data = data[data["calculator"] == calculator]
-        rates = []
+    # First condense repeated runs for each material and model.
+    material_model_values = (
+        data.groupby(
+            ["material_slug", "calculator"],
+            as_index=False,
+        )["value"]
+        .median()
+    )
 
-        for attack in attacks:
-            group = calc_data[calc_data["attack_label"] == attack]
-            rates.append(np.nan if group.empty else 100.0 * float(group["has_topology_change"].mean()))
+    # Sort using the median across MACE and UMA.
+    ranking = (
+        material_model_values
+        .groupby("material_slug")["value"]
+        .median()
+        .sort_values(ascending=False)
+        .head(max_materials)
+    )
 
-        ax.bar(
-            positions + offset,
-            rates,
-            width=width,
+    material_order = list(ranking.index[::-1])
+
+    model_values = material_model_values.pivot(
+        index="material_slug",
+        columns="calculator",
+        values="value",
+    ).reindex(material_order)
+
+    figure_height = max(
+        4.5,
+        0.34 * len(material_order) + 1.5,
+    )
+
+    fig, ax = plt.subplots(
+        figsize=(7.8, figure_height)
+    )
+
+    y = np.arange(len(material_order))
+    bar_height = 0.36
+
+    for calculator, offset in [
+        ("mace", -bar_height / 2),
+        ("uma", bar_height / 2),
+    ]:
+        if calculator not in model_values.columns:
+            continue
+
+        ax.barh(
+            y + offset,
+            model_values[calculator].to_numpy(
+                dtype=float
+            ),
+            height=bar_height,
             color=CALCULATOR_COLORS[calculator],
             alpha=0.78,
             label=calculator.upper(),
         )
 
-    ax.set_xticks(positions)
-    ax.set_xticklabels(attacks)
-    ax.set_xlabel("Attack type")
-    ax.set_ylabel("Runs with topology change (%)")
-    ax.set_title("Topology-change rate by attack type")
-    ax.grid(True, axis="y", alpha=0.28)
-    ax.legend(frameon=False, ncol=2)
-
-    if data["has_topology_change"].sum() == 0:
-        ax.set_ylim(0, 5)
-        ax.text(
-            0.5,
-            0.82,
-            "No neighbor, coordination, or RDF topology changes detected",
-            transform=ax.transAxes,
-            ha="center",
-            va="center",
-            fontsize=8,
-            color="#555555",
-        )
-    else:
-        max_rate = data.groupby(["calculator", "attack_label"])["has_topology_change"].mean().max() * 100.0
-        ax.set_ylim(0, min(100.0, max(5.0, max_rate * 1.25)))
+    ax.set_yticks(y)
+    ax.set_yticklabels(material_order)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel("Material")
+    ax.set_title(title)
+    ax.grid(True, axis="x", alpha=0.28)
+    ax.grid(False, axis="y")
+    ax.legend(
+        frameon=False,
+        ncol=2,
+        loc="lower right",
+    )
 
     fig.tight_layout()
-    fig.savefig(output_dir / "topology_by_attack_type.png", dpi=300, bbox_inches="tight")
+    fig.savefig(
+        output_path,
+        dpi=300,
+        bbox_inches="tight",
+    )
     plt.close(fig)
 
 
-def make_topology_material_rankings(
+def make_material_rankings(
     records,
     output_dir,
-    max_materials=20,
 ):
-    """Create separate material rankings using raw topology metrics."""
+    """Generate six immediate and seven relaxed rankings."""
     output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
 
-    old_path = output_dir / "topology_material_ranking.png"
-    if old_path.exists():
-        old_path.unlink()
+    immediate_dir = (
+        output_dir
+        / "after_attack_before_relaxation"
+    )
+    relaxed_dir = (
+        output_dir
+        / "after_attack_after_relaxation"
+    )
 
-    metrics = [
+    immediate_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    relaxed_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    # Remove stale ranking plots, including a previously generated
+    # baseline convergence ranking.
+    for old_plot in output_dir.rglob("*.png"):
+        old_plot.unlink()
+
+    immediate_metrics = [
         {
-            "column": "neighbor_jaccard_distance",
-            "xlabel": "Mean neighbor Jaccard distance",
-            "title": "Material ranking: neighbor Jaccard distance",
-            "filename": "material_jaccard_distance.png",
+            "filename": "delta_force.png",
+            "title": (
+                "Material ranking: delta force "
+                "after attack, before relaxation"
+            ),
+            "xlabel": (
+                r"Median $\Delta$ force "
+                r"(eV/$\AA$)"
+            ),
+            "getter": lambda row: force_delta_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "perturbed_forces.csv",
+            ),
         },
         {
-            "column": "rdf_l1_distance",
-            "xlabel": "Mean RDF L1 distance",
-            "title": "Material ranking: RDF L1 distance",
-            "filename": "material_rdf_l1_distance.png",
+            "filename": "delta_force_angle.png",
+            "title": (
+                "Material ranking: force-vector angle "
+                "after attack, before relaxation"
+            ),
+            "xlabel": "Median force-vector angle (degrees)",
+            "getter": lambda row: force_angle_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "perturbed_forces.csv",
+            ),
         },
         {
-            "column": "coordination_change_max",
-            "xlabel": "Mean maximum coordination-number change",
-            "title": "Material ranking: coordination-number change",
-            "filename": "material_coordination_change.png",
+            "filename": "displacement.png",
+            "title": (
+                "Material ranking: displacement "
+                "after attack, before relaxation"
+            ),
+            "xlabel": r"Median displacement ($\AA$)",
+            "getter": lambda row: displacement_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "perturbed_forces.csv",
+            ),
+        },
+        {
+            "filename": "neighbor_jaccard_distance.png",
+            "title": (
+                "Material ranking: neighbor Jaccard distance "
+                "after attack, before relaxation"
+            ),
+            "xlabel": "Median neighbor Jaccard distance",
+            "getter": lambda row: topology_scalar_values(
+                row,
+                "perturbed_neighbor_jaccard_distance",
+            ),
+        },
+        {
+            "filename": "rdf_l1_distance.png",
+            "title": (
+                "Material ranking: RDF L1 distance "
+                "after attack, before relaxation"
+            ),
+            "xlabel": "Median RDF L1 distance",
+            "getter": lambda row: topology_scalar_values(
+                row,
+                "perturbed_rdf_l1_distance",
+            ),
+        },
+        {
+            "filename": "coordination_change.png",
+            "title": (
+                "Material ranking: coordination-number change "
+                "after attack, before relaxation"
+            ),
+            "xlabel": (
+                "Median maximum coordination-number change"
+            ),
+            "getter": lambda row: topology_scalar_values(
+                row,
+                "perturbed_coordination_change_max",
+            ),
         },
     ]
 
-    for metric in metrics:
-        column = metric["column"]
+    relaxed_metrics = [
+        {
+            "filename": "convergence_steps.png",
+            "title": (
+                "Material ranking: relaxation steps "
+                "after attack and relaxation"
+            ),
+            "xlabel": (
+                "Median post-attack relaxation steps"
+            ),
+            "getter": lambda row: topology_scalar_values(
+                row,
+                "after_relax_steps",
+            ),
+        },
+        {
+            "filename": "delta_force.png",
+            "title": (
+                "Material ranking: delta force "
+                "after attack and relaxation"
+            ),
+            "xlabel": (
+                r"Median $\Delta$ force "
+                r"(eV/$\AA$)"
+            ),
+            "getter": lambda row: force_delta_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "after_forces.csv",
+            ),
+        },
+        {
+            "filename": "delta_force_angle.png",
+            "title": (
+                "Material ranking: force-vector angle "
+                "after attack and relaxation"
+            ),
+            "xlabel": "Median force-vector angle (degrees)",
+            "getter": lambda row: force_angle_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "after_forces.csv",
+            ),
+        },
+        {
+            "filename": "displacement.png",
+            "title": (
+                "Material ranking: displacement "
+                "after attack and relaxation"
+            ),
+            "xlabel": r"Median displacement ($\AA$)",
+            "getter": lambda row: displacement_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "after_forces.csv",
+            ),
+        },
+        {
+            "filename": "neighbor_jaccard_distance.png",
+            "title": (
+                "Material ranking: neighbor Jaccard distance "
+                "after attack and relaxation"
+            ),
+            "xlabel": "Median neighbor Jaccard distance",
+            "getter": lambda row: topology_scalar_values(
+                row,
+                "neighbor_jaccard_distance",
+            ),
+        },
+        {
+            "filename": "rdf_l1_distance.png",
+            "title": (
+                "Material ranking: RDF L1 distance "
+                "after attack and relaxation"
+            ),
+            "xlabel": "Median RDF L1 distance",
+            "getter": lambda row: topology_scalar_values(
+                row,
+                "rdf_l1_distance",
+            ),
+        },
+        {
+            "filename": "coordination_change.png",
+            "title": (
+                "Material ranking: coordination-number change "
+                "after attack and relaxation"
+            ),
+            "xlabel": (
+                "Median maximum coordination-number change"
+            ),
+            "getter": lambda row: topology_scalar_values(
+                row,
+                "coordination_change_max",
+            ),
+        },
+    ]
 
-        if column not in records.columns:
-            continue
-
-        data = records[
-            ["material_slug", "calculator", column]
-        ].copy()
-
-        data[column] = pd.to_numeric(
-            data[column],
-            errors="coerce",
-        )
-
-        data = (
-            data.replace([np.inf, -np.inf], np.nan)
-            .dropna(
-                subset=[
-                    "material_slug",
-                    "calculator",
-                    column,
-                ]
-            )
-        )
-
-        if data.empty:
-            continue
-
-        material_model_means = (
-            data.groupby(
-                ["material_slug", "calculator"],
-                as_index=False,
-            )[column]
-            .mean()
-        )
-
-        ranking = (
-            material_model_means
-            .groupby("material_slug")[column]
-            .mean()
-            .sort_values(ascending=False)
-            .head(max_materials)
-        )
-
-        if ranking.empty:
-            continue
-
-        material_order = list(ranking.index[::-1])
-
-        model_values = material_model_means.pivot(
-            index="material_slug",
-            columns="calculator",
-            values=column,
-        ).reindex(material_order)
-
-        figure_height = max(
-            4.5,
-            0.34 * len(material_order) + 1.5,
-        )
-
-        fig, ax = plt.subplots(
-            figsize=(7.8, figure_height)
-        )
-
-        y = np.arange(len(material_order))
-        bar_height = 0.36
-
-        for calculator, offset in [
-            ("mace", -bar_height / 2),
-            ("uma", bar_height / 2),
-        ]:
-            if calculator not in model_values.columns:
-                continue
-
-            ax.barh(
-                y + offset,
-                model_values[calculator].to_numpy(dtype=float),
-                height=bar_height,
-                color=CALCULATOR_COLORS[calculator],
-                alpha=0.78,
-                label=calculator.upper(),
-            )
-
-        ax.set_yticks(y)
-        ax.set_yticklabels(material_order)
-
-        topology_metric_axes(
-            ax,
-            xlabel=metric["xlabel"],
-            ylabel="Material",
+    for metric in immediate_metrics:
+        save_material_ranking_plot(
+            records=records,
+            output_path=(
+                immediate_dir / metric["filename"]
+            ),
             title=metric["title"],
+            xlabel=metric["xlabel"],
+            value_getter=metric["getter"],
         )
 
-        ax.legend(
-            frameon=False,
-            ncol=2,
-            loc="lower right",
+    for metric in relaxed_metrics:
+        save_material_ranking_plot(
+            records=records,
+            output_path=(
+                relaxed_dir / metric["filename"]
+            ),
+            title=metric["title"],
+            xlabel=metric["xlabel"],
+            value_getter=metric["getter"],
         )
-
-        fig.tight_layout()
-        fig.savefig(
-            output_dir / metric["filename"],
-            dpi=300,
-            bbox_inches="tight",
-        )
-        plt.close(fig)
 
 
 COMPONENTS = ["x", "y", "z"]
@@ -4687,21 +4867,30 @@ def make_topology_figures(records, output_dir):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Remove material rankings generated by older versions.
+    for old_name in [
+        "topology_material_ranking.png",
+        "material_jaccard_distance.png",
+        "material_rdf_l1_distance.png",
+        "material_coordination_change.png",
+    ]:
+        old_path = output_dir / old_name
+
+        if old_path.exists():
+            old_path.unlink()
+
     clean = records.copy()
     for column in TOPOLOGY_METRICS + ["mean_displacement", "epsilon", "n_steps"]:
         if column in clean.columns:
             clean[column] = pd.to_numeric(clean[column], errors="coerce")
 
     save_topology_summary(clean, output_dir)
-    make_topology_by_attack_type(clean, output_dir)
-    make_topology_material_rankings(clean, output_dir)
 
     for material_slug, material_records in clean.groupby("material_slug"):
         material_output_dir = output_dir / str(material_slug)
         material_output_dir.mkdir(parents=True, exist_ok=True)
 
         save_topology_summary(material_records, material_output_dir)
-        make_topology_by_attack_type(material_records, material_output_dir)
 
         material_epsilon_records = material_records[
             ~material_records["run_id"].str.contains(
@@ -4782,6 +4971,11 @@ def main():
     n_step_records = records[
         records["run_id"].str.contains("_steps", regex=False)
     ].copy()
+
+    make_material_rankings(
+        epsilon_records,
+        args.output_dir / "materials_ranking",
+    )
 
     make_convergence_figure(epsilon_records, args.output_dir)
     make_lattice_axis_component_figures(
