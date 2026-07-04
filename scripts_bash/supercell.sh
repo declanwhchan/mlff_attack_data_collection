@@ -50,7 +50,7 @@ controller_mode() {
   deactivate
 
   ARRAY_JOB_ID=$(sbatch --parsable \
-    --array=1-216%40 \
+    --array=1-320%40 \
     --time=7-00:00:00 \
     --mem=16G \
     --cpus-per-task=8 \
@@ -155,7 +155,7 @@ plot_mode() {
     --mace-summary "$SUPER_ROOT/outputs_float64/mace/summary.csv" \
     --uma-summary "$SUPER_ROOT/outputs_float64/uma/summary.csv" \
     --output-dir "$SUPER_COMPREHENSIVE_DIR" \
-    --epsilon 0.1
+    --epsilon 0.01
 
   deactivate
 
