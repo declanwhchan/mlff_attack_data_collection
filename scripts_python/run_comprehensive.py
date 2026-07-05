@@ -4578,7 +4578,7 @@ def make_outlier_reports(records, output_dir):
     metrics = [
         {
             "name": "before_relax_steps",
-            "stage": "before_attack",
+            "stage": "relaxation_before_attack",
             "getter": lambda row: topology_scalar_values(
                 row,
                 "before_relax_steps",
@@ -4586,7 +4586,7 @@ def make_outlier_reports(records, output_dir):
         },
         {
             "name": "after_relax_steps",
-            "stage": "after_relaxation",
+            "stage": "relaxation_after_attack",
             "getter": lambda row: topology_scalar_values(
                 row,
                 "after_relax_steps",
