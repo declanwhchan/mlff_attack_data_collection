@@ -1,0 +1,2 @@
+# Bash scripts should use LF for HPC/Linux
+*.sh text eol=lf
