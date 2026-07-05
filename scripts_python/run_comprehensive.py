@@ -12,6 +12,11 @@ from matplotlib.ticker import MaxNLocator, ScalarFormatter, FuncFormatter, Fixed
 import numpy as np
 import pandas as pd
 from ase.io import read as read_structure
+from run_tests import (
+    coordination_by_atom,
+    neighbor_edge_set,
+    rdf_l1_distance,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -3229,6 +3234,199 @@ def finite_metric_data(data, columns):
     return clean.copy()
 
 
+BASELINE_RANKING_CACHE = {}
+
+
+def baseline_relaxation_path(row):
+    value = clean_value(row.get("before_relax_traj"))
+
+    if value is not None:
+        return Path(str(value))
+
+    return (
+        Path(str(row["run_dir"]))
+        / "before_attack_relaxation.traj"
+    )
+
+
+def empty_baseline_metrics():
+    return {
+        "convergence_steps": np.nan,
+        "delta_force": np.nan,
+        "delta_force_angle": np.nan,
+        "displacement": np.nan,
+        "neighbor_jaccard_distance": np.nan,
+        "rdf_l1_distance": np.nan,
+        "coordination_change_max": np.nan,
+    }
+
+
+def calculate_baseline_ranking_metrics(row):
+    """Compare the initial and relaxed structures before attack."""
+    trajectory_path = baseline_relaxation_path(row)
+    cache_key = str(trajectory_path)
+
+    if cache_key in BASELINE_RANKING_CACHE:
+        return BASELINE_RANKING_CACHE[cache_key]
+
+    metrics = empty_baseline_metrics()
+
+    steps = as_float(row.get("before_relax_steps"))
+
+    if steps is not None and np.isfinite(steps):
+        metrics["convergence_steps"] = float(steps)
+
+    try:
+        initial = read_structure(
+            trajectory_path,
+            index=0,
+        )
+        relaxed = read_structure(
+            trajectory_path,
+            index=-1,
+        )
+    except Exception:
+        BASELINE_RANKING_CACHE[cache_key] = metrics
+        return metrics
+
+    if len(initial) != len(relaxed):
+        BASELINE_RANKING_CACHE[cache_key] = metrics
+        return metrics
+
+    displacement = np.linalg.norm(
+        relaxed.positions - initial.positions,
+        axis=1,
+    )
+
+    if len(displacement):
+        metrics["displacement"] = float(
+            np.median(displacement)
+        )
+
+    try:
+        initial_forces = np.asarray(
+            initial.get_forces(),
+            dtype=float,
+        )
+        relaxed_forces = np.asarray(
+            relaxed.get_forces(),
+            dtype=float,
+        )
+
+        delta_force = np.linalg.norm(
+            relaxed_forces - initial_forces,
+            axis=1,
+        )
+
+        if len(delta_force):
+            metrics["delta_force"] = float(
+                np.median(delta_force)
+            )
+
+        initial_norm = np.linalg.norm(
+            initial_forces,
+            axis=1,
+        )
+        relaxed_norm = np.linalg.norm(
+            relaxed_forces,
+            axis=1,
+        )
+
+        denominator = initial_norm * relaxed_norm
+        valid = denominator > 0
+
+        if np.any(valid):
+            cosine = np.clip(
+                np.sum(
+                    initial_forces[valid]
+                    * relaxed_forces[valid],
+                    axis=1,
+                )
+                / denominator[valid],
+                -1.0,
+                1.0,
+            )
+
+            angles = np.degrees(
+                np.arccos(cosine)
+            )
+
+            if len(angles):
+                metrics["delta_force_angle"] = float(
+                    np.median(angles)
+                )
+
+    except Exception:
+        pass
+
+    try:
+        initial_edges = neighbor_edge_set(initial)
+        relaxed_edges = neighbor_edge_set(relaxed)
+
+        union = initial_edges | relaxed_edges
+
+        if union:
+            metrics["neighbor_jaccard_distance"] = (
+                1.0
+                - len(initial_edges & relaxed_edges)
+                / len(union)
+            )
+        else:
+            metrics["neighbor_jaccard_distance"] = 0.0
+
+        initial_coordination = coordination_by_atom(
+            initial_edges,
+            initial,
+        )
+        relaxed_coordination = coordination_by_atom(
+            relaxed_edges,
+            relaxed,
+        )
+
+        atom_keys = (
+            set(initial_coordination)
+            | set(relaxed_coordination)
+        )
+
+        coordination_changes = [
+            abs(
+                relaxed_coordination.get(atom, 0)
+                - initial_coordination.get(atom, 0)
+            )
+            for atom in atom_keys
+        ]
+
+        metrics["coordination_change_max"] = (
+            float(np.max(coordination_changes))
+            if coordination_changes
+            else 0.0
+        )
+
+        metrics["rdf_l1_distance"] = float(
+            rdf_l1_distance(
+                initial,
+                relaxed,
+            )
+        )
+
+    except Exception:
+        pass
+
+    BASELINE_RANKING_CACHE[cache_key] = metrics
+    return metrics
+
+
+def baseline_ranking_value(row, metric):
+    value = calculate_baseline_ranking_metrics(
+        row
+    ).get(metric, np.nan)
+
+    if value is None or not np.isfinite(value):
+        return None, f"Missing baseline {metric}"
+
+    return np.asarray([value], dtype=float), None
+
+
 def material_ranking_value(row, value_getter):
     """Return one median value per run."""
     values, reason = value_getter(row)
@@ -3392,9 +3590,13 @@ def make_material_rankings(
     records,
     output_dir,
 ):
-    """Generate six immediate and seven relaxed rankings."""
+    """Generate seven baseline, six immediate and seven final rankings."""
     output_dir = Path(output_dir)
 
+    baseline_dir = (
+        output_dir
+        / "before_attack_after_relaxation"
+    )
     immediate_dir = (
         output_dir
         / "after_attack_before_relaxation"
@@ -3404,6 +3606,10 @@ def make_material_rankings(
         / "after_attack_after_relaxation"
     )
 
+    baseline_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
     immediate_dir.mkdir(
         parents=True,
         exist_ok=True,
@@ -3417,6 +3623,106 @@ def make_material_rankings(
     # baseline convergence ranking.
     for old_plot in output_dir.rglob("*.png"):
         old_plot.unlink()
+
+    baseline_metrics = [
+        {
+            "filename": "convergence_steps.png",
+            "title": (
+                "Material ranking: relaxation steps "
+                "before attack"
+            ),
+            "xlabel": (
+                "Median initial relaxation steps"
+            ),
+            "getter": lambda row: baseline_ranking_value(
+                row,
+                "convergence_steps",
+            ),
+        },
+        {
+            "filename": "delta_force.png",
+            "title": (
+                "Material ranking: delta force "
+                "during relaxation before attack"
+            ),
+            "xlabel": (
+                r"Median $\Delta$ force "
+                r"(eV/$\AA$)"
+            ),
+            "getter": lambda row: baseline_ranking_value(
+                row,
+                "delta_force",
+            ),
+        },
+        {
+            "filename": "delta_force_angle.png",
+            "title": (
+                "Material ranking: force-vector angle "
+                "during relaxation before attack"
+            ),
+            "xlabel": (
+                "Median force-vector angle (degrees)"
+            ),
+            "getter": lambda row: baseline_ranking_value(
+                row,
+                "delta_force_angle",
+            ),
+        },
+        {
+            "filename": "displacement.png",
+            "title": (
+                "Material ranking: displacement "
+                "during relaxation before attack"
+            ),
+            "xlabel": (
+                r"Median displacement ($\AA$)"
+            ),
+            "getter": lambda row: baseline_ranking_value(
+                row,
+                "displacement",
+            ),
+        },
+        {
+            "filename": "neighbor_jaccard_distance.png",
+            "title": (
+                "Material ranking: neighbor Jaccard distance "
+                "during relaxation before attack"
+            ),
+            "xlabel": (
+                "Median neighbor Jaccard distance"
+            ),
+            "getter": lambda row: baseline_ranking_value(
+                row,
+                "neighbor_jaccard_distance",
+            ),
+        },
+        {
+            "filename": "rdf_l1_distance.png",
+            "title": (
+                "Material ranking: RDF L1 distance "
+                "during relaxation before attack"
+            ),
+            "xlabel": "Median RDF L1 distance",
+            "getter": lambda row: baseline_ranking_value(
+                row,
+                "rdf_l1_distance",
+            ),
+        },
+        {
+            "filename": "coordination_change.png",
+            "title": (
+                "Material ranking: coordination-number change "
+                "during relaxation before attack"
+            ),
+            "xlabel": (
+                "Median maximum coordination-number change"
+            ),
+            "getter": lambda row: baseline_ranking_value(
+                row,
+                "coordination_change_max",
+            ),
+        },
+    ]
 
     immediate_metrics = [
         {
@@ -3597,6 +3903,18 @@ def make_material_rankings(
             ),
         },
     ]
+
+
+    for metric in baseline_metrics:
+        save_material_ranking_plot(
+            records=records,
+            output_path=(
+                baseline_dir / metric["filename"]
+            ),
+            title=metric["title"],
+            xlabel=metric["xlabel"],
+            value_getter=metric["getter"],
+        )
 
     for metric in immediate_metrics:
         save_material_ranking_plot(
