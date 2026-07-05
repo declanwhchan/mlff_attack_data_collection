@@ -6,6 +6,8 @@
   "relax_optimizer": "LBFGS",
   "contour_pre_relax_fmax": 0.01,
   "contour_pre_relax_max_steps": 300,
+  "contour_post_relax_fmax": 0.01,
+  "contour_post_relax_max_steps": 300,
   "contour_betas": [0.1, 0.05, 0.0],
   "contour_steps": 500,
   "contour_maxstep": 0.01,

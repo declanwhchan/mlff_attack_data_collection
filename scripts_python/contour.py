@@ -14,6 +14,11 @@ from ase.neighborlist import neighbor_list
 from ase.optimize import LBFGS
 
 from mlff_attack.relaxation import setup_calculator
+from run_tests import (
+    coordination_by_atom,
+    neighbor_edge_set,
+    rdf_l1_distance,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -219,6 +224,138 @@ def relax_if_requested(atoms, fmax, max_steps):
     return relaxed
 
 
+def median_force_angle(initial_forces, final_forces):
+    initial_forces = np.asarray(initial_forces, dtype=float)
+    final_forces = np.asarray(final_forces, dtype=float)
+
+    initial_norm = np.linalg.norm(
+        initial_forces,
+        axis=1,
+    )
+    final_norm = np.linalg.norm(
+        final_forces,
+        axis=1,
+    )
+
+    denominator = initial_norm * final_norm
+
+    valid = (
+        np.isfinite(denominator)
+        & (denominator > 1e-12)
+    )
+
+    if not np.any(valid):
+        return np.nan
+
+    cosine = np.clip(
+        np.sum(
+            initial_forces[valid]
+            * final_forces[valid],
+            axis=1,
+        )
+        / denominator[valid],
+        -1.0,
+        1.0,
+    )
+
+    return float(
+        np.median(
+            np.degrees(np.arccos(cosine))
+        )
+    )
+
+
+def endpoint_topology_metrics(initial_atoms, final_atoms):
+    initial_edges = neighbor_edge_set(initial_atoms)
+    final_edges = neighbor_edge_set(final_atoms)
+    union_edges = initial_edges | final_edges
+
+    if union_edges:
+        jaccard = 1.0 - (
+            len(initial_edges & final_edges)
+            / len(union_edges)
+        )
+    else:
+        jaccard = 0.0
+
+    initial_coordination = coordination_by_atom(
+        initial_edges,
+        initial_atoms,
+    )
+    final_coordination = coordination_by_atom(
+        final_edges,
+        final_atoms,
+    )
+
+    atom_keys = (
+        set(initial_coordination)
+        | set(final_coordination)
+    )
+
+    coordination_changes = [
+        abs(
+            final_coordination.get(atom, 0)
+            - initial_coordination.get(atom, 0)
+        )
+        for atom in atom_keys
+    ]
+
+    return {
+        "contour_relaxed_neighbor_jaccard_distance": (
+            float(jaccard)
+        ),
+        "contour_relaxed_rdf_l1_distance": float(
+            rdf_l1_distance(
+                initial_atoms,
+                final_atoms,
+            )
+        ),
+        "contour_relaxed_coordination_change_max": (
+            float(np.max(coordination_changes))
+            if coordination_changes
+            else 0.0
+        ),
+    }
+
+
+def relax_contour_endpoint(
+    atoms,
+    trajectory_path,
+    fmax,
+    max_steps,
+):
+    relaxed = atoms.copy()
+    relaxed.calc = atoms.calc
+
+    optimizer = LBFGS(
+        relaxed,
+        logfile=None,
+        trajectory=str(trajectory_path),
+    )
+
+    optimizer.run(
+        fmax=fmax,
+        steps=max_steps,
+    )
+
+    final_forces = relaxed.get_forces()
+
+    maximum_force = float(
+        np.max(
+            np.linalg.norm(
+                final_forces,
+                axis=1,
+            )
+        )
+    )
+
+    return (
+        relaxed,
+        int(optimizer.get_number_of_steps()),
+        maximum_force,
+    )
+
+
 def run_contour(job, beta, config, args):
     calculator = job["calculator"]
     material_slug = job["material_slug"]
@@ -232,9 +369,19 @@ def run_contour(job, beta, config, args):
 
     pre_relax_fmax = as_float(config.get("contour_pre_relax_fmax"), None)
     pre_relax_steps = as_int(config.get("contour_pre_relax_max_steps"), 0)
-    atoms = relax_if_requested(atoms, pre_relax_fmax, pre_relax_steps)
+    atoms = relax_if_requested(
+        atoms,
+        pre_relax_fmax,
+        pre_relax_steps,
+    )
 
-    initial_velocities(atoms, seed + int(round(beta * 1000)))
+    initial_atoms = atoms.copy()
+    initial_atoms.calc = atoms.calc
+
+    initial_velocities(
+        atoms,
+        seed + int(round(beta * 1000)),
+    )
 
     energy_target = as_float(args.energy_target, as_float(config.get("contour_energy_target"), None))
     initial_energy = float(atoms.get_potential_energy())
@@ -296,8 +443,127 @@ def run_contour(job, beta, config, args):
         dyn.run(1)
 
     metrics = pd.DataFrame(rows)
-    metrics.to_csv(outdir / "contour_metrics.csv", index=False)
-    atoms.write(outdir / "final_contour.cif")
+    metrics.to_csv(
+        outdir / "contour_metrics.csv",
+        index=False,
+    )
+
+    final_contour_path = (
+        outdir / "final_contour.cif"
+    )
+    atoms.write(final_contour_path)
+
+    post_relax_fmax = as_float(
+        config.get("contour_post_relax_fmax"),
+        as_float(config.get("relax_fmax"), 0.01),
+    )
+    post_relax_steps = as_int(
+        config.get("contour_post_relax_max_steps"),
+        as_int(config.get("relax_max_steps"), 300),
+    )
+
+    relaxed_trajectory_path = (
+        outdir / "contour_endpoint_relaxation.traj"
+    )
+    relaxed_cif_path = (
+        outdir / "final_contour_relaxed.cif"
+    )
+
+    relaxed_summary = {
+        "contour_endpoint_relaxation_status": "failed",
+        "contour_endpoint_relaxation_error": "",
+        "final_contour_relaxed_cif": "",
+        "contour_endpoint_relaxation_traj": "",
+        "contour_endpoint_relaxation_steps": np.nan,
+        "contour_endpoint_relaxation_converged": False,
+        "contour_endpoint_relaxation_max_force_ev_a": np.nan,
+        "contour_relaxed_median_displacement_a": np.nan,
+        "contour_relaxed_median_force_delta_ev_a": np.nan,
+        "contour_relaxed_force_angle_deg": np.nan,
+        "contour_relaxed_neighbor_jaccard_distance": np.nan,
+        "contour_relaxed_rdf_l1_distance": np.nan,
+        "contour_relaxed_coordination_change_max": np.nan,
+    }
+
+    try:
+        (
+            relaxed_atoms,
+            relaxed_steps,
+            relaxed_max_force,
+        ) = relax_contour_endpoint(
+            atoms,
+            relaxed_trajectory_path,
+            post_relax_fmax,
+            post_relax_steps,
+        )
+
+        relaxed_atoms.write(relaxed_cif_path)
+
+        relaxed_positions = (
+            relaxed_atoms.get_positions()
+        )
+        relaxed_forces = (
+            relaxed_atoms.get_forces()
+        )
+
+        relaxed_displacement = np.linalg.norm(
+            relaxed_positions - initial_positions,
+            axis=1,
+        )
+        relaxed_force_delta = np.linalg.norm(
+            relaxed_forces - initial_forces,
+            axis=1,
+        )
+
+        relaxed_summary.update({
+            "contour_endpoint_relaxation_status": (
+                "success"
+            ),
+            "final_contour_relaxed_cif": str(
+                relaxed_cif_path
+            ),
+            "contour_endpoint_relaxation_traj": str(
+                relaxed_trajectory_path
+            ),
+            "contour_endpoint_relaxation_steps": (
+                relaxed_steps
+            ),
+            "contour_endpoint_relaxation_converged": (
+                relaxed_max_force <= post_relax_fmax
+            ),
+            "contour_endpoint_relaxation_max_force_ev_a": (
+                relaxed_max_force
+            ),
+            "contour_relaxed_median_displacement_a": (
+                float(
+                    np.median(
+                        relaxed_displacement
+                    )
+                )
+            ),
+            "contour_relaxed_median_force_delta_ev_a": (
+                float(
+                    np.median(
+                        relaxed_force_delta
+                    )
+                )
+            ),
+            "contour_relaxed_force_angle_deg": (
+                median_force_angle(
+                    initial_forces,
+                    relaxed_forces,
+                )
+            ),
+            **endpoint_topology_metrics(
+                initial_atoms,
+                relaxed_atoms,
+            ),
+        })
+
+    except Exception as error:
+        relaxed_summary[
+            "contour_endpoint_relaxation_error"
+        ] = str(error)
 
     return {
         "status": "success",
@@ -311,7 +577,8 @@ def run_contour(job, beta, config, args):
         "metrics_csv": str(outdir / "contour_metrics.csv"),
         "traj": str(traj_path),
         "log": str(log_path),
-        "final_contour_cif": str(outdir / "final_contour.cif"),
+        "final_contour_cif": str(final_contour_path),
+        **relaxed_summary,
         "energy_target_ev": energy_target,
         "initial_energy_ev": initial_energy,
         "mean_abs_energy_deviation_mev_per_atom": float(metrics["energy_deviation_mev_per_atom"].abs().mean()),

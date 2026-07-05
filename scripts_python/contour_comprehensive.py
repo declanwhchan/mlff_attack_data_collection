@@ -529,10 +529,55 @@ def build_contour_frame_dataset(summary_rows):
     return pd.concat(tables, ignore_index=True, sort=False)
 
 
+def build_contour_relaxed_dataset(summary_rows):
+    required_columns = [
+        "material_slug",
+        "calculator",
+        "beta",
+        "contour_endpoint_relaxation_status",
+        "contour_endpoint_relaxation_steps",
+        "contour_relaxed_median_displacement_a",
+        "contour_relaxed_median_force_delta_ev_a",
+        "contour_relaxed_force_angle_deg",
+        "contour_relaxed_neighbor_jaccard_distance",
+        "contour_relaxed_rdf_l1_distance",
+        "contour_relaxed_coordination_change_max",
+    ]
+
+    data = summary_rows.copy()
+
+    for column in required_columns:
+        if column not in data.columns:
+            data[column] = np.nan
+
+    data = data[
+        data["contour_endpoint_relaxation_status"]
+        == "success"
+    ].copy()
+
+    numeric_columns = [
+        column
+        for column in required_columns
+        if column not in {
+            "material_slug",
+            "calculator",
+            "contour_endpoint_relaxation_status",
+        }
+    ]
+
+    for column in numeric_columns:
+        data[column] = pd.to_numeric(
+            data[column],
+            errors="coerce",
+        )
+
+    return data[required_columns]
+
+
 CONTOUR_DISPLACEMENT_PLOTS = [
     (
         "contour_neighbor_jaccard_distance",
-        "neighbor_jaccard_distance",
+        "contour_relaxed_neighbor_jaccard_distance",
         "Neighbor Jaccard distance",
         "Neighbor Jaccard distance",
         "jaccard_vs_displacement.png",
@@ -540,7 +585,7 @@ CONTOUR_DISPLACEMENT_PLOTS = [
     ),
     (
         "contour_rdf_l1_distance",
-        "rdf_l1_distance",
+        "contour_relaxed_rdf_l1_distance",
         "RDF L1 distance",
         "RDF L1 distance",
         "rdf_vs_displacement.png",
@@ -548,7 +593,7 @@ CONTOUR_DISPLACEMENT_PLOTS = [
     ),
     (
         "contour_coordination_change_max",
-        "coordination_change_max",
+        "contour_relaxed_coordination_change_max",
         "Maximum coordination-number change",
         "Maximum coordination-number change",
         "coordination_vs_displacement.png",
@@ -556,7 +601,7 @@ CONTOUR_DISPLACEMENT_PLOTS = [
     ),
     (
         "contour_median_force_delta_ev_a",
-        "after_attack_after_relaxation_median_force_delta_ev_a",
+        "contour_relaxed_median_force_delta_ev_a",
         r"Median force change (eV/$\AA$)",
         r"Median force change (eV/$\AA$)",
         "delta_force_vs_displacement.png",
@@ -564,15 +609,15 @@ CONTOUR_DISPLACEMENT_PLOTS = [
     ),
     (
         "contour_convergence_mev_per_atom",
-        "after_attack_after_relaxation_steps",
+        "contour_endpoint_relaxation_steps",
         r"$|E-E_{\mathrm{target}}|$ (meV/atom)",
-        "Relaxation steps",
+        "Endpoint relaxation steps",
         "convergence_vs_displacement.png",
-        "Contour target error and attack convergence",
+        "Contour target error and endpoint relaxation",
     ),
     (
         "contour_force_angle_deg",
-        "after_attack_after_relaxation_force_angle_deg",
+        "contour_relaxed_force_angle_deg",
         "Median force-vector angle change (degrees)",
         "Median force-vector angle change (degrees)",
         "delta_force_angle_vs_displacement.png",
@@ -638,7 +683,7 @@ def draw_contour_scatter(
             s=18,
             alpha=0.28,
             color=CALC_COLORS[calculator],
-            marker="o" if calculator == "mace" else "s",
+            marker="o",
             edgecolor="none",
             label=calculator.upper(),
         )
@@ -651,24 +696,28 @@ def draw_contour_scatter(
     axis.grid(True, alpha=0.30)
 
 
-def draw_attack_scatter(
+def draw_relaxed_contour_scatter(
     axis,
     data,
-    attack,
+    beta,
     metric,
     ylabel,
 ):
-    attack_data = data[
-        (data["attack_label"] == attack)
-        & (~data["is_step_sweep"])
+    beta_values = pd.to_numeric(
+        data["beta"],
+        errors="coerce",
+    )
+
+    beta_data = data[
+        np.isclose(beta_values, beta)
     ].copy()
 
     for calculator in ["mace", "uma"]:
         selected = clean_scatter_data(
-            attack_data[
-                attack_data["calculator"] == calculator
+            beta_data[
+                beta_data["calculator"] == calculator
             ],
-            "after_attack_after_relaxation_median_displacement_a",
+            "contour_relaxed_median_displacement_a",
             metric,
         )
 
@@ -677,18 +726,19 @@ def draw_attack_scatter(
 
         axis.scatter(
             selected[
-                "after_attack_after_relaxation_median_displacement_a"
+                "contour_relaxed_median_displacement_a"
             ],
             selected[metric],
-            s=22,
-            alpha=0.42,
+            s=28,
+            alpha=0.65,
             color=CALC_COLORS[calculator],
-            marker="o" if calculator == "mace" else "s",
-            edgecolor="none",
+            marker="o",
+            edgecolor="white",
+            linewidth=0.4,
             label=calculator.upper(),
         )
 
-    axis.set_title(attack)
+    axis.set_title(rf"$\beta={beta:.2f}$")
     axis.set_xlabel(
         r"Median displacement from initial structure ($\AA$)"
     )
@@ -698,15 +748,15 @@ def draw_attack_scatter(
 
 def plot_contour_metric_vs_displacement(
     contour_data,
-    attack_data,
+    relaxed_data,
     contour_metric,
-    attack_metric,
+    relaxed_metric,
     contour_ylabel,
-    attack_ylabel,
+    relaxed_ylabel,
     output_path,
     title,
 ):
-    if contour_data.empty or attack_data.empty:
+    if contour_data.empty or relaxed_data.empty:
         return
 
     fig, axes = plt.subplots(
@@ -716,7 +766,9 @@ def plot_contour_metric_vs_displacement(
         squeeze=False,
     )
 
-    for column, beta in enumerate([0.00, 0.05, 0.10]):
+    for column, beta in enumerate(
+        [0.00, 0.05, 0.10]
+    ):
         draw_contour_scatter(
             axes[0, column],
             contour_data,
@@ -725,12 +777,12 @@ def plot_contour_metric_vs_displacement(
             contour_ylabel,
         )
 
-        draw_attack_scatter(
+        draw_relaxed_contour_scatter(
             axes[1, column],
-            attack_data,
-            ATTACK_ORDER[column],
-            attack_metric,
-            attack_ylabel,
+            relaxed_data,
+            beta,
+            relaxed_metric,
+            relaxed_ylabel,
         )
 
     label_axes(axes.ravel())
@@ -747,7 +799,7 @@ def plot_contour_metric_vs_displacement(
         plt.Line2D(
             [0],
             [0],
-            marker="s",
+            marker="o",
             linestyle="none",
             color=CALC_COLORS["uma"],
             label="UMA",
@@ -765,56 +817,68 @@ def plot_contour_metric_vs_displacement(
     fig.text(
         0.012,
         0.72,
-        "Contour exploration",
-        rotation=90,
-        va="center",
-        fontsize=11,
-        fontweight="bold",
-    )
-    fig.text(
-        0.012,
-        0.28,
-        "After attack and relaxation",
+        "Contour exploration before endpoint relaxation",
         rotation=90,
         va="center",
         fontsize=11,
         fontweight="bold",
     )
 
-    fig.suptitle(title, y=1.015, fontsize=13)
-    fig.tight_layout(rect=[0.035, 0.03, 1.0, 0.94])
+    fig.text(
+        0.012,
+        0.28,
+        "Contour endpoint after relaxation",
+        rotation=90,
+        va="center",
+        fontsize=11,
+        fontweight="bold",
+    )
+
+    fig.suptitle(
+        title,
+        y=1.015,
+        fontsize=13,
+    )
+
+    fig.tight_layout(
+        rect=[0.035, 0.03, 1.0, 0.94]
+    )
 
     fig.savefig(
         output_path,
         dpi=500,
         bbox_inches="tight",
     )
+
     plt.close(fig)
 
 
 def make_contour_displacement_plots(
     frame_data,
-    attack_data,
+    relaxed_data,
     output_dir,
 ):
     output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
     for (
         contour_metric,
-        attack_metric,
+        relaxed_metric,
         contour_ylabel,
-        attack_ylabel,
+        relaxed_ylabel,
         filename,
         title,
     ) in CONTOUR_DISPLACEMENT_PLOTS:
         plot_contour_metric_vs_displacement(
             contour_data=frame_data,
-            attack_data=attack_data,
+            relaxed_data=relaxed_data,
             contour_metric=contour_metric,
-            attack_metric=attack_metric,
+            relaxed_metric=relaxed_metric,
             contour_ylabel=contour_ylabel,
-            attack_ylabel=attack_ylabel,
+            relaxed_ylabel=relaxed_ylabel,
             output_path=output_dir / filename,
             title=title,
         )
@@ -1683,6 +1747,15 @@ def main():
     )
 
     contour_frames = build_contour_frame_dataset(all_rows)
+    relaxed_endpoints = build_contour_relaxed_dataset(
+        all_rows
+    )
+
+    relaxed_endpoints.to_csv(
+        args.output_dir
+        / "contour_relaxed_endpoint_metrics.csv",
+        index=False,
+    )
 
     attacks = load_attack_dataset(args.comprehensive_dir)
     attack_metrics = (
@@ -1699,7 +1772,7 @@ def main():
 
         make_contour_displacement_plots(
             contour_frames,
-            attack_metrics,
+            relaxed_endpoints,
             args.output_dir,
         )
 
@@ -1707,19 +1780,20 @@ def main():
             contour_frames.groupby("material_slug")
         ):
             if (
-                attack_metrics.empty
-                or "material_slug" not in attack_metrics.columns
+                relaxed_endpoints.empty
+                or "material_slug"
+                not in relaxed_endpoints.columns
             ):
-                material_attacks = pd.DataFrame()
+                material_relaxed = pd.DataFrame()
             else:
-                material_attacks = attack_metrics[
-                    attack_metrics["material_slug"]
+                material_relaxed = relaxed_endpoints[
+                    relaxed_endpoints["material_slug"]
                     == material_slug
                 ].copy()
 
             make_contour_displacement_plots(
                 material_frames,
-                material_attacks,
+                material_relaxed,
                 args.output_dir / str(material_slug),
             )
     else:
