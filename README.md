@@ -139,11 +139,12 @@ python -m http.server 8000
 http://localhost:8000
 ```
 
-## Or Download Main Results
+## Or Download Target Results
 
 Login using SFTP:
 
 ```bash
-cd mlff_attack_data_collection/trial<#>
-get -r outputs_comprehensive
+cd /mlff_attack_data_collection
+
+get -r <target_directory>
 ```
