@@ -243,7 +243,7 @@ def clean_path(value):
     return Path(value)
 
 
-def force_change_rms(before_path, after_path):
+def median_force_delta(before_path, after_path):
     before_path = clean_path(before_path)
     after_path = clean_path(after_path)
 
@@ -261,30 +261,109 @@ def force_change_rms(before_path, after_path):
     except Exception:
         return np.nan
 
-    required = ["atom_index", "fx", "fy", "fz"]
+    columns = ["atom_index", "fx", "fy", "fz"]
 
-    if not set(required).issubset(before.columns):
+    if not set(columns).issubset(before.columns):
         return np.nan
-    if not set(required).issubset(after.columns):
+    if not set(columns).issubset(after.columns):
         return np.nan
 
-    merged = before[required].merge(
-        after[required],
+    merged = before[columns].merge(
+        after[columns],
         on="atom_index",
-        suffixes=("_before", "_after"),
+        suffixes=("_initial", "_final"),
     )
 
     if merged.empty:
         return np.nan
 
-    delta = np.column_stack([
-        merged["fx_after"] - merged["fx_before"],
-        merged["fy_after"] - merged["fy_before"],
-        merged["fz_after"] - merged["fz_before"],
-    ])
+    initial = merged[
+        ["fx_initial", "fy_initial", "fz_initial"]
+    ].to_numpy(dtype=float)
+    final = merged[
+        ["fx_final", "fy_final", "fz_final"]
+    ].to_numpy(dtype=float)
 
-    magnitudes = np.linalg.norm(delta, axis=1)
-    return float(np.sqrt(np.mean(magnitudes ** 2)))
+    delta = np.linalg.norm(final - initial, axis=1)
+    return float(np.median(delta))
+
+
+def run_directory(row):
+    for column in [
+        "after_force_csv",
+        "before_force_csv",
+        "final_relaxed_cif",
+    ]:
+        path = clean_path(row.get(column))
+        if path is not None:
+            return path.parent
+
+    return None
+
+
+def after_relaxation_steps(row):
+    directory = run_directory(row)
+
+    if directory is None:
+        return np.nan
+
+    path = directory / "after_attack_relaxation_data.csv"
+
+    if not path.exists():
+        return np.nan
+
+    try:
+        data = pd.read_csv(path)
+    except Exception:
+        return np.nan
+
+    if data.empty or "Step" not in data.columns:
+        return np.nan
+
+    steps = pd.to_numeric(
+        data["Step"],
+        errors="coerce",
+    ).dropna()
+
+    if steps.empty:
+        return np.nan
+
+    return float(steps.iloc[-1])
+
+
+def median_final_displacement(row):
+    directory = run_directory(row)
+
+    if directory is None:
+        return np.nan
+
+    initial_path = directory / "before_attack_relaxation.traj"
+    final_path = directory / "final_relaxed.cif"
+
+    if not initial_path.exists() or not final_path.exists():
+        return np.nan
+
+    try:
+        from ase.geometry import find_mic
+        from ase.io import read
+
+        initial = read(initial_path, index=-1)
+        final = read(final_path)
+
+        if len(initial) != len(final):
+            return np.nan
+
+        difference = final.positions - initial.positions
+        difference, _ = find_mic(
+            difference,
+            initial.cell,
+            pbc=initial.pbc,
+        )
+
+        magnitudes = np.linalg.norm(difference, axis=1)
+        return float(np.median(magnitudes))
+    except Exception:
+        return np.nan
 
 
 def relaxation_converged(row):
@@ -357,10 +436,6 @@ def prepare_metrics(records):
         "runtime_seconds_per_atom",
         "cpu_peak_rss_mib",
         "cpu_peak_rss_mib_per_atom",
-        "before_relax_steps",
-        "after_relax_steps",
-        "mean_displacement",
-        "max_displacement",
         "final_energy",
         "neighbor_jaccard_distance",
         "rdf_l1_distance",
@@ -380,26 +455,31 @@ def prepare_metrics(records):
     if "base_material_slug" not in data.columns:
         data["base_material_slug"] = "unknown"
 
-    data["attack_label"] = data.apply(attack_label, axis=1)
+    data["attack_label"] = data.apply(
+        attack_label,
+        axis=1,
+    )
     data["is_step_sweep"] = (
         data["run_id"]
         .astype(str)
         .str.contains("_steps", regex=False)
     )
 
-    data["pre_relax_force_change_rms"] = data.apply(
-        lambda row: force_change_rms(
+    data["after_relax_steps"] = data.apply(
+        after_relaxation_steps,
+        axis=1,
+    )
+
+    data["median_delta_force"] = data.apply(
+        lambda row: median_force_delta(
             row.get("before_force_csv"),
-            row.get("perturbed_force_csv"),
+            row.get("after_force_csv"),
         ),
         axis=1,
     )
 
-    data["post_relax_force_change_rms"] = data.apply(
-        lambda row: force_change_rms(
-            row.get("before_force_csv"),
-            row.get("after_force_csv"),
-        ),
+    data["median_displacement"] = data.apply(
+        median_final_displacement,
         axis=1,
     )
 
@@ -689,7 +769,15 @@ def force_angle_median(before_path, after_path):
     return float(np.median(np.degrees(np.arccos(cosine))))
 
 
-def plot_metric_by_atoms(data, metric, ylabel, title, output_path):
+def plot_metric_by_atoms(
+    data,
+    metric,
+    ylabel,
+    title,
+    output_path,
+    y_scale=None,
+    y_linthresh=1e-3,
+):
     fig, axes = plt.subplots(1, 3, figsize=(12, 3.8))
 
     for axis, attack in zip(axes, ATTACKS):
@@ -736,6 +824,12 @@ def plot_metric_by_atoms(data, metric, ylabel, title, output_path):
         axis.set_xlabel("Number of atoms")
         axis.set_ylabel(ylabel)
 
+        if y_scale == "symlog":
+            axis.set_yscale(
+                "symlog",
+                linthresh=y_linthresh,
+            )
+
         if axis.lines:
             axis.legend()
 
@@ -753,6 +847,8 @@ def plot_relation_by_atoms(
     ylabel,
     title,
     output_path,
+    y_scale=None,
+    y_linthresh=1e-3,
 ):
     fig, axes = plt.subplots(1, 3, figsize=(12, 3.8))
 
@@ -798,6 +894,12 @@ def plot_relation_by_atoms(
         axis.set_xlabel(xlabel)
         axis.set_ylabel(ylabel)
 
+        if y_scale == "symlog":
+            axis.set_yscale(
+                "symlog",
+                linthresh=y_linthresh,
+            )
+
         if axis.collections:
             axis.legend()
 
@@ -807,7 +909,11 @@ def plot_relation_by_atoms(
     plt.close(fig)
 
 
-def force_component_rms(before_path, after_path, component):
+def median_force_component_delta(
+    before_path,
+    after_path,
+    component,
+):
     before_path = clean_path(before_path)
     after_path = clean_path(after_path)
 
@@ -819,13 +925,14 @@ def force_component_rms(before_path, after_path, component):
     ):
         return np.nan
 
+    column = {"x": "fx", "y": "fy", "z": "fz"}[component]
+
     try:
         before = pd.read_csv(before_path)
         after = pd.read_csv(after_path)
     except Exception:
         return np.nan
 
-    column = {"x": "fx", "y": "fy", "z": "fz"}[component]
     required = ["atom_index", column]
 
     if not set(required).issubset(before.columns):
@@ -836,18 +943,55 @@ def force_component_rms(before_path, after_path, component):
     merged = before[required].merge(
         after[required],
         on="atom_index",
-        suffixes=("_before", "_after"),
+        suffixes=("_initial", "_final"),
     )
 
     if merged.empty:
         return np.nan
 
-    difference = (
-        merged[f"{column}_after"]
-        - merged[f"{column}_before"]
-    ).to_numpy(dtype=float)
+    difference = np.abs(
+        merged[f"{column}_final"].to_numpy(dtype=float)
+        - merged[f"{column}_initial"].to_numpy(dtype=float)
+    )
 
-    return float(np.sqrt(np.mean(difference ** 2)))
+    return float(np.median(difference))
+
+
+def median_displacement_component(row, component):
+    directory = run_directory(row)
+
+    if directory is None:
+        return np.nan
+
+    initial_path = directory / "before_attack_relaxation.traj"
+    final_path = directory / "final_relaxed.cif"
+
+    if not initial_path.exists() or not final_path.exists():
+        return np.nan
+
+    try:
+        from ase.geometry import find_mic
+        from ase.io import read
+
+        initial = read(initial_path, index=-1)
+        final = read(final_path)
+
+        if len(initial) != len(final):
+            return np.nan
+
+        difference = final.positions - initial.positions
+        difference, _ = find_mic(
+            difference,
+            initial.cell,
+            pbc=initial.pbc,
+        )
+
+        axis = {"x": 0, "y": 1, "z": 2}[component]
+        return float(
+            np.median(np.abs(difference[:, axis]))
+        )
+    except Exception:
+        return np.nan
 
 
 def displacement_component(row, component):
@@ -891,7 +1035,8 @@ def make_component_figures(data, output_dir):
         plot_metric_by_atoms(
             data,
             f"delta_force_{component}",
-            rf"{component.upper()} force-change RMS (eV/$\AA$)",
+            rf"Median absolute {component.upper()} "
+            rf"force change (eV/$\AA$)",
             f"{component.upper()} force change vs atoms",
             output_dir
             / f"delta_force_{component}_by_atoms.png",
@@ -900,14 +1045,15 @@ def make_component_figures(data, output_dir):
         plot_metric_by_atoms(
             data,
             f"displacement_{component}",
-            rf"Median absolute {component.upper()} displacement ($\AA$)",
+            rf"Median absolute {component.upper()} "
+            rf"displacement ($\AA$)",
             f"{component.upper()} displacement vs atoms",
             output_dir
             / f"displacement_{component}_by_atoms.png",
         )
 
 
-def make_figures_1_to_9(data, output_dir):
+def make_figures_1_to_7(data, output_dir):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -921,16 +1067,16 @@ def make_figures_1_to_9(data, output_dir):
         ),
         (
             2,
-            "post_relax_force_change_rms",
-            r"Force-change RMS (eV/$\AA$)",
-            "Delta force vs atoms",
+            "median_delta_force",
+            r"Median $\Delta$ force (eV/$\AA$)",
+            "Median delta force vs atoms",
             "delta_force",
         ),
         (
             3,
-            "mean_displacement",
-            r"Mean displacement ($\AA$)",
-            "Displacement vs atoms",
+            "median_displacement",
+            r"Median displacement ($\AA$)",
+            "Median displacement vs atoms",
             "displacement",
         ),
         (
@@ -939,20 +1085,6 @@ def make_figures_1_to_9(data, output_dir):
             "Median force-vector angle (degrees)",
             "Delta-force angle vs atoms",
             "delta_force_angle",
-        ),
-        (
-            5,
-            "neighbor_jaccard_distance",
-            "Neighbor Jaccard distance",
-            "Neighbor Jaccard distance vs atoms",
-            "jaccard_distance",
-        ),
-        (
-            6,
-            "rdf_l1_distance",
-            "RDF L1 distance",
-            "RDF L1 distance vs atoms",
-            "rdf_l1_distance",
         ),
     ]
 
@@ -968,29 +1100,29 @@ def make_figures_1_to_9(data, output_dir):
 
     relations = [
         (
-            7,
-            "mean_displacement",
+            5,
+            "median_displacement",
             "after_relax_steps",
-            r"Mean displacement ($\AA$)",
+            r"Median displacement ($\AA$)",
             "Relaxation steps",
             "Relaxation steps vs displacement by atoms",
             "convergence_vs_displacement",
         ),
         (
-            8,
-            "post_relax_force_change_rms",
+            6,
+            "median_delta_force",
             "after_relax_steps",
-            r"Force-change RMS (eV/$\AA$)",
+            r"Median $\Delta$ force (eV/$\AA$)",
             "Relaxation steps",
             "Relaxation steps vs delta force by atoms",
             "convergence_vs_delta_force",
         ),
         (
-            9,
-            "mean_displacement",
-            "post_relax_force_change_rms",
-            r"Mean displacement ($\AA$)",
-            r"Force-change RMS (eV/$\AA$)",
+            7,
+            "median_displacement",
+            "median_delta_force",
+            r"Median displacement ($\AA$)",
+            r"Median $\Delta$ force (eV/$\AA$)",
             "Delta force vs displacement by atoms",
             "delta_force_vs_displacement",
         ),
@@ -1026,37 +1158,44 @@ def make_topology_figures(data, output_dir):
             "neighbor_jaccard_distance",
             "Neighbor Jaccard distance",
             "jaccard_distance",
+            1e-3,
         ),
         (
             "rdf_l1_distance",
             "RDF L1 distance",
             "rdf_l1_distance",
+            1e-3,
         ),
         (
             "coordination_change_max",
             "Maximum coordination-number change",
             "coordination_change",
+            0.5,
         ),
     ]
 
-    for metric, label, filename in topology_metrics:
+    for metric, label, filename, linthresh in topology_metrics:
         plot_metric_by_atoms(
             data,
             metric,
             label,
             f"{label} vs atoms",
             output_dir / f"{filename}_by_atoms.png",
+            y_scale="symlog",
+            y_linthresh=linthresh,
         )
 
         plot_relation_by_atoms(
             data,
-            "mean_displacement",
+            "median_displacement",
             metric,
-            r"Mean displacement ($\AA$)",
+            r"Median displacement ($\AA$)",
             label,
             f"{label} vs displacement by atoms",
             output_dir
             / f"{filename}_vs_displacement_by_atoms.png",
+            y_scale="symlog",
+            y_linthresh=linthresh,
         )
 
         plot_relation_by_atoms(
@@ -1068,17 +1207,21 @@ def make_topology_figures(data, output_dir):
             f"Relaxation steps vs {label.lower()} by atoms",
             output_dir
             / f"convergence_vs_{filename}_by_atoms.png",
+            y_scale="symlog",
+            y_linthresh=1.0,
         )
 
         plot_relation_by_atoms(
             data,
-            "post_relax_force_change_rms",
+            "median_delta_force",
             metric,
-            r"Force-change RMS (eV/$\AA$)",
+            r"Median $\Delta$ force (eV/$\AA$)",
             label,
             f"{label} vs delta force by atoms",
             output_dir
             / f"{filename}_vs_delta_force_by_atoms.png",
+            y_scale="symlog",
+            y_linthresh=linthresh,
         )
 
 
@@ -1089,14 +1232,14 @@ def make_material_rankings(data, output_dir):
     rankings = [
         ("after_relax_steps", "Relaxation steps"),
         (
-            "post_relax_force_change_rms",
+            "median_delta_force",
             r"Force-change RMS (eV/$\AA$)",
         ),
         (
             "post_relax_force_angle",
             "Force-vector angle (degrees)",
         ),
-        ("mean_displacement", r"Mean displacement ($\AA$)"),
+        ("median_displacement", r"Median displacement ($\AA$)"),
         ("neighbor_jaccard_distance", "Jaccard distance"),
         ("rdf_l1_distance", "RDF L1 distance"),
         (
@@ -1177,7 +1320,8 @@ def plot_command(args):
 
     for component in ["x", "y", "z"]:
         metrics[f"delta_force_{component}"] = metrics.apply(
-            lambda row, axis=component: force_component_rms(
+            lambda row, axis=component:
+            median_force_component_delta(
                 row.get("before_force_csv"),
                 row.get("after_force_csv"),
                 axis,
@@ -1186,10 +1330,8 @@ def plot_command(args):
         )
 
         metrics[f"displacement_{component}"] = metrics.apply(
-            lambda row, axis=component: displacement_component(
-                row,
-                axis,
-            ),
+            lambda row, axis=component:
+            median_displacement_component(row, axis),
             axis=1,
         )
 
@@ -1214,8 +1356,8 @@ def plot_command(args):
             f"No successful supercell rows at epsilon={args.epsilon}"
         )
 
-    # Combined figures 1-9.
-    make_figures_1_to_9(primary, output_dir)
+    # Combined figures 1-7.
+    make_figures_1_to_7(primary, output_dir)
 
     make_component_figures(
         primary,
@@ -1237,7 +1379,7 @@ def plot_command(args):
             .replace("\\", "_")
         )
 
-        make_figures_1_to_9(
+        make_figures_1_to_7(
             material_data,
             output_dir / safe_name,
         )
