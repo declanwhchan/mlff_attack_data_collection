@@ -16,6 +16,7 @@ from ase.optimize import LBFGS
 from mlff_attack.relaxation import setup_calculator
 from run_tests import (
     coordination_by_atom,
+    edge_jaccard_distance,
     neighbor_edge_set,
     rdf_l1_distance,
 )
@@ -268,15 +269,10 @@ def median_force_angle(initial_forces, final_forces):
 def endpoint_topology_metrics(initial_atoms, final_atoms):
     initial_edges = neighbor_edge_set(initial_atoms)
     final_edges = neighbor_edge_set(final_atoms)
-    union_edges = initial_edges | final_edges
-
-    if union_edges:
-        jaccard = 1.0 - (
-            len(initial_edges & final_edges)
-            / len(union_edges)
-        )
-    else:
-        jaccard = 0.0
+    jaccard = edge_jaccard_distance(
+        initial_edges,
+        final_edges,
+    )
 
     initial_coordination = coordination_by_atom(
         initial_edges,

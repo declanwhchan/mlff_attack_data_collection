@@ -8,6 +8,7 @@ import sys
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from scipy.spatial.distance import jaccard as scipy_jaccard
 
 from mlff_attack.attacks import make_attack, visualize_perturbation
 from mlff_attack.relaxation import load_structure, run_relaxation, setup_calculator
@@ -314,6 +315,25 @@ def neighbor_edge_set(atoms):
     return edges
 
 
+def edge_jaccard_distance(before_edges, after_edges):
+    """Return SciPy Jaccard dissimilarity for two neighbor-edge sets."""
+    edge_universe = sorted(before_edges | after_edges)
+
+    if not edge_universe:
+        return 0.0
+
+    before_vector = np.fromiter(
+        (edge in before_edges for edge in edge_universe),
+        dtype=bool,
+    )
+    after_vector = np.fromiter(
+        (edge in after_edges for edge in edge_universe),
+        dtype=bool,
+    )
+
+    return float(scipy_jaccard(before_vector, after_vector))
+
+
 def coordination_by_atom(edges, atoms):
     symbols = atoms.get_chemical_symbols()
     counts = {atom_signature(symbols, index): 0 for index in range(len(atoms))}
@@ -413,14 +433,10 @@ def topology_change_metrics(before_atoms, after_atoms, output_dir):
 
     added_edges = after_edges - before_edges
     removed_edges = before_edges - after_edges
-    union_edges = before_edges | after_edges
-
-    if union_edges:
-        neighbor_jaccard_distance = 1.0 - (
-            len(before_edges & after_edges) / len(union_edges)
-        )
-    else:
-        neighbor_jaccard_distance = 0.0
+    neighbor_jaccard_distance = edge_jaccard_distance(
+        before_edges,
+        after_edges,
+    )
 
     before_coord = coordination_by_atom(before_edges, before_atoms)
     after_coord = coordination_by_atom(after_edges, after_atoms)

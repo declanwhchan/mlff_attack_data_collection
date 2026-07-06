@@ -11,6 +11,7 @@ from ase.io import read as ase_read
 
 from run_tests import (
     coordination_by_atom,
+    edge_jaccard_distance,
     neighbor_edge_set,
     rdf_l1_distance,
 )
@@ -332,15 +333,10 @@ def median_force_angle(initial_forces, current_forces):
 def contour_topology_metrics(initial_atoms, current_atoms):
     initial_edges = neighbor_edge_set(initial_atoms)
     current_edges = neighbor_edge_set(current_atoms)
-    union_edges = initial_edges | current_edges
-
-    if union_edges:
-        jaccard = 1.0 - (
-            len(initial_edges & current_edges)
-            / len(union_edges)
-        )
-    else:
-        jaccard = 0.0
+    jaccard = edge_jaccard_distance(
+        initial_edges,
+        current_edges,
+    )
 
     initial_coordination = coordination_by_atom(
         initial_edges,

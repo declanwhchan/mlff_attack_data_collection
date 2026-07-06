@@ -14,6 +14,7 @@ import pandas as pd
 from ase.io import read as read_structure
 from run_tests import (
     coordination_by_atom,
+    edge_jaccard_distance,
     neighbor_edge_set,
     rdf_l1_distance,
 )
@@ -3363,16 +3364,12 @@ def calculate_baseline_ranking_metrics(row):
         initial_edges = neighbor_edge_set(initial)
         relaxed_edges = neighbor_edge_set(relaxed)
 
-        union = initial_edges | relaxed_edges
-
-        if union:
-            metrics["neighbor_jaccard_distance"] = (
-                1.0
-                - len(initial_edges & relaxed_edges)
-                / len(union)
+        metrics["neighbor_jaccard_distance"] = (
+            edge_jaccard_distance(
+                initial_edges,
+                relaxed_edges,
             )
-        else:
-            metrics["neighbor_jaccard_distance"] = 0.0
+        )
 
         initial_coordination = coordination_by_atom(
             initial_edges,
