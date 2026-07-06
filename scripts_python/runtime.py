@@ -1285,10 +1285,6 @@ def plot_command(args):
         primary,
         output_dir / "relaxation_convergence_vs_atoms.png",
     )
-    plot_size_consistency(
-        primary,
-        output_dir / "energy_per_atom_vs_atoms.png",
-    )
 
     make_material_rankings(
         primary,
