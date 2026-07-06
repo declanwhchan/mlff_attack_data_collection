@@ -5,6 +5,7 @@ import argparse
 import gc
 import threading
 import time
+import shutil
 
 import matplotlib
 matplotlib.use("Agg")
@@ -356,11 +357,15 @@ def prepare_metrics(records):
         "runtime_seconds_per_atom",
         "cpu_peak_rss_mib",
         "cpu_peak_rss_mib_per_atom",
+        "before_relax_steps",
+        "after_relax_steps",
         "mean_displacement",
         "max_displacement",
         "final_energy",
         "neighbor_jaccard_distance",
-        "neighbor_edge_change_count",
+        "rdf_l1_distance",
+        "coordination_change_mean",
+        "coordination_change_max",
     ]
 
     for column in numeric_columns:
@@ -541,76 +546,6 @@ def plot_runtime_vs_memory(data, output_path):
     plt.close(fig)
 
 
-def plot_robustness(data, output_path, title):
-    metrics = [
-        (
-            "pre_relax_force_change_rms",
-            r"Pre-relax force change RMS (eV/$\AA$)",
-        ),
-        (
-            "post_relax_force_change_rms",
-            r"Post-relax force change RMS (eV/$\AA$)",
-        ),
-        (
-            "max_displacement",
-            r"Maximum displacement ($\AA$)",
-        ),
-        (
-            "neighbor_jaccard_distance",
-            "Neighbor Jaccard distance",
-        ),
-    ]
-
-    fig, axes = plt.subplots(2, 2, figsize=(10, 7))
-
-    for axis, (metric, ylabel) in zip(axes.flat, metrics):
-        for calculator in ["mace", "uma"]:
-            for attack in ATTACKS:
-                selected = data[
-                    (data["calculator"] == calculator)
-                    & (data["attack_label"] == attack)
-                ].dropna(subset=["supercell_atoms", metric])
-
-                if selected.empty:
-                    continue
-
-                grouped = (
-                    selected.groupby("supercell_atoms")[metric]
-                    .median()
-                )
-
-                axis.plot(
-                    grouped.index,
-                    grouped.values,
-                    color=COLORS[calculator],
-                    linestyle=LINESTYLES[attack],
-                    marker="o",
-                    markersize=3,
-                    linewidth=1.4,
-                    label=f"{calculator.upper()} {attack}",
-                )
-
-        axis.set_xlabel("Supercell atoms")
-        axis.set_ylabel(ylabel)
-
-    handles, labels = axes.flat[0].get_legend_handles_labels()
-
-    if handles:
-        unique = dict(zip(labels, handles))
-        fig.legend(
-            unique.values(),
-            unique.keys(),
-            loc="upper center",
-            ncol=3,
-            bbox_to_anchor=(0.5, 0.99),
-        )
-
-    fig.suptitle(title, y=1.04)
-    fig.tight_layout()
-    fig.savefig(output_path, dpi=400, bbox_inches="tight")
-    plt.close(fig)
-
-
 def plot_convergence(data, output_path):
     fig, axis = plt.subplots(figsize=(7.5, 4.5))
 
@@ -703,11 +638,528 @@ def plot_size_consistency(data, output_path):
     plt.close(fig)
 
 
+def force_angle_median(before_path, after_path):
+    before_path = clean_path(before_path)
+    after_path = clean_path(after_path)
+
+    if (
+        before_path is None
+        or after_path is None
+        or not before_path.exists()
+        or not after_path.exists()
+    ):
+        return np.nan
+
+    try:
+        before = pd.read_csv(before_path)
+        after = pd.read_csv(after_path)
+    except Exception:
+        return np.nan
+
+    columns = ["atom_index", "fx", "fy", "fz"]
+    if not set(columns).issubset(before.columns):
+        return np.nan
+    if not set(columns).issubset(after.columns):
+        return np.nan
+
+    merged = before[columns].merge(
+        after[columns],
+        on="atom_index",
+        suffixes=("_before", "_after"),
+    )
+
+    first = merged[
+        ["fx_before", "fy_before", "fz_before"]
+    ].to_numpy(dtype=float)
+    second = merged[
+        ["fx_after", "fy_after", "fz_after"]
+    ].to_numpy(dtype=float)
+
+    denominator = (
+        np.linalg.norm(first, axis=1)
+        * np.linalg.norm(second, axis=1)
+    )
+    valid = denominator > 1e-12
+
+    if not np.any(valid):
+        return np.nan
+
+    cosine = np.sum(first[valid] * second[valid], axis=1)
+    cosine = np.clip(cosine / denominator[valid], -1.0, 1.0)
+    return float(np.median(np.degrees(np.arccos(cosine))))
+
+
+def plot_metric_by_atoms(data, metric, ylabel, title, output_path):
+    fig, axes = plt.subplots(1, 3, figsize=(12, 3.8))
+
+    for axis, attack in zip(axes, ATTACKS):
+        attack_data = data[data["attack_label"] == attack]
+
+        for calculator in ["mace", "uma"]:
+            selected = attack_data[
+                attack_data["calculator"] == calculator
+            ].dropna(subset=["supercell_atoms", metric])
+
+            if selected.empty:
+                continue
+
+            grouped = selected.groupby("supercell_atoms")[metric]
+            median = grouped.median()
+            q1 = grouped.quantile(0.25)
+            q3 = grouped.quantile(0.75)
+            atoms = median.index.to_numpy(dtype=float)
+
+            axis.scatter(
+                selected["supercell_atoms"],
+                selected[metric],
+                color=COLORS[calculator],
+                alpha=0.18,
+                s=14,
+            )
+            axis.plot(
+                atoms,
+                median.to_numpy(dtype=float),
+                color=COLORS[calculator],
+                marker="o",
+                linewidth=1.8,
+                label=calculator.upper(),
+            )
+            axis.fill_between(
+                atoms,
+                q1.to_numpy(dtype=float),
+                q3.to_numpy(dtype=float),
+                color=COLORS[calculator],
+                alpha=0.14,
+            )
+
+        axis.set_title(attack)
+        axis.set_xlabel("Number of atoms")
+        axis.set_ylabel(ylabel)
+
+        if axis.lines:
+            axis.legend()
+
+    fig.suptitle(title)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=400, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_relation_by_atoms(
+    data,
+    x_metric,
+    y_metric,
+    xlabel,
+    ylabel,
+    title,
+    output_path,
+):
+    fig, axes = plt.subplots(1, 3, figsize=(12, 3.8))
+
+    maximum_atoms = data["supercell_atoms"].max()
+
+    for axis, attack in zip(axes, ATTACKS):
+        attack_data = data[data["attack_label"] == attack]
+
+        for calculator in ["mace", "uma"]:
+            selected = attack_data[
+                attack_data["calculator"] == calculator
+            ].dropna(
+                subset=["supercell_atoms", x_metric, y_metric]
+            )
+
+            if selected.empty:
+                continue
+
+            grouped = (
+                selected.groupby("supercell_atoms")[
+                    [x_metric, y_metric]
+                ]
+                .median()
+                .reset_index()
+            )
+
+            sizes = 35 + 145 * (
+                grouped["supercell_atoms"] / maximum_atoms
+            )
+
+            axis.scatter(
+                grouped[x_metric],
+                grouped[y_metric],
+                s=sizes,
+                color=COLORS[calculator],
+                alpha=0.7,
+                edgecolor="white",
+                linewidth=0.7,
+                label=calculator.upper(),
+            )
+
+        axis.set_title(attack)
+        axis.set_xlabel(xlabel)
+        axis.set_ylabel(ylabel)
+
+        if axis.collections:
+            axis.legend()
+
+    fig.suptitle(title + "\nBubble size represents atom count")
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=400, bbox_inches="tight")
+    plt.close(fig)
+
+
+def force_component_rms(before_path, after_path, component):
+    before_path = clean_path(before_path)
+    after_path = clean_path(after_path)
+
+    if (
+        before_path is None
+        or after_path is None
+        or not before_path.exists()
+        or not after_path.exists()
+    ):
+        return np.nan
+
+    try:
+        before = pd.read_csv(before_path)
+        after = pd.read_csv(after_path)
+    except Exception:
+        return np.nan
+
+    column = {"x": "fx", "y": "fy", "z": "fz"}[component]
+    required = ["atom_index", column]
+
+    if not set(required).issubset(before.columns):
+        return np.nan
+    if not set(required).issubset(after.columns):
+        return np.nan
+
+    merged = before[required].merge(
+        after[required],
+        on="atom_index",
+        suffixes=("_before", "_after"),
+    )
+
+    if merged.empty:
+        return np.nan
+
+    difference = (
+        merged[f"{column}_after"]
+        - merged[f"{column}_before"]
+    ).to_numpy(dtype=float)
+
+    return float(np.sqrt(np.mean(difference ** 2)))
+
+
+def displacement_component(row, component):
+    force_path = clean_path(row.get("after_force_csv"))
+
+    if force_path is None:
+        return np.nan
+
+    run_dir = force_path.parent
+    before_path = run_dir / "before_attack_relaxation.traj"
+    after_path = run_dir / "final_relaxed.cif"
+
+    if not before_path.exists() or not after_path.exists():
+        return np.nan
+
+    try:
+        from ase.geometry import find_mic
+        from ase.io import read
+
+        before = read(before_path, index=-1)
+        after = read(after_path)
+
+        difference = after.positions - before.positions
+        difference, _ = find_mic(
+            difference,
+            before.cell,
+            pbc=before.pbc,
+        )
+
+        axis = {"x": 0, "y": 1, "z": 2}[component]
+        return float(np.median(np.abs(difference[:, axis])))
+    except Exception:
+        return np.nan
+
+
+def make_component_figures(data, output_dir):
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for component in ["x", "y", "z"]:
+        plot_metric_by_atoms(
+            data,
+            f"delta_force_{component}",
+            rf"{component.upper()} force-change RMS (eV/$\AA$)",
+            f"{component.upper()} force change vs atoms",
+            output_dir
+            / f"delta_force_{component}_by_atoms.png",
+        )
+
+        plot_metric_by_atoms(
+            data,
+            f"displacement_{component}",
+            rf"Median absolute {component.upper()} displacement ($\AA$)",
+            f"{component.upper()} displacement vs atoms",
+            output_dir
+            / f"displacement_{component}_by_atoms.png",
+        )
+
+
+def make_figures_1_to_9(data, output_dir):
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    metric_figures = [
+        (
+            1,
+            "after_relax_steps",
+            "Relaxation steps",
+            "Relaxation steps vs atoms",
+            "relaxation_steps",
+        ),
+        (
+            2,
+            "post_relax_force_change_rms",
+            r"Force-change RMS (eV/$\AA$)",
+            "Delta force vs atoms",
+            "delta_force",
+        ),
+        (
+            3,
+            "mean_displacement",
+            r"Mean displacement ($\AA$)",
+            "Displacement vs atoms",
+            "displacement",
+        ),
+        (
+            4,
+            "post_relax_force_angle",
+            "Median force-vector angle (degrees)",
+            "Delta-force angle vs atoms",
+            "delta_force_angle",
+        ),
+        (
+            5,
+            "neighbor_jaccard_distance",
+            "Neighbor Jaccard distance",
+            "Neighbor Jaccard distance vs atoms",
+            "jaccard_distance",
+        ),
+        (
+            6,
+            "rdf_l1_distance",
+            "RDF L1 distance",
+            "RDF L1 distance vs atoms",
+            "rdf_l1_distance",
+        ),
+    ]
+
+    for number, metric, ylabel, title, filename in metric_figures:
+        plot_metric_by_atoms(
+            data,
+            metric,
+            ylabel,
+            title,
+            output_dir
+            / f"figure_{number}_{filename}_by_atoms.png",
+        )
+
+    relations = [
+        (
+            7,
+            "mean_displacement",
+            "after_relax_steps",
+            r"Mean displacement ($\AA$)",
+            "Relaxation steps",
+            "Relaxation steps vs displacement by atoms",
+            "convergence_vs_displacement",
+        ),
+        (
+            8,
+            "post_relax_force_change_rms",
+            "after_relax_steps",
+            r"Force-change RMS (eV/$\AA$)",
+            "Relaxation steps",
+            "Relaxation steps vs delta force by atoms",
+            "convergence_vs_delta_force",
+        ),
+        (
+            9,
+            "mean_displacement",
+            "post_relax_force_change_rms",
+            r"Mean displacement ($\AA$)",
+            r"Force-change RMS (eV/$\AA$)",
+            "Delta force vs displacement by atoms",
+            "delta_force_vs_displacement",
+        ),
+    ]
+
+    for (
+        number,
+        x_metric,
+        y_metric,
+        xlabel,
+        ylabel,
+        title,
+        filename,
+    ) in relations:
+        plot_relation_by_atoms(
+            data,
+            x_metric,
+            y_metric,
+            xlabel,
+            ylabel,
+            title,
+            output_dir
+            / f"figure_{number}_{filename}_by_atoms.png",
+        )
+
+
+def make_topology_figures(data, output_dir):
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    topology_metrics = [
+        (
+            "neighbor_jaccard_distance",
+            "Neighbor Jaccard distance",
+            "jaccard_distance",
+        ),
+        (
+            "rdf_l1_distance",
+            "RDF L1 distance",
+            "rdf_l1_distance",
+        ),
+        (
+            "coordination_change_max",
+            "Maximum coordination-number change",
+            "coordination_change",
+        ),
+    ]
+
+    for metric, label, filename in topology_metrics:
+        plot_metric_by_atoms(
+            data,
+            metric,
+            label,
+            f"{label} vs atoms",
+            output_dir / f"{filename}_by_atoms.png",
+        )
+
+        plot_relation_by_atoms(
+            data,
+            "mean_displacement",
+            metric,
+            r"Mean displacement ($\AA$)",
+            label,
+            f"{label} vs displacement by atoms",
+            output_dir
+            / f"{filename}_vs_displacement_by_atoms.png",
+        )
+
+        plot_relation_by_atoms(
+            data,
+            metric,
+            "after_relax_steps",
+            label,
+            "Relaxation steps",
+            f"Relaxation steps vs {label.lower()} by atoms",
+            output_dir
+            / f"convergence_vs_{filename}_by_atoms.png",
+        )
+
+        plot_relation_by_atoms(
+            data,
+            "post_relax_force_change_rms",
+            metric,
+            r"Force-change RMS (eV/$\AA$)",
+            label,
+            f"{label} vs delta force by atoms",
+            output_dir
+            / f"{filename}_vs_delta_force_by_atoms.png",
+        )
+
+
+def make_material_rankings(data, output_dir):
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    rankings = [
+        ("after_relax_steps", "Relaxation steps"),
+        (
+            "post_relax_force_change_rms",
+            r"Force-change RMS (eV/$\AA$)",
+        ),
+        (
+            "post_relax_force_angle",
+            "Force-vector angle (degrees)",
+        ),
+        ("mean_displacement", r"Mean displacement ($\AA$)"),
+        ("neighbor_jaccard_distance", "Jaccard distance"),
+        ("rdf_l1_distance", "RDF L1 distance"),
+        (
+            "coordination_change_max",
+            "Maximum coordination-number change",
+        ),
+    ]
+
+    for metric, xlabel in rankings:
+        clean = data.dropna(
+            subset=["base_material_slug", "calculator", metric]
+        )
+
+        if clean.empty:
+            continue
+
+        ranking = (
+            clean.groupby(
+                ["base_material_slug", "calculator"]
+            )[metric]
+            .median()
+            .unstack("calculator")
+        )
+        ranking["sort_value"] = ranking.median(axis=1)
+        ranking = ranking.sort_values("sort_value")
+        ranking = ranking.drop(columns="sort_value")
+
+        fig, axis = plt.subplots(
+            figsize=(8, max(5, len(ranking) * 0.32))
+        )
+        ranking.plot.barh(
+            ax=axis,
+            color=[
+                COLORS.get(column, "#777777")
+                for column in ranking.columns
+            ],
+        )
+        axis.set_xlabel(f"Median {xlabel}")
+        axis.set_ylabel("Material")
+        axis.legend(
+            [str(column).upper() for column in ranking.columns]
+        )
+        fig.tight_layout()
+        fig.savefig(
+            output_dir / f"material_{metric}.png",
+            dpi=400,
+            bbox_inches="tight",
+        )
+        plt.close(fig)
+
+
 def plot_command(args):
     apply_style()
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Remove obsolete generic comprehensive plots and directories.
+    for path in output_dir.iterdir():
+        if path.is_dir():
+            shutil.rmtree(path)
+        elif path.suffix.lower() == ".png":
+            path.unlink()
 
     records = load_summaries(
         args.mace_summary,
@@ -715,74 +1167,135 @@ def plot_command(args):
     )
     metrics = prepare_metrics(records)
 
+    metrics["post_relax_force_angle"] = metrics.apply(
+        lambda row: force_angle_median(
+            row.get("before_force_csv"),
+            row.get("after_force_csv"),
+        ),
+        axis=1,
+    )
+
+    for component in ["x", "y", "z"]:
+        metrics[f"delta_force_{component}"] = metrics.apply(
+            lambda row, axis=component: force_component_rms(
+                row.get("before_force_csv"),
+                row.get("after_force_csv"),
+                axis,
+            ),
+            axis=1,
+        )
+
+        metrics[f"displacement_{component}"] = metrics.apply(
+            lambda row, axis=component: displacement_component(
+                row,
+                axis,
+            ),
+            axis=1,
+        )
+
     metrics.to_csv(
         output_dir / "supercell_runtime_metrics.csv",
         index=False,
     )
 
     primary = metrics[
-        (metrics["status"].astype(str).str.lower() == "success")
+        (
+            metrics["status"]
+            .astype(str)
+            .str.lower()
+            == "success"
+        )
         & (~metrics["is_step_sweep"])
         & np.isclose(metrics["epsilon"], args.epsilon)
     ].copy()
 
     if primary.empty:
         raise SystemExit(
-            f"No successful primary rows at epsilon={args.epsilon}"
+            f"No successful supercell rows at epsilon={args.epsilon}"
         )
 
-    plot_attack_panels(
+    # Combined figures 1-9.
+    make_figures_1_to_9(primary, output_dir)
+
+    make_component_figures(
         primary,
-        "runtime_seconds_per_atom",
-        "Runtime (s/atom)",
-        output_dir / "runtime_per_atom_vs_supercell_atoms.png",
+        output_dir / "components",
     )
 
-    plot_attack_panels(
+    make_topology_figures(
         primary,
-        "cpu_peak_rss_mib_per_atom",
-        "Peak CPU RAM (MiB/atom)",
-        output_dir / "cpu_memory_per_atom_vs_supercell_atoms.png",
+        output_dir / "topology",
     )
 
-    plot_runtime_vs_memory(
-        primary,
-        output_dir / "runtime_vs_cpu_memory_per_atom.png",
-    )
-
-    plot_robustness(
-        primary,
-        output_dir / "supercell_robustness_dashboard.png",
-        "Supercell robustness",
-    )
-
-    plot_convergence(
-        primary,
-        output_dir / "supercell_relaxation_convergence.png",
-    )
-
-    plot_size_consistency(
-        primary,
-        output_dir / "supercell_size_consistency.png",
-    )
-
-    for material, selected in primary.groupby(
+    # One folder containing figures 1-9 for each base material.
+    for material, material_data in primary.groupby(
         "base_material_slug"
     ):
-        safe_material = (
+        safe_name = (
             str(material)
             .replace("/", "_")
             .replace("\\", "_")
         )
 
-        plot_robustness(
-            selected,
-            output_dir
-            / f"supercell_{safe_material}_robustness_dashboard.png",
-            f"Supercell robustness: {material}",
+        make_figures_1_to_9(
+            material_data,
+            output_dir / safe_name,
         )
 
-    print(f"CPU runtime plots written to {output_dir}")
+        make_component_figures(
+            material_data,
+            output_dir / "components" / safe_name,
+        )
+
+        make_topology_figures(
+            material_data,
+            output_dir / "topology" / safe_name,
+        )
+
+    # Raw computational-scaling plots.
+    plot_attack_panels(
+        primary,
+        "runtime_seconds",
+        "Total runtime (seconds)",
+        output_dir / "runtime_vs_atoms.png",
+    )
+    plot_attack_panels(
+        primary,
+        "runtime_seconds_per_atom",
+        "Runtime (seconds/atom)",
+        output_dir / "runtime_per_atom_vs_atoms.png",
+    )
+    plot_attack_panels(
+        primary,
+        "cpu_peak_rss_mib",
+        "Peak CPU RAM (MiB)",
+        output_dir / "cpu_ram_vs_atoms.png",
+    )
+    plot_attack_panels(
+        primary,
+        "cpu_peak_rss_mib_per_atom",
+        "Peak CPU RAM (MiB/atom)",
+        output_dir / "cpu_ram_per_atom_vs_atoms.png",
+    )
+    plot_runtime_vs_memory(
+        primary,
+        output_dir / "runtime_vs_cpu_ram_per_atom.png",
+    )
+    plot_convergence(
+        primary,
+        output_dir / "relaxation_convergence_vs_atoms.png",
+    )
+    plot_size_consistency(
+        primary,
+        output_dir / "energy_per_atom_vs_atoms.png",
+    )
+
+    make_material_rankings(
+        primary,
+        output_dir / "materials_ranking",
+    )
+
+    print(f"Supercell plots written to {output_dir}")
 
 
 def main():

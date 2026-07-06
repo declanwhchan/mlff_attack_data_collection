@@ -51,7 +51,7 @@ controller_mode() {
 
   ARRAY_JOB_ID=$(sbatch --parsable \
     --array=1-320%80 \
-    --time=7-00:00:00 \
+    --time=1-00:00:00 \
     --mem=16G \
     --cpus-per-task=8 \
     --output=supercell-%A_%a.out \
@@ -145,11 +145,6 @@ plot_mode() {
   python -u scripts_python/supercell.py combine --output-root "$SUPER_ROOT"
 
   mkdir -p "$SUPER_COMPREHENSIVE_DIR"
-
-  python -u scripts_python/run_comprehensive.py \
-    --mace-dir "$SUPER_ROOT/outputs_float64/mace" \
-    --uma-dir "$SUPER_ROOT/outputs_float64/uma" \
-    --output-dir "$SUPER_COMPREHENSIVE_DIR"
 
   python -u scripts_python/runtime.py plot \
     --mace-summary "$SUPER_ROOT/outputs_float64/mace/summary.csv" \
