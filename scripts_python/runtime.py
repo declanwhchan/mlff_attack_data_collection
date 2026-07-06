@@ -671,53 +671,6 @@ def plot_convergence(data, output_path):
     plt.close(fig)
 
 
-def plot_size_consistency(data, output_path):
-    fig, axis = plt.subplots(figsize=(8, 4.8))
-
-    for calculator in ["mace", "uma"]:
-        calculator_data = data[
-            data["calculator"] == calculator
-        ]
-
-        for material, selected in calculator_data.groupby(
-            "base_material_slug"
-        ):
-            selected = selected.dropna(subset=[
-                "supercell_atoms",
-                "final_energy_per_atom",
-            ])
-
-            if selected.empty:
-                continue
-
-            grouped = (
-                selected.groupby("supercell_atoms")[
-                    "final_energy_per_atom"
-                ]
-                .median()
-            )
-
-            axis.plot(
-                grouped.index,
-                grouped.values,
-                marker="o",
-                linewidth=1.3,
-                color=COLORS[calculator],
-                alpha=0.8,
-                label=f"{calculator.upper()} {material}",
-            )
-
-    axis.set_xlabel("Supercell atoms")
-    axis.set_ylabel("Final energy per atom (eV/atom)")
-
-    if axis.lines:
-        axis.legend(fontsize=7, ncol=2)
-
-    fig.tight_layout()
-    fig.savefig(output_path, dpi=400, bbox_inches="tight")
-    plt.close(fig)
-
-
 def force_angle_median(before_path, after_path):
     before_path = clean_path(before_path)
     after_path = clean_path(after_path)
@@ -994,39 +947,6 @@ def median_displacement_component(row, component):
         return np.nan
 
 
-def displacement_component(row, component):
-    force_path = clean_path(row.get("after_force_csv"))
-
-    if force_path is None:
-        return np.nan
-
-    run_dir = force_path.parent
-    before_path = run_dir / "before_attack_relaxation.traj"
-    after_path = run_dir / "final_relaxed.cif"
-
-    if not before_path.exists() or not after_path.exists():
-        return np.nan
-
-    try:
-        from ase.geometry import find_mic
-        from ase.io import read
-
-        before = read(before_path, index=-1)
-        after = read(after_path)
-
-        difference = after.positions - before.positions
-        difference, _ = find_mic(
-            difference,
-            before.cell,
-            pbc=before.pbc,
-        )
-
-        axis = {"x": 0, "y": 1, "z": 2}[component]
-        return float(np.median(np.abs(difference[:, axis])))
-    except Exception:
-        return np.nan
-
-
 def make_component_figures(data, output_dir):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1233,7 +1153,7 @@ def make_material_rankings(data, output_dir):
         ("after_relax_steps", "Relaxation steps"),
         (
             "median_delta_force",
-            r"Force-change RMS (eV/$\AA$)",
+            r"Median $\Delta$ force (eV/$\AA$)",
         ),
         (
             "post_relax_force_angle",
@@ -1369,7 +1289,7 @@ def plot_command(args):
         output_dir / "topology",
     )
 
-    # One folder containing figures 1-9 for each base material.
+    # One folder containing figures 1-7 for each base material.
     for material, material_data in primary.groupby(
         "base_material_slug"
     ):

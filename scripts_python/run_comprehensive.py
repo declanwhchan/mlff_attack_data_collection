@@ -7,7 +7,7 @@ import re
 
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
-from matplotlib.patches import Ellipse, Patch
+from matplotlib.patches import Ellipse, Patch, FancyArrowPatch
 from matplotlib.ticker import MaxNLocator, ScalarFormatter, FuncFormatter, FixedLocator, NullLocator
 import numpy as np
 import pandas as pd
@@ -1573,11 +1573,26 @@ def paired_relaxation_rows(
         if epsilon is None or epsilon <= 0:
             continue
 
+        def finite_median(metric_values):
+            metric_values = np.asarray(
+                metric_values,
+                dtype=float,
+            ).reshape(-1)
+
+            metric_values = metric_values[
+                np.isfinite(metric_values)
+            ]
+
+            if len(metric_values) == 0:
+                return np.nan
+
+            return float(np.median(metric_values))
+
         values = [
-            float(x_before[0]),
-            float(x_after[0]),
-            float(y_before[0]),
-            float(y_after[0]),
+            finite_median(x_before),
+            finite_median(x_after),
+            finite_median(y_before),
+            finite_median(y_after),
         ]
 
         if not np.all(np.isfinite(values)):
@@ -1642,10 +1657,9 @@ def make_paired_relaxation_figure(
     x_log=False,
     y_log=False,
 ):
-    # Relaxation differences may be zero or negative.
-    # Therefore, logarithmic axes are intentionally not used.
-    _ = x_log, y_log
+    """Show both relaxation states and summarize paired changes."""
 
+    missing_rows = []
     paired = paired_relaxation_rows(
         records,
         x_getters,
@@ -1655,186 +1669,224 @@ def make_paired_relaxation_figure(
     if paired.empty:
         return
 
-    paired["delta_x"] = (
-        paired["x_after"] - paired["x_before"]
-    )
-    paired["delta_y"] = (
-        paired["y_after"] - paired["y_before"]
-    )
+    grouped_pairs = grouped_relaxation_vectors(paired)
 
-    grouped = (
-        paired.groupby(
-            [
-                "attack_label",
-                "calculator",
-                "epsilon",
-            ],
-            as_index=False,
-        )
-        .agg({
-            "delta_x": "median",
-            "delta_y": "median",
-        })
-    )
-
-    fig, axes = plt.subplots(
-        1,
-        len(attacks_to_plot),
-        figsize=(5.0 * len(attacks_to_plot), 4.8),
-        squeeze=False,
-    )
-    axes = axes.ravel()
-
-    def full_limits(values):
-        values = np.asarray(values, dtype=float)
-        values = values[np.isfinite(values)]
-
-        if len(values) == 0:
-            return -1.0, 1.0
-
-        minimum = min(float(np.min(values)), 0.0)
-        maximum = max(float(np.max(values)), 0.0)
-        span = maximum - minimum
-
-        if not np.isfinite(span) or span <= 0:
-            span = max(
-                abs(minimum),
-                abs(maximum),
-                1.0,
-            )
-
-        padding = 0.10 * span
-        return minimum - padding, maximum + padding
-
-    for column, attack in enumerate(attacks_to_plot):
-        ax = axes[column]
-
-        attack_data = grouped[
-            grouped["attack_label"] == attack
-        ].copy()
-
-        if attack_data.empty:
-            ax.text(
-                0.5,
-                0.5,
-                "No paired data",
-                transform=ax.transAxes,
-                ha="center",
-                va="center",
-            )
-        else:
-            for calculator in ["mace", "uma"]:
-                calculator_data = attack_data[
-                    attack_data["calculator"] == calculator
-                ]
-
-                if calculator_data.empty:
-                    continue
-
-                ax.scatter(
-                    calculator_data["delta_x"],
-                    calculator_data["delta_y"],
-                    s=48,
-                    marker="o",
-                    color=CALCULATOR_COLORS[calculator],
-                    edgecolor="white",
-                    linewidth=0.7,
-                    alpha=0.90,
-                    zorder=3,
-                )
-
-            ax.set_xlim(
-                full_limits(attack_data["delta_x"])
-            )
-            ax.set_ylim(
-                full_limits(attack_data["delta_y"])
-            )
-
-        ax.axvline(
-            0.0,
-            color="#666666",
-            linestyle=":",
-            linewidth=0.9,
-            zorder=1,
-        )
-        ax.axhline(
-            0.0,
-            color="#666666",
-            linestyle=":",
-            linewidth=0.9,
-            zorder=1,
-        )
-
-        # Preserve the complete range when save_figure() is called.
-        ax._preserve_manual_limits = True
-
-        ax.set_title(attack)
-        ax.set_xlabel(
-            f"Relaxation change in {x_label}"
-        )
-        ax.set_ylabel(
-            f"Relaxation change in {y_label}"
-        )
-        ax.grid(True, alpha=0.22)
-
-        add_panel_label(
-            ax,
-            chr(ord("A") + column),
-        )
-
-    # Exactly two legend entries.
-    legend_handles = [
-        Line2D(
-            [0],
-            [0],
-            marker="o",
-            linestyle="none",
-            markersize=7,
-            markerfacecolor=CALCULATOR_COLORS["mace"],
-            markeredgecolor="white",
-            label="MACE",
+    rows = [
+        (
+            "After attack, before relaxation",
+            x_getters[0],
+            y_getters[0],
         ),
-        Line2D(
-            [0],
-            [0],
-            marker="o",
-            linestyle="none",
-            markersize=7,
-            markerfacecolor=CALCULATOR_COLORS["uma"],
-            markeredgecolor="white",
-            label="UMA",
+        (
+            "After attack, after relaxation",
+            x_getters[1],
+            y_getters[1],
         ),
     ]
 
-    fig.legend(
-        handles=legend_handles,
-        loc="upper center",
-        ncol=2,
-        bbox_to_anchor=(0.5, 0.985),
-        frameon=False,
+    number_columns = len(attacks_to_plot)
+    fig, axes = plt.subplots(
+        2,
+        number_columns,
+        figsize=(5.2 * number_columns, 9.2),
+        sharex=False,
+        sharey=False,
+        squeeze=False,
     )
+
+    panel_index = 0
+    any_data = False
+
+    for row_index, (
+        row_title,
+        x_getter,
+        y_getter,
+    ) in enumerate(rows):
+        data = parametric_rows(
+            records=records,
+            x_getter=x_getter,
+            y_getter=y_getter,
+            bubble_col="epsilon",
+            missing_rows=missing_rows,
+            figure_name=figure_name,
+        )
+
+        if not data.empty:
+            any_data = True
+
+        for column_index, attack in enumerate(
+            attacks_to_plot
+        ):
+            axis = axes[row_index, column_index]
+
+            draw_parametric_panel(
+                ax=axis,
+                data=data,
+                attack=attack,
+                x_label=x_label,
+                y_label=y_label,
+                show_ylabel=(column_index == 0),
+                x_limits=None,
+                y_limits=None,
+            )
+
+            axis.title.set_fontsize(13)
+            axis.xaxis.label.set_fontsize(12)
+            axis.yaxis.label.set_fontsize(12)
+
+            style_numeric_axis(
+                axis,
+                xbins=4,
+                ybins=5,
+            )
+
+            if x_log:
+                apply_positive_log_axis(axis, "x")
+
+            if y_log:
+                apply_positive_log_axis(axis, "y")
+
+            if column_index == 0:
+                axis.text(
+                    -0.32,
+                    0.5,
+                    row_title,
+                    transform=axis.transAxes,
+                    rotation=90,
+                    va="center",
+                    ha="center",
+                    fontsize=12,
+                    fontweight="bold",
+                )
+
+            add_panel_label(
+                axis,
+                chr(ord("A") + panel_index),
+            )
+            panel_index += 1
+
+    if not any_data:
+        plt.close(fig)
+        return
+
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+
+    if handles:
+        fig.legend(
+            handles,
+            labels,
+            loc="upper center",
+            ncol=4,
+            bbox_to_anchor=(0.5, 1.045),
+            frameon=False,
+            title="Grouped by epsilon",
+            fontsize=11,
+            title_fontsize=11,
+            handlelength=1.9,
+            columnspacing=1.25,
+            handletextpad=0.55,
+        )
 
     fig.suptitle(
         title,
-        y=1.03,
-        fontsize=14,
+        y=1.095,
+        fontsize=15,
     )
+
+    fig.tight_layout(
+        rect=[0.07, 0.06, 1.00, 0.94],
+        h_pad=5.5,
+    )
+
+    # Tight layout must finish before figure-coordinate arrows
+    # are positioned between the panel rows.
+    fig.canvas.draw()
+
+    for column_index, attack in enumerate(
+        attacks_to_plot
+    ):
+        top_axis = axes[0, column_index]
+        bottom_axis = axes[1, column_index]
+
+        top_box = top_axis.get_position()
+        bottom_box = bottom_axis.get_position()
+
+        arrow_x = (
+            top_box.x0 + top_box.x1
+        ) / 2.0
+
+        arrow_start_y = top_box.y0 - 0.012
+        arrow_end_y = bottom_box.y1 + 0.012
+
+        arrow = FancyArrowPatch(
+            (arrow_x, arrow_start_y),
+            (arrow_x, arrow_end_y),
+            transform=fig.transFigure,
+            arrowstyle="-|>",
+            mutation_scale=13,
+            linewidth=1.4,
+            color="#555555",
+            alpha=0.85,
+            clip_on=False,
+        )
+        fig.add_artist(arrow)
+
+        attack_pairs = grouped_pairs[
+            grouped_pairs["attack_label"] == attack
+        ]
+
+        annotation_lines = ["Relaxation"]
+
+        for calculator in ["mace", "uma"]:
+            calculator_pairs = attack_pairs[
+                attack_pairs["calculator"] == calculator
+            ]
+
+            if calculator_pairs.empty:
+                continue
+
+            delta_x = np.median(
+                calculator_pairs["x_after"]
+                - calculator_pairs["x_before"]
+            )
+            delta_y = np.median(
+                calculator_pairs["y_after"]
+                - calculator_pairs["y_before"]
+            )
+
+            annotation_lines.append(
+                (
+                    f"{calculator.upper()}: "
+                    rf"$\Delta x$={delta_x:.3g}, "
+                    rf"$\Delta y$={delta_y:.3g}"
+                )
+            )
+
+        text_y = (
+            arrow_start_y + arrow_end_y
+        ) / 2.0
+
+        fig.text(
+            arrow_x + 0.012,
+            text_y,
+            "\n".join(annotation_lines),
+            ha="left",
+            va="center",
+            fontsize=7.5,
+            color="#444444",
+        )
 
     fig.text(
         0.5,
         0.012,
         (
-            "Each circle = median(after perturbation and relaxation "
-            "- after perturbation before relaxation) "
-            "across materials at one epsilon"
+            "Arrows indicate relaxation from the top state "
+            "to the bottom state; annotations report paired "
+            "median changes across materials and epsilon values"
         ),
         ha="center",
         fontsize=8.5,
         color="#555555",
-    )
-
-    fig.tight_layout(
-        rect=[0.03, 0.06, 1.0, 0.89]
     )
 
     save_figure(
@@ -1867,7 +1919,7 @@ def make_parametric_figure_set(
     paired_convergence_getters = [
         lambda row: scalar_distribution(
             row,
-            "before_relax_steps",
+            "after_relax_steps",
         ),
         lambda row: scalar_distribution(
             row,
@@ -4658,7 +4710,7 @@ def make_topology_metric_figure_set(
         paired_convergence_getters = [
             lambda row: scalar_distribution(
                 row,
-                "before_relax_steps",
+                "after_relax_steps",
             ),
             lambda row: scalar_distribution(
                 row,

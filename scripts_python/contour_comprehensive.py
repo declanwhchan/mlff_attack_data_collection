@@ -813,7 +813,7 @@ def plot_contour_metric_vs_displacement(
     fig.text(
         0.012,
         0.72,
-        "Contour exploration before endpoint relaxation",
+        "After contour",
         rotation=90,
         va="center",
         fontsize=11,
@@ -823,7 +823,7 @@ def plot_contour_metric_vs_displacement(
     fig.text(
         0.012,
         0.28,
-        "Contour endpoint after relaxation",
+        "After contour and relaxation",
         rotation=90,
         va="center",
         fontsize=11,
