@@ -7,7 +7,7 @@ import re
 
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
-from matplotlib.patches import Ellipse
+from matplotlib.patches import Ellipse, Patch
 from matplotlib.ticker import MaxNLocator, ScalarFormatter, FuncFormatter, FixedLocator, NullLocator
 import numpy as np
 import pandas as pd
@@ -3446,45 +3446,55 @@ def save_material_ranking_plot(
     title,
     xlabel,
     value_getter,
+    comparison_getter=None,
     max_materials=20,
 ):
-    """Rank materials using median run values and raw units."""
-    rows = []
+    """Plot material medians with IQR error bars."""
 
-    for _, row in records.iterrows():
-        value = material_ranking_value(
-            row,
-            value_getter,
+    def collect_values(getter):
+        rows = []
+
+        for _, row in records.iterrows():
+            value = material_ranking_value(row, getter)
+
+            if not np.isfinite(value):
+                continue
+
+            rows.append({
+                "material_slug": row.get("material_slug"),
+                "calculator": row.get("calculator"),
+                "value": value,
+            })
+
+        data = pd.DataFrame(rows)
+
+        if data.empty:
+            return pd.DataFrame()
+
+        data = data.dropna(
+            subset=["material_slug", "calculator", "value"]
         )
 
-        if not np.isfinite(value):
-            continue
+        return (
+            data.groupby(
+                ["material_slug", "calculator"]
+            )["value"]
+            .agg(
+                median="median",
+                q1=lambda values: values.quantile(0.25),
+                q3=lambda values: values.quantile(0.75),
+            )
+            .reset_index()
+        )
 
-        rows.append({
-            "material_slug": row.get("material_slug"),
-            "calculator": row.get("calculator"),
-            "value": value,
-        })
-
-    data = pd.DataFrame(
-        rows,
-        columns=[
-            "material_slug",
-            "calculator",
-            "value",
-        ],
+    final_summary = collect_values(value_getter)
+    immediate_summary = (
+        collect_values(comparison_getter)
+        if comparison_getter is not None
+        else pd.DataFrame()
     )
 
-    if not data.empty:
-        data = data.dropna(
-            subset=[
-                "material_slug",
-                "calculator",
-                "value",
-            ]
-        )
-
-    if data.empty:
+    if final_summary.empty:
         fig, ax = plt.subplots(figsize=(7.8, 4.5))
         ax.text(
             0.5,
@@ -3505,61 +3515,172 @@ def save_material_ranking_plot(
         plt.close(fig)
         return
 
-    # First condense repeated runs for each material and model.
-    material_model_values = (
-        data.groupby(
-            ["material_slug", "calculator"],
-            as_index=False,
-        )["value"]
-        .median()
-    )
-
-    # Sort using the median across MACE and UMA.
     ranking = (
-        material_model_values
-        .groupby("material_slug")["value"]
+        final_summary
+        .groupby("material_slug")["median"]
         .median()
         .sort_values(ascending=False)
         .head(max_materials)
     )
-
     material_order = list(ranking.index[::-1])
 
-    model_values = material_model_values.pivot(
-        index="material_slug",
-        columns="calculator",
-        values="value",
-    ).reindex(material_order)
+    final_indexed = final_summary.set_index(
+        ["material_slug", "calculator"]
+    )
+    immediate_indexed = (
+        immediate_summary.set_index(
+            ["material_slug", "calculator"]
+        )
+        if not immediate_summary.empty
+        else None
+    )
 
     figure_height = max(
         4.5,
         0.34 * len(material_order) + 1.5,
     )
-
     fig, ax = plt.subplots(
-        figsize=(7.8, figure_height)
+        figsize=(8.5, figure_height)
     )
 
     y = np.arange(len(material_order))
     bar_height = 0.36
 
+    def column_values(table, calculator, column):
+        values = []
+
+        for material in material_order:
+            key = (material, calculator)
+
+            if key not in table.index:
+                values.append(np.nan)
+            else:
+                values.append(
+                    float(table.loc[key, column])
+                )
+
+        return np.asarray(values, dtype=float)
+
     for calculator, offset in [
         ("mace", -bar_height / 2),
         ("uma", bar_height / 2),
     ]:
-        if calculator not in model_values.columns:
-            continue
+        median = column_values(
+            final_indexed,
+            calculator,
+            "median",
+        )
+        q1 = column_values(
+            final_indexed,
+            calculator,
+            "q1",
+        )
+        q3 = column_values(
+            final_indexed,
+            calculator,
+            "q3",
+        )
+
+        lower_error = np.maximum(median - q1, 0.0)
+        upper_error = np.maximum(q3 - median, 0.0)
 
         ax.barh(
             y + offset,
-            model_values[calculator].to_numpy(
-                dtype=float
-            ),
+            median,
             height=bar_height,
             color=CALCULATOR_COLORS[calculator],
             alpha=0.78,
-            label=calculator.upper(),
+            xerr=np.vstack([
+                lower_error,
+                upper_error,
+            ]),
+            error_kw={
+                "ecolor": "#222222",
+                "elinewidth": 1.0,
+                "capsize": 2.5,
+                "capthick": 1.0,
+            },
         )
+
+        if immediate_indexed is None:
+            continue
+
+        immediate_median = column_values(
+            immediate_indexed,
+            calculator,
+            "median",
+        )
+        immediate_q1 = column_values(
+            immediate_indexed,
+            calculator,
+            "q1",
+        )
+        immediate_q3 = column_values(
+            immediate_indexed,
+            calculator,
+            "q3",
+        )
+
+        immediate_lower = np.maximum(
+            immediate_median - immediate_q1,
+            0.0,
+        )
+        immediate_upper = np.maximum(
+            immediate_q3 - immediate_median,
+            0.0,
+        )
+
+        ax.barh(
+            y + offset,
+            immediate_median,
+            height=bar_height * 0.68,
+            facecolor="none",
+            edgecolor=CALCULATOR_COLORS[calculator],
+            linewidth=1.5,
+            linestyle=":",
+            hatch="...",
+        )
+
+        ax.errorbar(
+            immediate_median,
+            y + offset,
+            xerr=np.vstack([
+                immediate_lower,
+                immediate_upper,
+            ]),
+            fmt="none",
+            ecolor=CALCULATOR_COLORS[calculator],
+            elinewidth=1.0,
+            capsize=2.5,
+            alpha=0.9,
+        )
+
+    legend_handles = [
+        Patch(
+            facecolor=CALCULATOR_COLORS["mace"],
+            label="MACE",
+        ),
+        Patch(
+            facecolor=CALCULATOR_COLORS["uma"],
+            label="UMA",
+        ),
+    ]
+
+    if comparison_getter is not None:
+        legend_handles.extend([
+            Patch(
+                facecolor="#777777",
+                alpha=0.78,
+                label="After attack and relaxation",
+            ),
+            Patch(
+                facecolor="none",
+                edgecolor="#555555",
+                linestyle=":",
+                hatch="...",
+                label="After attack, before relaxation",
+            ),
+        ])
 
     ax.set_yticks(y)
     ax.set_yticklabels(material_order)
@@ -3569,8 +3690,8 @@ def save_material_ranking_plot(
     ax.grid(True, axis="x", alpha=0.28)
     ax.grid(False, axis="y")
     ax.legend(
+        handles=legend_handles,
         frameon=False,
-        ncol=2,
         loc="lower right",
     )
 
@@ -3924,16 +4045,30 @@ def make_material_rankings(
             value_getter=metric["getter"],
         )
 
-    for metric in relaxed_metrics:
-        save_material_ranking_plot(
-            records=records,
-            output_path=(
-                relaxed_dir / metric["filename"]
-            ),
-            title=metric["title"],
-            xlabel=metric["xlabel"],
-            value_getter=metric["getter"],
-        )
+        immediate_by_filename = {
+            metric["filename"]: metric
+            for metric in immediate_metrics
+        }
+
+        for metric in relaxed_metrics:
+            immediate_metric = immediate_by_filename.get(
+                metric["filename"]
+            )
+
+            save_material_ranking_plot(
+                records=records,
+                output_path=(
+                    relaxed_dir / metric["filename"]
+                ),
+                title=metric["title"],
+                xlabel=metric["xlabel"],
+                value_getter=metric["getter"],
+                comparison_getter=(
+                    immediate_metric["getter"]
+                    if immediate_metric is not None
+                    else None
+                ),
+            )
 
 
 COMPONENTS = ["x", "y", "z"]
