@@ -19,6 +19,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from run_tests import (
     coordination_by_atom,
+    edge_jaccard_distance,
     neighbor_edge_set,
     rdf_l1_distance,
 )
@@ -221,15 +222,10 @@ def topology_metrics(initial, final):
         initial_edges = neighbor_edge_set(initial)
         final_edges = neighbor_edge_set(final)
 
-        union = initial_edges | final_edges
-
-        if union:
-            jaccard = 1.0 - (
-                len(initial_edges & final_edges)
-                / len(union)
-            )
-        else:
-            jaccard = 0.0
+        jaccard = edge_jaccard_distance(
+            initial_edges,
+            final_edges,
+        )
 
         initial_coordination = coordination_by_atom(
             initial_edges,
@@ -807,7 +803,9 @@ def make_metric_figure(
     metrics,
     output_path,
     title,
+    log_panels=None,
 ):
+    log_panels = set(log_panels or [])
     fig, axes = plt.subplots(
         3,
         3,
@@ -826,6 +824,13 @@ def make_metric_figure(
                 attack,
             )
 
+            panel_label = chr(
+                ord("A") + row * 3 + column
+            )
+
+            if panel_label in log_panels:
+                ax.set_yscale("log", nonpositive="clip")
+
             if column == 0:
                 ax.set_ylabel(ylabel)
 
@@ -837,7 +842,7 @@ def make_metric_figure(
             ax.text(
                 -0.11,
                 1.05,
-                chr(ord("A") + row * 3 + column),
+                panel_label,
                 transform=ax.transAxes,
                 fontweight="bold",
                 va="top",
@@ -974,6 +979,7 @@ def main():
         / "seed_response_physical_metrics_after_attack_after_relaxation.png",
         "Random-seed comparison: physical response "
         "after attack and relaxation",
+        log_panels={"E", "F"},
     )
 
     make_metric_figure(
@@ -998,6 +1004,7 @@ def main():
         ),
         "Random-seed comparison: immediate physical response "
         "after attack, before relaxation",
+        log_panels={"E", "F"},
     )
 
     make_metric_figure(
