@@ -5,14 +5,16 @@ import logging
 import os
 import sys
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from scipy.spatial.distance import jaccard as scipy_jaccard
 
-from mlff_attack.attacks import make_attack, visualize_perturbation
+from mlff_attack.attacks import make_attack
 from mlff_attack.relaxation import load_structure, run_relaxation, setup_calculator
-from mlff_attack.visualization import load_trajectory, create_visualization
+from mlff_attack.visualization import (
+    extract_trajectory_data,
+    load_trajectory,
+)
 from ase.neighborlist import neighbor_list, natural_cutoffs
 
 import spglib
@@ -73,6 +75,50 @@ def output_root():
     if root:
         return BASE_DIR / root
     return BASE_DIR
+
+
+def scratch_output():
+    return output_root().resolve().is_relative_to(Path("/scratch"))
+
+
+def run_relaxation_and_save_data(
+    atoms,
+    traj_path,
+    output_dir,
+    fmax,
+    max_steps,
+    optimizer,
+):
+    success = run_relaxation(
+        atoms,
+        traj_path,
+        fmax=fmax,
+        max_steps=max_steps,
+        optimizer=optimizer,
+        verbose=True,
+    )
+
+    if not success:
+        raise RuntimeError(f"Relaxation failed for {traj_path.name}")
+
+    trajectory = load_trajectory(traj_path)
+    if trajectory is None:
+        raise RuntimeError(f"Could not load {traj_path}")
+
+    steps, energies, max_forces, volumes = (
+        extract_trajectory_data(trajectory)
+    )
+
+    data_path = output_dir / f"{traj_path.stem}_data.csv"
+
+    pd.DataFrame({
+        "Step": steps,
+        "Energy (eV)": energies,
+        "Max Force (eV/Å)": max_forces,
+        "Volume (Å³)": volumes,
+    }).to_csv(data_path, index=False)
+
+    return data_path
 
 
 def run_seed_for(row):
@@ -161,12 +207,6 @@ def attack_parameters(row):
     return ", ".join(parts)
 
 
-def plot_title(row, calculator, subject):
-    return (
-        f"{calculator.upper()} {attack_name(row)} {subject} "
-        f"({attack_parameters(row)})"
-    )
-
 def save_attack_history(history, path):
     rows = []
     max_len = 0
@@ -191,51 +231,6 @@ def save_attack_history(history, path):
     pd.DataFrame(rows).to_json(path, orient="records", indent=2)
 
 
-def save_relaxation_plot(atoms, traj_path, output_dir, fmax, max_steps, optimizer):
-    success = run_relaxation(
-        atoms,
-        traj_path,
-        fmax=fmax,
-        max_steps=max_steps,
-        optimizer=optimizer,
-        verbose=True,
-    )
-
-    if not success:
-        raise RuntimeError(f"Relaxation failed for {traj_path.name}")
-
-    traj = load_trajectory(traj_path)
-    if traj is None:
-        raise RuntimeError(f"Could not load relaxation trajectory: {traj_path}")
-
-    create_visualization(
-        traj,
-        traj_path,
-        output_dir,
-        output_format="png",
-        show=False,
-        save_to_csv=True,
-        fmax=fmax,
-    )
-
-    default_plot = output_dir / "relaxation_analysis.png"
-    named_plot = output_dir / f"{traj_path.stem}_analysis.png"
-    if default_plot.exists():
-        default_plot.replace(named_plot)
-
-    default_data = output_dir / "relaxation_data.csv"
-    named_data = output_dir / f"{traj_path.stem}_data.csv"
-    if default_data.exists():
-        default_data.replace(named_data)
-
-    default_noise = output_dir / "noise_spectrum.csv"
-    named_noise = output_dir / f"{traj_path.stem}_noise_spectrum.csv"
-    if default_noise.exists():
-        default_noise.replace(named_noise)
-
-    return named_plot
-
-
 def save_force_data(atoms, output_dir, label):
     forces = atoms.get_forces()
     positions = atoms.get_positions()
@@ -257,47 +252,6 @@ def save_force_data(atoms, output_dir, label):
     force_df.to_csv(force_csv, index=False)
 
     return force_csv
-
-
-def save_force_plot(atoms, output_dir, label, title):
-    positions = atoms.get_positions()
-    forces = atoms.get_forces()
-    force_magnitudes = np.linalg.norm(forces, axis=1)
-
-    fig = plt.figure(figsize=(10, 8))
-    ax = fig.add_subplot(111, projection="3d")
-
-    scatter = ax.scatter(
-        positions[:, 0],
-        positions[:, 1],
-        positions[:, 2],
-        c=force_magnitudes,
-        s=90,
-    )
-
-    ax.quiver(
-        positions[:, 0],
-        positions[:, 1],
-        positions[:, 2],
-        forces[:, 0],
-        forces[:, 1],
-        forces[:, 2],
-        length=0.2,
-        normalize=True,
-    )
-
-    ax.set_title(title)
-    ax.set_xlabel("X (Å)")
-    ax.set_ylabel("Y (Å)")
-    ax.set_zlabel("Z (Å)")
-
-    fig.colorbar(scatter, ax=ax, label="Force Magnitude")
-
-    force_png = output_dir / f"{label}_forces.png"
-    fig.savefig(force_png, dpi=300, bbox_inches="tight")
-    plt.close(fig)
-
-    return force_png
 
 
 def atom_signature(symbols, index):
@@ -665,7 +619,8 @@ def run_one(row):
         raise RuntimeError("Could not set up calculator for pre-attack relaxation")
 
     before_relax_traj = output_dir / "before_attack_relaxation.traj"
-    before_relax_plot = save_relaxation_plot(
+
+    run_relaxation_and_save_data(
         relaxed_atoms,
         before_relax_traj,
         output_dir,
@@ -698,18 +653,14 @@ def run_one(row):
     )
 
     perturbed_force_csv = save_force_data(perturbed_atoms, output_dir, "perturbed")
-    perturbed_force_png = save_force_plot(
-        perturbed_atoms,
-        output_dir,
-        "perturbed",
-        plot_title(row, calculator, "Forces After Perturbation Before Relaxation"),
-    )
+
 
     attack_relaxed_atoms = perturbed_atoms.copy()
     attack_relaxed_atoms.calc = perturbed_atoms.calc
 
     after_relax_traj = output_dir / "after_attack_relaxation.traj"
-    after_relax_plot = save_relaxation_plot(
+
+    run_relaxation_and_save_data(
         attack_relaxed_atoms,
         after_relax_traj,
         output_dir,
@@ -722,20 +673,8 @@ def run_one(row):
     save_attack_history(attack_history, history_file)
 
     before_force_csv = save_force_data(relaxed_atoms, output_dir, "before")
-    before_force_png = save_force_plot(
-        relaxed_atoms,
-        output_dir,
-        "before",
-        plot_title(row, calculator, "Forces Before Attack Relaxation"),
-    )
 
     after_force_csv = save_force_data(attack_relaxed_atoms, output_dir, "after")
-    after_force_png = save_force_plot(
-        attack_relaxed_atoms,
-        output_dir,
-        "after",
-        plot_title(row, calculator, "Forces After Attack Relaxation"),
-    )
 
     perturbed_topology = topology_change_metrics(
         relaxed_atoms,
@@ -758,27 +697,6 @@ def run_one(row):
         output_dir,
         edge_changes_filename="topology_edge_changes.csv",
     )
-
-    fig = visualize_perturbation(
-        relaxed_atoms,
-        attack_relaxed_atoms,
-        epsilon=float(row["epsilon"]),
-        outdir=None,
-    )
-
-    fig.suptitle(
-        plot_title(row, calculator, "Perturbed Structure"),
-        fontsize=14,
-        fontweight="bold",
-    )
-
-    perturbation_png = output_dir / "perturbation.png"
-    fig.savefig(perturbation_png, dpi=300, bbox_inches="tight")
-    plt.close(fig)
-
-    duplicate_png = output_dir / "perturbation_analysis.png"
-    if duplicate_png.exists():
-        duplicate_png.unlink()
 
     original_positions = relaxed_atoms.get_positions()
     perturbed_positions = attack_relaxed_atoms.get_positions()
@@ -830,16 +748,10 @@ def run_one(row):
         "final_relaxed_cif": str(final_relaxed_cif),
         "history_file": str(history_file),
         "before_relax_traj": str(before_relax_traj),
-        "before_relax_plot": str(before_relax_plot),
         "after_attack_relax_traj": str(after_relax_traj),
-        "after_attack_relax_plot": str(after_relax_plot),
         "before_force_csv": str(before_force_csv),
-        "before_force_png": str(before_force_png),
         "perturbed_force_csv": str(perturbed_force_csv),
-        "perturbed_force_png": str(perturbed_force_png),
         "after_force_csv": str(after_force_csv),
-        "after_force_png": str(after_force_png),
-        "perturbation_png": str(perturbation_png),
         "mean_displacement": float(displacement_magnitudes.mean()),
         "max_displacement": float(displacement_magnitudes.max()),
         "final_energy": float(attack_relaxed_atoms.get_potential_energy()),
