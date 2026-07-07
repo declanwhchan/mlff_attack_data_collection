@@ -80,6 +80,9 @@ sbatch scripts_bash/setup.sh
 ```bash
 sbatch scripts_bash/main.sh
 
+# Run calculations on supercells (OPTIONAL)
+sbatch scripts_bash/supercell.sh
+
 # Run contour exploration (OPTIONAL)
 sbatch scripts_bash/contour.sh
 ```
