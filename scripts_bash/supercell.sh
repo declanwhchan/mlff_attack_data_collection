@@ -50,7 +50,7 @@ controller_mode() {
   deactivate
 
   ARRAY_JOB_ID=$(sbatch --parsable \
-    --array=1-320%80 \
+    --array=1-480%80 \
     --time=1-00:00:00 \
     --mem=16G \
     --cpus-per-task=8 \
@@ -113,6 +113,8 @@ run_mode() {
     source ~/project/.venv-mace/bin/activate
   elif [ "$CALCULATOR" = "uma" ]; then
     source ~/project/.venv-uma/bin/activate
+  elif [ "$CALCULATOR" = "chgnet" ]; then
+    source ~/project/.venv-chgnet/bin/activate
   else
     echo "ERROR: unknown calculator $CALCULATOR"
     exit 1
@@ -149,6 +151,7 @@ plot_mode() {
   python -u scripts_python/runtime.py plot \
     --mace-summary "$SUPER_ROOT/outputs_float64/mace/summary.csv" \
     --uma-summary "$SUPER_ROOT/outputs_float64/uma/summary.csv" \
+    --chgnet-summary "$SUPER_ROOT/outputs_float64/chgnet/summary.csv" \
     --output-dir "$SUPER_COMPREHENSIVE_DIR" \
     --epsilon 0.01
 

@@ -63,6 +63,8 @@ def infer_calculator(model_path):
         return "mace"
     if name.startswith("uma"):
         return "uma"
+    if name.startswith("chgnet"):
+        return "chgnet"
     raise RuntimeError(f"Cannot infer calculator from model_path={model_path!r}")
 
 
@@ -127,7 +129,13 @@ def select_jobs(jobs, calculator=None, material_slug=None):
 
 def setup_job_calculator(atoms, job, dtype_str, seed=None):
     calculator = job["calculator"]
-    model_path = BASE_DIR / job["model_path"] if calculator == "mace" else Path(job["model_path"]).stem
+
+    if calculator == "mace":
+        model_path = BASE_DIR / job["model_path"]
+    elif calculator == "uma":
+        model_path = Path(job["model_path"]).stem
+    else:
+        model_path = str(job["model_path"])
 
     atoms = setup_calculator(
         atoms,
@@ -625,7 +633,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--tests", default="generated_material_tests.csv")
     parser.add_argument("--config", default="tests_comprehensive.json")
-    parser.add_argument("--calculator", choices=["mace", "uma"])
+    parser.add_argument("--calculator", choices=["mace", "uma", "chgnet"])
     parser.add_argument(
         "--dtype-str",
         choices=["float32", "float64"],
@@ -657,7 +665,7 @@ def main():
                 print(f"DRY RUN: {job['calculator']} {job['material_slug']} beta={beta:g}")
         return
 
-    summaries_by_calculator = {"mace": [], "uma": []}
+    summaries_by_calculator = {"mace": [], "uma": [], "chgnet": []}
 
     for job in jobs:
         for beta in betas:

@@ -34,11 +34,12 @@ TRIALS = [
 ]
 
 ATTACKS = ["FGSM", "I-FGSM", "PGD"]
-CALCULATORS = ["mace", "uma"]
+CALCULATORS = ["mace", "uma", "chgnet"]
 
 COLORS = {
     "mace": "#0072B2",
     "uma": "#D55E00",
+    "chgnet": "#009E73",
 }
 
 SEED_STYLES = {

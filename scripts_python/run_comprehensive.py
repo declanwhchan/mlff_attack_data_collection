@@ -24,6 +24,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 CALCULATOR_COLORS = {
     "mace": "#0072B2",
     "uma": "#D55E00",
+    "chgnet": "#009E73",
 }
 
 ATTACK_ORDER = ["FGSM", "I-FGSM", "PGD"]
@@ -35,13 +36,15 @@ ATTACK_FOLDER = {
 }
 
 MODEL_OFFSETS = {
-    "mace": -0.18,
-    "uma": 0.18,
+    "mace": -0.24,
+    "uma": 0.0,
+    "chgnet": 0.24,
 }
 
 EPSILON_POSITION_FACTORS = {
-    "mace": 10 ** (-0.035),
-    "uma": 10 ** (0.035),
+    "mace": 10 ** (-0.05),
+    "uma": 1.0,
+    "chgnet": 10 ** (0.05),
 }
 
 EPSILON_BOX_WIDTH_LOG10 = 0.020
@@ -179,8 +182,9 @@ def percent_displacement_plot_x(value):
 
 
 STEP_POSITION_FACTORS = {
-    "mace": 10 ** (-0.035),
-    "uma": 10 ** (0.035),
+    "mace": 10 ** (-0.05),
+    "uma": 1.0,
+    "chgnet": 10 ** (0.05),
 }
 
 STEP_BOX_WIDTH_LOG10 = 0.020
@@ -356,7 +360,7 @@ def as_int(value):
 
 
 def normalized_run_id(run_id):
-    return str(run_id).replace("_mace_", "_").replace("_uma_", "_")
+    return str(run_id).replace("_mace_", "_").replace("_uma_", "_").replace("_chgnet_", "_")
 
 
 def slug_text(value):
@@ -475,7 +479,7 @@ def material_info(row, run_dir):
     material_label = clean_value(row.get("material_label"))
     material_slug = clean_value(row.get("material_slug"))
 
-    if material_slug is None and run_dir.parent.name not in ["outputs_mace", "outputs_uma"]:
+    if material_slug is None and run_dir.parent.name not in ["outputs_mace", "outputs_uma", "outputs_chgnet"]:
         material_slug = run_dir.parent.name
 
     if material_label is None:
@@ -757,6 +761,14 @@ def model_legend_handles():
             lw=7,
             alpha=0.72,
             label="UMA",
+        ),
+        plt.Line2D(
+            [0],
+            [0],
+            color=CALCULATOR_COLORS["chgnet"],
+            lw=7,
+            alpha=0.72,
+            label="CHGNet",
         ),
     ]
 
@@ -1842,7 +1854,7 @@ def make_paired_relaxation_figure(
 
         annotation_lines = ["Relaxation"]
 
-        for calculator in ["mace", "uma"]:
+        for calculator in ["mace", "uma", "chgnet"]:
             calculator_pairs = attack_pairs[
                 attack_pairs["calculator"] == calculator
             ]
@@ -2071,7 +2083,7 @@ def collect_box_data(records, attack, value_getter, missing_rows, x_col="epsilon
     rng = np.random.default_rng(12345)
 
     for x_value in x_values:
-        for calculator in ["mace", "uma"]:
+        for calculator in ["mace", "uma", "chgnet"]:
             rowset = attack_records[
                 (attack_records[plot_x_col] == x_value)
                 & (attack_records["calculator"] == calculator)
@@ -2330,6 +2342,7 @@ def draw_grouped_ci(
     series = {
         "mace": {"x": [], "median": [], "lower": [], "upper": []},
         "uma": {"x": [], "median": [], "lower": [], "upper": []},
+        "chgnet": {"x": [], "median": [], "lower": [], "upper": []},
     }
 
     for position, box_values, calculator in zip(positions, values, calculators):
@@ -2541,7 +2554,7 @@ def collect_box_data_by_steps(records, attack, epsilon, value_getter, missing_ro
     rng = np.random.default_rng(12345)
 
     for n_steps in steps:
-        for calculator in ["mace", "uma"]:
+        for calculator in ["mace", "uma", "chgnet"]:
             rowset = attack_records[
                 (attack_records["n_steps"] == n_steps)
                 & (attack_records["calculator"] == calculator)
@@ -2684,7 +2697,7 @@ def collect_whisker_span_data(records, attack, value_getter, missing_rows, x_col
     points = []
 
     for x_value in x_values:
-        for calculator in ["mace", "uma"]:
+        for calculator in ["mace", "uma", "chgnet"]:
             rowset = attack_records[
                 (attack_records[x_col] == x_value)
                 & (attack_records["calculator"] == calculator)
@@ -2843,7 +2856,7 @@ def collect_whisker_span_data_by_steps(records, attack, epsilon, value_getter, m
     points = []
 
     for i, n_steps in enumerate(steps, start=1):
-        for calculator in ["mace", "uma"]:
+        for calculator in ["mace", "uma", "chgnet"]:
             rowset = attack_records[
                 (attack_records["n_steps"] == n_steps)
                 & (attack_records["calculator"] == calculator)
@@ -3080,6 +3093,7 @@ def draw_grouped_ci_by_steps(ax, records, attack, epsilon, value_getter, ylabel,
     series = {
         "mace": {"x": [], "median": [], "lower": [], "upper": []},
         "uma": {"x": [], "median": [], "lower": [], "upper": []},
+        "chgnet": {"x": [], "median": [], "lower": [], "upper": []},
     }
 
     for position, box_values, calculator in zip(positions, values, calculators):
@@ -3601,7 +3615,8 @@ def save_material_ranking_plot(
     )
 
     y = np.arange(len(material_order))
-    bar_height = 0.36
+
+    bar_height = 0.24
 
     def column_values(table, calculator, column):
         values = []
@@ -3619,8 +3634,9 @@ def save_material_ranking_plot(
         return np.asarray(values, dtype=float)
 
     for calculator, offset in [
-        ("mace", -bar_height / 2),
-        ("uma", bar_height / 2),
+        ("mace", -bar_height),
+        ("uma", 0.0),
+        ("chgnet", bar_height),
     ]:
         median = column_values(
             final_indexed,
@@ -3720,6 +3736,10 @@ def save_material_ranking_plot(
         Patch(
             facecolor=CALCULATOR_COLORS["uma"],
             label="UMA",
+        ),
+        Patch(
+            facecolor=CALCULATOR_COLORS["chgnet"],
+            label="CHGNet",
         ),
     ]
 
@@ -5480,10 +5500,11 @@ def main():
     apply_plot_style()
 
     parser = argparse.ArgumentParser(
-        description="Create publication-quality comprehensive MACE vs UMA plots."
+        description="Create publication-quality comprehensive MLFF plots."
     )
     parser.add_argument("--mace-dir", default=BASE_DIR / "outputs_mace", type=Path)
     parser.add_argument("--uma-dir", default=BASE_DIR / "outputs_uma", type=Path)
+    parser.add_argument("--chgnet-dir", default=BASE_DIR / "outputs_chgnet", type=Path)
     parser.add_argument("--output-dir", default=BASE_DIR / "outputs_comprehensive", type=Path)
     parser.add_argument("--materials", default=BASE_DIR / "tests_materials.csv", type=Path)
     parser.add_argument("--structures-dir", default=BASE_DIR / "mp_structures", type=Path)
@@ -5503,16 +5524,21 @@ def main():
         args.uma_dir,
         "uma",
     )
+    chgnet_records, chgnet_missing = load_summary(
+        args.chgnet_dir / "summary.csv",
+        args.chgnet_dir,
+        "chgnet",
+    )
 
-    records = pd.DataFrame(mace_records + uma_records)
-    missing_rows = [{"reason": item} for item in mace_missing + uma_missing]
+    records = pd.DataFrame(mace_records + uma_records + chgnet_records)
+    missing_rows = [{"reason": item} for item in mace_missing + uma_missing + chgnet_missing]
 
     if records.empty:
         pd.DataFrame(missing_rows).to_csv(
             args.output_dir / "missing_data_report.csv",
             index=False,
         )
-        raise SystemExit("No successful runs found in outputs_mace or outputs_uma.")
+        raise SystemExit("No successful runs found in outputs_mace, outputs_uma, or outputs_chgnet.")
 
     records.to_csv(args.output_dir / "combined_dataset.csv", index=False)
 

@@ -33,7 +33,7 @@ trial = Path("$TRIAL_NAME")
 summary_dir = trial / "array_summaries"
 
 for dtype_str in ["float32", "float64"]:
-    for calculator in ["mace", "uma"]:
+    for calculator in ["mace", "uma", "chgnet"]:
         files = sorted(summary_dir.glob(f"{dtype_str}_{calculator}_*_summary.csv"))
         if not files:
             raise SystemExit(f"ERROR: no {dtype_str} {calculator} summary files found in {summary_dir}")
@@ -52,12 +52,16 @@ for dtype_str in float32 float64; do
   python -u scripts_python/run_comprehensive.py \
     --mace-dir "${TRIAL_NAME}/outputs_${dtype_str}/mace" \
     --uma-dir "${TRIAL_NAME}/outputs_${dtype_str}/uma" \
+    --chgnet-dir "${TRIAL_NAME}/outputs_${dtype_str}/chgnet" \
     --output-dir "${TRIAL_NAME}/outputs_comprehensive/${dtype_str}"
 
-  if [ -f "${TRIAL_NAME}/outputs_${dtype_str}/mace/contour/summary.csv" ] || [ -f "${TRIAL_NAME}/outputs_${dtype_str}/uma/contour/summary.csv" ]; then
+  if [ -f "${TRIAL_NAME}/outputs_${dtype_str}/mace/contour/summary.csv" ] || \
+    [ -f "${TRIAL_NAME}/outputs_${dtype_str}/uma/contour/summary.csv" ] || \
+    [ -f "${TRIAL_NAME}/outputs_${dtype_str}/chgnet/contour/summary.csv" ]; then
     python -u scripts_python/contour_comprehensive.py \
       --mace-contour-dir "${TRIAL_NAME}/outputs_${dtype_str}/mace/contour" \
       --uma-contour-dir "${TRIAL_NAME}/outputs_${dtype_str}/uma/contour" \
+      --chgnet-contour-dir "${TRIAL_NAME}/outputs_${dtype_str}/chgnet/contour" \
       --comprehensive-dir "${TRIAL_NAME}/outputs_comprehensive/${dtype_str}" \
       --output-dir "${TRIAL_NAME}/outputs_comprehensive/${dtype_str}/contour"
   else

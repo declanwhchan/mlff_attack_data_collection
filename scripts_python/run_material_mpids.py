@@ -109,18 +109,33 @@ def download_structures(materials, structures_dir, force=False):
 def validate_config_files(config):
     for model in config["models"]:
         calculator = str(model.get("calculator", "")).lower()
-        require(calculator in {"mace", "uma"}, f"Unknown calculator: {calculator}")
+        require(calculator in {"mace", "uma", "chgnet"}, f"Unknown calculator: {calculator}")
         require(model.get("model_path"), f"Model missing model_path: {model}")
 
         if calculator == "mace":
             model_path = BASE_DIR / model["model_path"]
-            require(model_path.exists(), f"Missing MACE model file: {model_path}")
+            require(
+                model_path.exists(),
+                f"Missing MACE model file: {model_path}",
+            )
 
-        if calculator == "uma":
+        elif calculator == "uma":
             model_path = Path(str(model["model_path"]))
             require(
-                (BASE_DIR / model_path).exists() or (BASE_DIR / f"{model_path.stem}.pt").exists(),
-                f"Missing UMA model file: {model['model_path']} or {model_path.stem}.pt",
+                (BASE_DIR / model_path).exists()
+                or (BASE_DIR / f"{model_path.stem}.pt").exists(),
+                f"Missing UMA model file: {model['model_path']} "
+                f"or {model_path.stem}.pt",
+            )
+
+        elif calculator == "chgnet":
+            require(
+                model["model_path"] in {
+                    "chgnet-0.2.0",
+                    "chgnet-0.3.0",
+                    "chgnet-r2scan",
+                },
+                f"Unsupported CHGNet model: {model['model_path']}",
             )
 
 
@@ -159,7 +174,7 @@ def add_row(rows, material_label, material_slug, input_path, model, attack, epsi
     if calculator == "mace":
         row["mace_head"] = model.get("mace_head", "")
 
-    if calculator == "uma":
+    elif calculator == "uma":
         row["uma_task"] = model.get("uma_task", "")
         row["uma_charge"] = model.get("uma_charge", "")
         row["uma_spin"] = model.get("uma_spin", "")

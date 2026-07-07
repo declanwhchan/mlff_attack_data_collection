@@ -27,14 +27,17 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 TEST_FILE = BASE_DIR / "tests_sample.csv"
 outputs_mace_DIR = BASE_DIR / "outputs_mace"
 outputs_uma_DIR = BASE_DIR / "outputs_uma"
+outputs_chgnet_DIR = BASE_DIR / "outputs_chgnet"
 
 
 def active_environment():
     exe = str(sys.executable).lower()
     if ".venv-mace" in exe:
         return "mace"
-    if ".venv-uma" in exe:
+    elif ".venv-uma" in exe:
         return "uma"
+    elif ".venv-chgnet" in exe:
+        return "chgnet"
     return None
 
 
@@ -51,14 +54,17 @@ def dtype_for_row(row):
 def infer_calculator(model_path):
     model_name = Path(str(model_path)).name.lower()
 
-    if model_name.startswith("uma"):
-        return "uma"
-
     if model_name.startswith("mace"):
         return "mace"
 
+    elif model_name.startswith("uma"):
+        return "uma"
+
+    elif model_name.startswith("chgnet"):
+        return "chgnet"
+
     raise RuntimeError(
-        "Could not infer calculator. model_path basename must start with 'mace' or 'uma'."
+        "Could not infer calculator. model_path basename must start with 'mace', 'uma', or 'chgnet'."
     )
 
 
@@ -83,8 +89,11 @@ def output_base_for(calculator, dtype_str):
     if calculator == "mace":
         return output_root() / f"outputs_{dtype_str}" / "mace"
 
-    if calculator == "uma":
+    elif calculator == "uma":
         return output_root() / f"outputs_{dtype_str}" / "uma"
+
+    elif calculator == "chgnet":
+        return output_root() / f"outputs_{dtype_str}" / "chgnet"
 
     raise RuntimeError(f"Unknown calculator for output folder: {calculator}")
 
@@ -623,8 +632,10 @@ def run_one(row):
 
     if calculator == "mace":
         model_path = BASE_DIR / str(row["model_path"])
-    else:
+    elif calculator == "uma":
         model_path = Path(str(row["model_path"])).stem
+    else:
+        model_path = str(row["model_path"])
 
     relax_fmax = as_float_or_none(row["relax_fmax"])
     if relax_fmax is None:
@@ -856,6 +867,8 @@ def main(test_file=TEST_FILE):
         summary_file = output_root_dir / "outputs_mace" / "summary.csv"
     elif current_env == "uma":
         summary_file = output_root_dir / "outputs_uma" / "summary.csv"
+    elif current_env == "chgnet":
+        summary_file = output_root_dir / "outputs_chgnet" / "summary.csv"
     else:
         summary_file = output_root_dir / "summary.csv"
 
@@ -870,7 +883,7 @@ def main(test_file=TEST_FILE):
 
         print(f"Running row {index + 1}: {run_id}")
 
-        if current_env in ["mace", "uma"] and calculator != current_env:
+        if current_env in ["mace", "uma", "chgnet"] and calculator != current_env:
             summary = {
                 "run_id": run_id,
                 "status": "skipped",

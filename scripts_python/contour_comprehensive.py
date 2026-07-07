@@ -29,6 +29,7 @@ BETA_COLORS = {
 CALC_COLORS = {
     "mace": "#0072B2",
     "uma": "#D55E00",
+    "chgnet": "#009E73",
 }
 
 CONTOUR_BAND_COLOR = "#66C2A5"
@@ -724,7 +725,7 @@ def draw_contour_scatter(
         np.isclose(beta_values, beta)
     ].copy()
 
-    for calculator in ["mace", "uma"]:
+    for calculator in ["mace", "uma", "chgnet"]:
         selected = clean_scatter_data(
             beta_data[
                 beta_data["calculator"] == calculator
@@ -771,7 +772,7 @@ def draw_relaxed_contour_scatter(
         np.isclose(beta_values, beta)
     ].copy()
 
-    for calculator in ["mace", "uma"]:
+    for calculator in ["mace", "uma", "chgnet"]:
         selected = clean_scatter_data(
             beta_data[
                 beta_data["calculator"] == calculator
@@ -863,12 +864,20 @@ def plot_contour_metric_vs_displacement(
             color=CALC_COLORS["uma"],
             label="UMA",
         ),
+        plt.Line2D(
+            [0],
+            [0],
+            marker="o",
+            linestyle="none",
+            color=CALC_COLORS["chgnet"],
+            label="CHGNet",
+        ),
     ]
 
     fig.legend(
         handles=handles,
         loc="upper center",
-        ncol=2,
+        ncol=3,
         frameon=False,
         bbox_to_anchor=(0.5, 0.985),
     )
@@ -1432,9 +1441,9 @@ def plot_six_panel(material_slug, calculator, rows, output_dir):
     plt.close(fig)
 
 
-def plot_mace_vs_uma(material_slug, all_rows, output_dir):
+def plot_mlffs_comparison(material_slug, all_rows, output_dir):
     rows = all_rows[all_rows["material_slug"] == material_slug].copy()
-    if rows.empty or set(rows["calculator"]) != {"mace", "uma"}:
+    if rows.empty or set(rows["calculator"]) != {"mace", "uma", "chgnet"}:
         return
 
     grouped = rows.groupby(["calculator", "beta"], as_index=False).agg({
@@ -1470,12 +1479,12 @@ def plot_mace_vs_uma(material_slug, all_rows, output_dir):
 
     axes[0, 0].legend(loc="best")
     label_axes(axes)
-    fig.suptitle(f"{material_slug}: MACE vs UMA contour exploration", fontsize=10)
+    fig.suptitle(f"{material_slug}: MLFFs comparison contour exploration", fontsize=10)
     fig.tight_layout(rect=[0, 0, 1, 0.95])
 
     material_dir = output_dir / material_slug
     material_dir.mkdir(parents=True, exist_ok=True)
-    fig.savefig(material_dir / "mace_vs_uma_contour.png", bbox_inches="tight")
+    fig.savefig(material_dir / "mlffs_comparison_contour.png", bbox_inches="tight")
     plt.close(fig)
 
 
@@ -1814,6 +1823,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mace-contour-dir", default=BASE_DIR / "outputs_mace" / "contour", type=Path)
     parser.add_argument("--uma-contour-dir", default=BASE_DIR / "outputs_uma" / "contour", type=Path)
+    parser.add_argument("--chgnet-contour-dir", default=BASE_DIR / "outputs_chgnet" / "contour", type=Path)
     parser.add_argument("--comprehensive-dir", default=BASE_DIR / "outputs_comprehensive", type=Path)
     parser.add_argument("--output-dir", default=BASE_DIR / "outputs_comprehensive" / "contour", type=Path)
     args = parser.parse_args()
@@ -1822,7 +1832,7 @@ def main():
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     summaries = []
-    for contour_dir in [args.mace_contour_dir, args.uma_contour_dir]:
+    for contour_dir in [args.mace_contour_dir, args.uma_contour_dir, args.chgnet_contour_dir]:
         data = summary_rows(contour_dir)
         if not data.empty:
             summaries.append(data)
@@ -1966,7 +1976,7 @@ def main():
                 comparison_tables.append(table)
 
     for material_slug in sorted(all_rows["material_slug"].unique()):
-        plot_mace_vs_uma(material_slug, all_rows, args.output_dir)
+        plot_mlffs_comparison(material_slug, all_rows, args.output_dir)
 
     tables_dir = args.output_dir / "comparison_tables"
     tables_dir.mkdir(parents=True, exist_ok=True)

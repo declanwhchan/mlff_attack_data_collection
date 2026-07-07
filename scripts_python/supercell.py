@@ -45,7 +45,7 @@ REPEAT_TUPLES = [
     (2, 2, 2),
 ]
 
-CALCULATORS = ["mace", "uma"]
+CALCULATORS = ["mace", "uma", "chgnet"]
 EPSILON = 0.01
 DTYPE = "float64"
 SEED = 42
@@ -245,7 +245,7 @@ def make_run_row(
             "",
         )
 
-    if calculator == "uma":
+    elif calculator == "uma":
         row["uma_task"] = model.get(
             "uma_task",
             "",

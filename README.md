@@ -12,7 +12,7 @@ Practical-use context and literature sources are summarized in [`materials_pract
 
 # Setup for HPC
 
-This repo expects two separate Python environments because MACE and UMA have different dependency stacks.
+This repo expects three separate Python environments because MACE, UMA, and CHGNet have different dependency stacks.
 
 ## Expected Folder Layout
 
@@ -25,13 +25,12 @@ After completing the following 3 steps:
 │   └── .env
 ├── .venv-mace/
 └── .venv-uma/
+└── .venv-chgnet/
 ```
 
 ## 1. Clone Repos
 
 ```bash
-cd ~/project
-
 git clone https://github.com/TRustworthy-AI-Tools-for-Science/mlff_attack.git
 git clone https://github.com/declanwhchan/mlff_attack_data_collection.git
 ```
@@ -96,7 +95,7 @@ sbatch scripts_bash/visualize.sh
 
 ### Optional — Run Supercell Stress Test
 
-This submits a controller job that generates supercell CIFs, launches the full MACE/UMA attack array, and then runs a dependent plotting job.
+This submits a controller job that generates supercell CIFs, launches the full MACE/UMA/CHGNet attack array, and then runs a dependent plotting job.
 
 ```bash
 sbatch scripts_bash/supercell.sh

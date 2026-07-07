@@ -3,7 +3,7 @@
 #SBATCH --time=04:00:00
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=4
-#SBATCH --array=1-4
+#SBATCH --array=1-6
 #SBATCH --output=sample-1-main-%A_%a.out
 
 set -euo pipefail
@@ -53,7 +53,7 @@ for row in rows:
         materials.append(slug)
 
 dtypes = ["float32", "float64"]
-calculators = ["mace", "uma"]
+calculators = ["mace", "uma", "chgnet"]
 n_materials = len(materials)
 max_task_id = n_materials * len(dtypes) * len(calculators)
 
@@ -97,6 +97,8 @@ if [ "$CALCULATOR" = "mace" ]; then
   source ~/project/.venv-mace/bin/activate
 elif [ "$CALCULATOR" = "uma" ]; then
   source ~/project/.venv-uma/bin/activate
+elif [ "$CALCULATOR" = "chgnet" ]; then
+  source ~/project/.venv-chgnet/bin/activate
 else
   echo "ERROR: unknown calculator $CALCULATOR"
   exit 1

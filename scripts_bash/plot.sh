@@ -75,7 +75,7 @@ project_trial = Path("$PROJECT_TRIAL_DIR")
 summary_dir = scratch_trial / "array_summaries"
 
 for dtype_str in ["float32", "float64"]:
-    for calculator in ["mace", "uma"]:
+    for calculator in ["mace", "uma", "chgnet"]:
         files = sorted(summary_dir.glob(f"{dtype_str}_{calculator}_*_summary.csv"))
 
         if not files:
@@ -110,12 +110,14 @@ run_dtype_branch() {
   python -u scripts_python/run_comprehensive.py \
     --mace-dir "${scratch_trial_dir}/outputs_${dtype_str}/mace" \
     --uma-dir "${scratch_trial_dir}/outputs_${dtype_str}/uma" \
+    --chgnet-dir "${scratch_trial_dir}/outputs_${dtype_str}/chgnet" \
     --output-dir "${project_trial_dir}/outputs_comprehensive/${dtype_str}"
 
-  if [ -f "${scratch_trial_dir}/outputs_${dtype_str}/mace/contour/summary.csv" ] || [ -f "${scratch_trial_dir}/outputs_${dtype_str}/uma/contour/summary.csv" ]; then
+  if [ -f "${scratch_trial_dir}/outputs_${dtype_str}/mace/contour/summary.csv" ] || [ -f "${scratch_trial_dir}/outputs_${dtype_str}/uma/contour/summary.csv" ] || [ -f ".../chgnet/contour/summary.csv" ]; then
     python -u scripts_python/contour_comprehensive.py \
       --mace-contour-dir "${scratch_trial_dir}/outputs_${dtype_str}/mace/contour" \
       --uma-contour-dir "${scratch_trial_dir}/outputs_${dtype_str}/uma/contour" \
+      --chgnet-contour-dir "${scratch_trial_dir}/outputs_${dtype_str}/chgnet/contour" \
       --comprehensive-dir "${project_trial_dir}/outputs_comprehensive/${dtype_str}" \
       --output-dir "${project_trial_dir}/outputs_comprehensive/${dtype_str}/contour"
   else

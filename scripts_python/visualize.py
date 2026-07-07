@@ -104,6 +104,7 @@ def load_calc_context(base_dir):
     for calculator, summary_path in [
         ("mace", base_dir / "outputs_mace" / "summary.csv"),
         ("uma", base_dir / "outputs_uma" / "summary.csv"),
+        ("chgnet", base_dir / "outputs_chgnet" / "summary.csv"),
     ]:
         if not summary_path.exists():
             continue

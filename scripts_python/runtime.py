@@ -18,6 +18,7 @@ import pandas as pd
 COLORS = {
     "mace": "#0072B2",
     "uma": "#D55E00",
+    "chgnet": "#009E73",
 }
 
 LINESTYLES = {
@@ -168,7 +169,7 @@ def run_command(args):
         )
 
         if (
-            active_environment in {"mace", "uma"}
+            active_environment in {"mace", "uma", "chgnet"}
             and calculator != active_environment
         ):
             summary = {
@@ -403,12 +404,13 @@ def relaxation_converged(row):
     return float(final_force <= relax_fmax)
 
 
-def load_summaries(mace_summary, uma_summary):
+def load_summaries(mace_summary, uma_summary, chgnet_summary):
     frames = []
 
     for calculator, path in [
         ("mace", Path(mace_summary)),
         ("uma", Path(uma_summary)),
+        ("chgnet", Path(chgnet_summary)),
     ]:
         if not path.exists():
             print(f"Warning: missing {path}")
@@ -419,7 +421,7 @@ def load_summaries(mace_summary, uma_summary):
         frames.append(frame)
 
     if not frames:
-        raise SystemExit("No MACE or UMA summaries were found.")
+        raise SystemExit("No MACE, UMA, CHGNet summaries were found.")
 
     return pd.concat(frames, ignore_index=True, sort=False)
 
@@ -526,7 +528,7 @@ def plot_attack_panels(data, metric, ylabel, output_path):
     for axis, attack in zip(axes, ATTACKS):
         attack_data = data[data["attack_label"] == attack]
 
-        for calculator in ["mace", "uma"]:
+        for calculator in ["mace", "uma", "chgnet"]:
             selected = attack_data[
                 attack_data["calculator"] == calculator
             ].dropna(subset=["supercell_atoms", metric])
@@ -575,67 +577,10 @@ def plot_attack_panels(data, metric, ylabel, output_path):
     plt.close(fig)
 
 
-def plot_runtime_vs_memory(data, output_path):
-    fig, axes = plt.subplots(
-        1,
-        3,
-        figsize=(12, 3.7),
-    )
-
-    color_mappable = None
-
-    for axis, attack in zip(axes, ATTACKS):
-        attack_data = data[data["attack_label"] == attack]
-
-        for calculator in ["mace", "uma"]:
-            selected = attack_data[
-                attack_data["calculator"] == calculator
-            ].dropna(subset=[
-                "runtime_seconds_per_atom",
-                "cpu_peak_rss_mib_per_atom",
-                "supercell_atoms",
-            ])
-
-            if selected.empty:
-                continue
-
-            color_mappable = axis.scatter(
-                selected["cpu_peak_rss_mib_per_atom"],
-                selected["runtime_seconds_per_atom"],
-                c=selected["supercell_atoms"],
-                cmap="viridis",
-                marker="o" if calculator == "mace" else "^",
-                edgecolor=COLORS[calculator],
-                linewidth=0.8,
-                alpha=0.8,
-                label=calculator.upper(),
-            )
-
-        axis.set_title(attack)
-        axis.set_xlabel("Peak CPU RAM (MiB/atom)")
-        axis.set_ylabel("Runtime (s/atom)")
-
-        if axis.collections:
-            axis.legend()
-
-    if color_mappable is not None:
-        colorbar = fig.colorbar(
-            color_mappable,
-            ax=axes,
-            shrink=0.85,
-            pad=0.02,
-        )
-        colorbar.set_label("Supercell atoms")
-
-    fig.tight_layout()
-    fig.savefig(output_path, dpi=400, bbox_inches="tight")
-    plt.close(fig)
-
-
 def plot_convergence(data, output_path):
     fig, axis = plt.subplots(figsize=(7.5, 4.5))
 
-    for calculator in ["mace", "uma"]:
+    for calculator in ["mace", "uma", "chgnet"]:
         for attack in ATTACKS:
             selected = data[
                 (data["calculator"] == calculator)
@@ -742,7 +687,7 @@ def plot_metric_by_atoms(
     for axis, attack in zip(axes, ATTACKS):
         attack_data = data[data["attack_label"] == attack]
 
-        for calculator in ["mace", "uma"]:
+        for calculator in ["mace", "uma", "chgnet"]:
             selected = attack_data[
                 attack_data["calculator"] == calculator
             ].dropna(subset=["supercell_atoms", metric])
@@ -816,7 +761,7 @@ def plot_relation_by_atoms(
     for axis, attack in zip(axes, ATTACKS):
         attack_data = data[data["attack_label"] == attack]
 
-        for calculator in ["mace", "uma"]:
+        for calculator in ["mace", "uma", "chgnet"]:
             selected = attack_data[
                 attack_data["calculator"] == calculator
             ].dropna(
@@ -1312,6 +1257,7 @@ def plot_command(args):
     records = load_summaries(
         args.mace_summary,
         args.uma_summary,
+        args.chgnet_summary,
     )
     metrics = prepare_metrics(records)
 
@@ -1429,10 +1375,6 @@ def plot_command(args):
         "Peak CPU RAM (MiB/atom)",
         output_dir / "cpu_ram_per_atom_vs_atoms.png",
     )
-    plot_runtime_vs_memory(
-        primary,
-        output_dir / "runtime_vs_cpu_ram_per_atom.png",
-    )
     plot_convergence(
         primary,
         output_dir / "relaxation_convergence_vs_atoms.png",
@@ -1473,6 +1415,11 @@ def main():
     )
     plot_parser.add_argument(
         "--uma-summary",
+        required=True,
+        type=Path,
+    )
+    plot_parser.add_argument(
+        "--chgnet-summary",
         required=True,
         type=Path,
     )

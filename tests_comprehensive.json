@@ -26,6 +26,10 @@
       "uma_task": "omat",
       "uma_charge": 0,
       "uma_spin": 1
+    },
+    {
+      "calculator": "chgnet",
+      "model_path": "chgnet-0.3.0"
     }
   ],
   "attacks": [

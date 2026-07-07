@@ -3,7 +3,7 @@
 #SBATCH --time=10:00:00
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=8
-#SBATCH --array=1-400%80
+#SBATCH --array=1-600%150
 #SBATCH --output=contour-%A_%a.out
 
 set -euo pipefail
@@ -105,6 +105,8 @@ if [ "$CALCULATOR" = "mace" ]; then
   source ~/project/.venv-mace/bin/activate
 elif [ "$CALCULATOR" = "uma" ]; then
   source ~/project/.venv-uma/bin/activate
+elif [ "$CALCULATOR" = "chgnet" ]; then
+  source ~/project/.venv-chgnet/bin/activate
 else
   echo "ERROR: unknown calculator $CALCULATOR"
   exit 1

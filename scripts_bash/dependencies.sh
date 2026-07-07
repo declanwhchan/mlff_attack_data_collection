@@ -29,7 +29,7 @@ setup_env() {
 
   python -m pip install --upgrade pip setuptools wheel
 
-  python -m pip install -e "$PROJECT_DIR/mlff_attack"
+  python -m pip install --no-deps -e "$PROJECT_DIR/mlff_attack"
 
   python -m pip install "$extra_package"
 
@@ -58,5 +58,6 @@ PY
 
 setup_env ".venv-mace" "mace-torch"
 setup_env ".venv-uma" "fairchem-core"
+setup_env ".venv-chgnet" "chgnet"
 
 echo "Environment setup complete."

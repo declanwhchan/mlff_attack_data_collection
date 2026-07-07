@@ -140,7 +140,7 @@ def save_metric_plot(data, metric, output_dir):
     ax = fig.add_subplot(grid[1, 0], sharex=ax_hist_x)
     ax_hist_y = fig.add_subplot(grid[1, 1], sharey=ax)
 
-    colors = {"mace": "#0072B2", "uma": "#D55E00"}
+    colors = {"mace": "#0072B2", "uma": "#D55E00", "chgnet": "#009E73"}
 
     for calculator, color in colors.items():
         subset = plot_data[plot_data["calculator"] == calculator]
