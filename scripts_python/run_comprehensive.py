@@ -6,7 +6,6 @@ import math
 import re
 
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 from matplotlib.patches import Ellipse, Patch, FancyArrowPatch
 from matplotlib.ticker import MaxNLocator, ScalarFormatter, FuncFormatter, FixedLocator, NullLocator
 import numpy as np
@@ -668,6 +667,12 @@ def load_summary(summary_path, base_dir, calculator):
             "coordination_change_mean": as_float(row.get("coordination_change_mean")),
             "coordination_change_max": as_float(row.get("coordination_change_max")),
             "rdf_l1_distance": as_float(row.get("rdf_l1_distance")),
+            "perturbed_space_group_change_fraction": as_float(row.get("perturbed_space_group_change_fraction")),
+            "space_group_change_fraction": as_float(row.get("space_group_change_fraction")),
+            "perturbed_symmetry_operation_retention": as_float(row.get("perturbed_symmetry_operation_retention")),
+            "symmetry_operation_retention": as_float(row.get("symmetry_operation_retention")),
+            "perturbed_unique_site_change": as_float(row.get("perturbed_unique_site_change")),
+            "unique_site_change": as_float(row.get("unique_site_change")),
         })
 
     return records, missing
@@ -4619,24 +4624,17 @@ def make_topology_metric_figure_set(
     epsilon_records,
     n_step_records,
     output_dir,
+    metrics=None,
 ):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    metrics = [
-        (
-            "neighbor_jaccard_distance",
-            "Neighbor Jaccard distance",
-        ),
-        (
-            "rdf_l1_distance",
-            "RDF L1 distance",
-        ),
-        (
-            "coordination_change_max",
-            "Max coordination change",
-        ),
-    ]
+    if metrics is None:
+        metrics = [
+            ("neighbor_jaccard_distance", "Neighbor Jaccard distance"),
+            ("rdf_l1_distance", "RDF L1 distance"),
+            ("coordination_change_max", "Max coordination change"),
+        ]
 
     displacement_getters = displacement_metric_getters()
     delta_force_getters = delta_force_metric_getters()
@@ -5423,6 +5421,61 @@ def make_topology_figures(records, output_dir):
             )
 
 
+def make_space_group_figures(records, output_dir):
+    metrics = [
+        ("space_group_change_fraction", "Space-group change fraction"),
+        ("symmetry_operation_retention", "Symmetry-operation retention"),
+        ("unique_site_change", "Unique symmetry-site change"),
+    ]
+
+    required_columns = [
+        f"{prefix}{metric}"
+        for metric, _ in metrics
+        for prefix in ("perturbed_", "")
+    ]
+
+    available_values = [
+        pd.to_numeric(records[column], errors="coerce")
+        for column in required_columns
+        if column in records.columns
+    ]
+
+    if not available_values or not any(
+        values.notna().any() for values in available_values
+    ):
+        print(
+            "No crystallographic symmetry metrics were found; "
+            "skipping space-group plots."
+        )
+        return
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    records.to_csv(output_dir / "space_group_summary.csv", index=False)
+
+    for material, selected in [
+        ("combined", records),
+        *records.groupby("material_slug"),
+    ]:
+        target = (
+            output_dir
+            if material == "combined"
+            else output_dir / str(material)
+        )
+        epsilon = selected[
+            ~selected["run_id"].str.contains("_steps", na=False)
+        ]
+        steps = selected[
+            selected["run_id"].str.contains("_steps", na=False)
+        ]
+        make_topology_metric_figure_set(
+            epsilon,
+            steps,
+            target,
+            metrics=metrics,
+        )
+
+
 def main():
     apply_plot_style()
 
@@ -5464,6 +5517,7 @@ def main():
     records.to_csv(args.output_dir / "combined_dataset.csv", index=False)
 
     make_topology_figures(records, args.output_dir / "topology")
+    make_space_group_figures(records, args.output_dir / "space_group")
     make_supercell_metadata(records, args.output_dir / "supercells")
 
     epsilon_records = records[

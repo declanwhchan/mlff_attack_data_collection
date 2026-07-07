@@ -15,6 +15,8 @@ from mlff_attack.relaxation import load_structure, run_relaxation, setup_calcula
 from mlff_attack.visualization import load_trajectory, create_visualization
 from ase.neighborlist import neighbor_list, natural_cutoffs
 
+import spglib
+
 try:
     from ase.geometry.rdf import get_rdf
 except ImportError:
@@ -427,35 +429,36 @@ def rdf_l1_distance(before_atoms, after_atoms, r_max=6.0, bins=60):
     return float(np.sum(np.abs(before_rdf - after_rdf)) * dr)
 
 
-def topology_change_metrics(before_atoms, after_atoms, output_dir):
+def topology_change_metrics(
+    before_atoms,
+    after_atoms,
+    output_dir,
+    edge_changes_filename="topology_edge_changes.csv",
+):
     before_edges = neighbor_edge_set(before_atoms)
     after_edges = neighbor_edge_set(after_atoms)
 
     added_edges = after_edges - before_edges
     removed_edges = before_edges - after_edges
-    neighbor_jaccard_distance = edge_jaccard_distance(
-        before_edges,
-        after_edges,
-    )
 
     before_coord = coordination_by_atom(before_edges, before_atoms)
     after_coord = coordination_by_atom(after_edges, after_atoms)
 
-    coord_delta = []
-    for atom in sorted(set(before_coord) | set(after_coord)):
-        coord_delta.append(
-            abs(after_coord.get(atom, 0) - before_coord.get(atom, 0))
-        )
+    coordination_changes = [
+        abs(after_coord.get(atom, 0) - before_coord.get(atom, 0))
+        for atom in sorted(set(before_coord) | set(after_coord))
+    ]
 
-    rdf_distance = rdf_l1_distance(before_atoms, after_atoms)
+    edge_changes_csv = Path(output_dir) / edge_changes_filename
+    edge_rows = [
+        {"change": "added", "edge": "-".join(edge)}
+        for edge in sorted(added_edges)
+    ]
+    edge_rows.extend(
+        {"change": "removed", "edge": "-".join(edge)}
+        for edge in sorted(removed_edges)
+    )
 
-    edge_rows = []
-    for edge in sorted(added_edges):
-        edge_rows.append({"change": "added", "edge": "-".join(edge)})
-    for edge in sorted(removed_edges):
-        edge_rows.append({"change": "removed", "edge": "-".join(edge)})
-
-    edge_changes_csv = output_dir / "topology_edge_changes.csv"
     pd.DataFrame(
         edge_rows,
         columns=["change", "edge"],
@@ -468,15 +471,76 @@ def topology_change_metrics(before_atoms, after_atoms, output_dir):
         "neighbor_edges_added": len(added_edges),
         "neighbor_edges_removed": len(removed_edges),
         "neighbor_edge_change_count": len(added_edges) + len(removed_edges),
-        "neighbor_jaccard_distance": float(neighbor_jaccard_distance),
+        "neighbor_jaccard_distance": edge_jaccard_distance(
+            before_edges,
+            after_edges,
+        ),
         "coordination_change_mean": (
-            float(np.mean(coord_delta)) if coord_delta else 0.0
+            float(np.mean(coordination_changes))
+            if coordination_changes
+            else 0.0
         ),
         "coordination_change_max": (
-            float(np.max(coord_delta)) if coord_delta else 0.0
+            float(np.max(coordination_changes))
+            if coordination_changes
+            else 0.0
         ),
-        "rdf_l1_distance": rdf_distance,
+        "rdf_l1_distance": rdf_l1_distance(before_atoms, after_atoms),
         "rdf_method": RDF_METHOD,
+    }
+
+
+SYMPRECS = [1e-2, 1e-3, 1e-4]
+
+
+def symmetry_signature(atoms, symprec):
+    cell = (
+        atoms.cell.array,
+        atoms.get_scaled_positions(wrap=True),
+        atoms.get_atomic_numbers(),
+    )
+    dataset = spglib.get_symmetry_dataset(
+        cell,
+        symprec=symprec,
+        angle_tolerance=-1.0,
+    )
+    if dataset is None:
+        return None
+
+    return {
+        "number": int(dataset.number),
+        "operations": len(dataset.rotations),
+        "unique_sites": len(np.unique(dataset.equivalent_atoms)),
+    }
+
+
+def symmetry_change_metrics(initial, current):
+    initial_data = [symmetry_signature(initial, value) for value in SYMPRECS]
+    current_data = [symmetry_signature(current, value) for value in SYMPRECS]
+    pairs = [
+        (before, after)
+        for before, after in zip(initial_data, current_data)
+        if before is not None and after is not None
+    ]
+    if not pairs:
+        return {
+            "space_group_change_fraction": np.nan,
+            "symmetry_operation_retention": np.nan,
+            "unique_site_change": np.nan,
+        }
+
+    return {
+        "space_group_change_fraction": float(np.mean([
+            before["number"] != after["number"] for before, after in pairs
+        ])),
+        "symmetry_operation_retention": float(np.median([
+            min(after["operations"], before["operations"])
+            / before["operations"]
+            for before, after in pairs
+        ])),
+        "unique_site_change": float(np.median([
+            after["unique_sites"] - before["unique_sites"] for before, after in pairs
+        ])),
     }
 
 
@@ -662,8 +726,27 @@ def run_one(row):
         plot_title(row, calculator, "Forces After Attack Relaxation"),
     )
 
+    perturbed_topology = topology_change_metrics(
+        relaxed_atoms,
+        perturbed_atoms,
+        output_dir,
+        edge_changes_filename="topology_edge_changes_perturbed.csv",
+    )
+
+    perturbed_topology = {
+        f"perturbed_{name}": value
+        for name, value in perturbed_topology.items()
+    }
+
     final_relaxed_cif = output_dir / "final_relaxed.cif"
     attack_relaxed_atoms.write(final_relaxed_cif)
+
+    final_topology = topology_change_metrics(
+        relaxed_atoms,
+        attack_relaxed_atoms,
+        output_dir,
+        edge_changes_filename="topology_edge_changes.csv",
+    )
 
     fig = visualize_perturbation(
         relaxed_atoms,
@@ -690,11 +773,14 @@ def run_one(row):
     perturbed_positions = attack_relaxed_atoms.get_positions()
     displacement = perturbed_positions - original_positions
     displacement_magnitudes = np.linalg.norm(displacement, axis=1)
-    topology_metrics = topology_change_metrics(
-        relaxed_atoms,
-        attack_relaxed_atoms,
-        output_dir,
-    )
+
+    immediate_symmetry = symmetry_change_metrics(relaxed_atoms, perturbed_atoms)
+    final_symmetry = symmetry_change_metrics(relaxed_atoms, attack_relaxed_atoms)
+
+    symmetry_metrics = {
+        **{f"perturbed_{key}": value for key, value in immediate_symmetry.items()},
+        **final_symmetry,
+    }
 
     summary = {
         "run_id": run_id,
@@ -746,8 +832,11 @@ def run_one(row):
         "mean_displacement": float(displacement_magnitudes.mean()),
         "max_displacement": float(displacement_magnitudes.max()),
         "final_energy": float(attack_relaxed_atoms.get_potential_energy()),
-        **topology_metrics,
+        **symmetry_metrics,
     }
+
+    summary.update(perturbed_topology)
+    summary.update(final_topology)
 
     return summary
 

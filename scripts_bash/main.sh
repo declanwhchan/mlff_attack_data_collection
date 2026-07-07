@@ -122,6 +122,8 @@ fi
 
 which python
 
+python -c "import spglib; print('spglib', spglib.__version__)"
+
 python -u - <<PY
 import csv
 import os

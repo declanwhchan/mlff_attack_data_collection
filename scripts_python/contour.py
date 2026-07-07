@@ -19,6 +19,7 @@ from run_tests import (
     edge_jaccard_distance,
     neighbor_edge_set,
     rdf_l1_distance,
+    symmetry_change_metrics,
 )
 
 
@@ -174,8 +175,11 @@ def neighbor_pairs(atoms):
 def separation_distance(atoms, pairs):
     if not pairs:
         return np.nan
-    positions = atoms.get_positions()
-    distances = [atoms.get_distance(i, j, mic=True) for i, j in pairs]
+
+    distances = [
+        atoms.get_distance(i, j, mic=True)
+        for i, j in pairs
+    ]
     return float(np.mean(distances))
 
 
@@ -449,6 +453,16 @@ def run_contour(job, beta, config, args):
     )
     atoms.write(final_contour_path)
 
+    immediate_symmetry = symmetry_change_metrics(
+        initial_atoms,
+        atoms,
+    )
+
+    contour_symmetry = {
+        f"contour_{name}": value
+        for name, value in immediate_symmetry.items()
+    }
+
     post_relax_fmax = as_float(
         config.get("contour_post_relax_fmax"),
         as_float(config.get("relax_fmax"), 0.01),
@@ -479,6 +493,9 @@ def run_contour(job, beta, config, args):
         "contour_relaxed_neighbor_jaccard_distance": np.nan,
         "contour_relaxed_rdf_l1_distance": np.nan,
         "contour_relaxed_coordination_change_max": np.nan,
+        "contour_relaxed_space_group_change_fraction": np.nan,
+        "contour_relaxed_symmetry_operation_retention": np.nan,
+        "contour_relaxed_unique_site_change": np.nan,
     }
 
     try:
@@ -554,6 +571,13 @@ def run_contour(job, beta, config, args):
                 initial_atoms,
                 relaxed_atoms,
             ),
+            **{
+                f"contour_relaxed_{name}": value
+                for name, value in symmetry_change_metrics(
+                    initial_atoms,
+                    relaxed_atoms,
+                ).items()
+            },
         })
 
     except Exception as error:
@@ -575,6 +599,7 @@ def run_contour(job, beta, config, args):
         "log": str(log_path),
         "final_contour_cif": str(final_contour_path),
         **relaxed_summary,
+        **contour_symmetry,
         "energy_target_ev": energy_target,
         "initial_energy_ev": initial_energy,
         "mean_abs_energy_deviation_mev_per_atom": float(metrics["energy_deviation_mev_per_atom"].abs().mean()),

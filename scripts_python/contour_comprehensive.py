@@ -14,6 +14,7 @@ from run_tests import (
     edge_jaccard_distance,
     neighbor_edge_set,
     rdf_l1_distance,
+    symmetry_change_metrics,
 )
 
 
@@ -422,6 +423,9 @@ def contour_frame_table(summary_row, max_frames=101):
     coordination_values = []
     rdf_values = []
     force_angle_values = []
+    space_group_change_values = []
+    operation_retention_values = []
+    unique_site_change_values = []
 
     for frame in selected_frames:
         current_positions = frame.get_positions()
@@ -480,6 +484,28 @@ def contour_frame_table(summary_row, max_frames=101):
             jaccard_values.append(np.nan)
             coordination_values.append(np.nan)
             rdf_values.append(np.nan)
+        try:
+            symmetry = symmetry_change_metrics(
+                initial_atoms,
+                frame,
+            )
+            space_group_change_values.append(
+                symmetry["space_group_change_fraction"]
+            )
+            operation_retention_values.append(
+                symmetry["symmetry_operation_retention"]
+            )
+            unique_site_change_values.append(
+                symmetry["unique_site_change"]
+            )
+        except Exception as error:
+            print(
+                f"Could not calculate contour symmetry for "
+                f"{trajectory_path}: {error}"
+            )
+            space_group_change_values.append(np.nan)
+            operation_retention_values.append(np.nan)
+            unique_site_change_values.append(np.nan)
 
     selected["contour_median_displacement_a"] = (
         median_displacements
@@ -506,6 +532,15 @@ def contour_frame_table(summary_row, max_frames=101):
     selected["material_slug"] = summary_row["material_slug"]
     selected["calculator"] = summary_row["calculator"]
     selected["beta"] = float(summary_row["beta"])
+    selected["contour_space_group_change_fraction"] = (
+        space_group_change_values
+    )
+    selected["contour_symmetry_operation_retention"] = (
+        operation_retention_values
+    )
+    selected["contour_unique_site_change"] = (
+        unique_site_change_values
+    )
 
     return selected
 
@@ -618,6 +653,34 @@ CONTOUR_DISPLACEMENT_PLOTS = [
         "Median force-vector angle change (degrees)",
         "delta_force_angle_vs_displacement.png",
         "Force-angle change vs median displacement",
+    ),
+]
+
+
+SPACE_GROUP_DISPLACEMENT_PLOTS = [
+    (
+        "contour_space_group_change_fraction",
+        "contour_relaxed_space_group_change_fraction",
+        "Space-group change fraction",
+        "Space-group change fraction",
+        "space_group_change_fraction_vs_displacement.png",
+        "Space-group change vs median displacement",
+    ),
+    (
+        "contour_symmetry_operation_retention",
+        "contour_relaxed_symmetry_operation_retention",
+        "Symmetry-operation retention",
+        "Symmetry-operation retention",
+        "symmetry_operation_retention_vs_displacement.png",
+        "Symmetry-operation retention vs median displacement",
+    ),
+    (
+        "contour_unique_site_change",
+        "contour_relaxed_unique_site_change",
+        "Unique symmetry-site change",
+        "Unique symmetry-site change",
+        "unique_site_change_vs_displacement.png",
+        "Unique symmetry-site change vs median displacement",
     ),
 ]
 
@@ -853,12 +916,44 @@ def make_contour_displacement_plots(
     frame_data,
     relaxed_data,
     output_dir,
+    plot_specs=None,
 ):
+    if plot_specs is None:
+        plot_specs = CONTOUR_DISPLACEMENT_PLOTS
+
+    valid_specs = []
+
+    for spec in plot_specs:
+        contour_metric, relaxed_metric = spec[:2]
+
+        if (
+            contour_metric not in frame_data.columns
+            or relaxed_metric not in relaxed_data.columns
+        ):
+            continue
+
+        contour_values = pd.to_numeric(
+            frame_data[contour_metric],
+            errors="coerce",
+        )
+        relaxed_values = pd.to_numeric(
+            relaxed_data[relaxed_metric],
+            errors="coerce",
+        )
+
+        if (
+            not contour_values.notna().any()
+            or not relaxed_values.notna().any()
+        ):
+            continue
+
+        valid_specs.append(spec)
+
+    if not valid_specs:
+        return
+
     output_dir = Path(output_dir)
-    output_dir.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     for (
         contour_metric,
@@ -867,7 +962,7 @@ def make_contour_displacement_plots(
         relaxed_ylabel,
         filename,
         title,
-    ) in CONTOUR_DISPLACEMENT_PLOTS:
+    ) in valid_specs:
         plot_contour_metric_vs_displacement(
             contour_data=frame_data,
             relaxed_data=relaxed_data,
@@ -1747,6 +1842,41 @@ def main():
         all_rows
     )
 
+    relaxed_symmetry_columns = [
+        "material_slug",
+        "calculator",
+        "beta",
+        "contour_relaxed_space_group_change_fraction",
+        "contour_relaxed_symmetry_operation_retention",
+        "contour_relaxed_unique_site_change",
+    ]
+
+    available_symmetry_columns = [
+        column
+        for column in relaxed_symmetry_columns
+        if column in all_rows.columns
+    ]
+
+    if len(available_symmetry_columns) == len(relaxed_symmetry_columns):
+        relaxed_symmetry = all_rows[
+            relaxed_symmetry_columns
+        ].drop_duplicates(
+            ["material_slug", "calculator", "beta"]
+        )
+
+        missing_columns = [
+            column
+            for column in relaxed_symmetry_columns[3:]
+            if column not in relaxed_endpoints.columns
+        ]
+
+        if missing_columns:
+            relaxed_endpoints = relaxed_endpoints.merge(
+                relaxed_symmetry,
+                on=["material_slug", "calculator", "beta"],
+                how="left",
+            )
+
     relaxed_endpoints.to_csv(
         args.output_dir
         / "contour_relaxed_endpoint_metrics.csv",
@@ -1754,11 +1884,6 @@ def main():
     )
 
     attacks = load_attack_dataset(args.comprehensive_dir)
-    attack_metrics = (
-        attack_metric_table(attacks)
-        if not attacks.empty
-        else pd.DataFrame()
-    )
 
     if not contour_frames.empty:
         contour_frames.to_csv(
@@ -1770,6 +1895,13 @@ def main():
             contour_frames,
             relaxed_endpoints,
             args.output_dir,
+        )
+
+        make_contour_displacement_plots(
+            contour_frames,
+            relaxed_endpoints,
+            args.output_dir / "space_group",
+            plot_specs=SPACE_GROUP_DISPLACEMENT_PLOTS,
         )
 
         for material_slug, material_frames in (
@@ -1792,6 +1924,14 @@ def main():
                 material_relaxed,
                 args.output_dir / str(material_slug),
             )
+
+            make_contour_displacement_plots(
+                material_frames,
+                material_relaxed,
+                args.output_dir / "space_group" / str(material_slug),
+                plot_specs=SPACE_GROUP_DISPLACEMENT_PLOTS,
+            )
+
     else:
         print("No contour trajectory frames were available.")
 

@@ -441,6 +441,12 @@ def prepare_metrics(records):
         "rdf_l1_distance",
         "coordination_change_mean",
         "coordination_change_max",
+        "perturbed_space_group_change_fraction",
+        "space_group_change_fraction",
+        "perturbed_symmetry_operation_retention",
+        "symmetry_operation_retention",
+        "perturbed_unique_site_change",
+        "unique_site_change",
     ]
 
     for column in numeric_columns:
@@ -1211,6 +1217,85 @@ def make_material_rankings(data, output_dir):
         plt.close(fig)
 
 
+def make_space_group_figures(data, output_dir):
+    metrics = [
+        (
+            "space_group_change_fraction",
+            "Space-group change fraction",
+        ),
+        (
+            "symmetry_operation_retention",
+            "Symmetry-operation retention",
+        ),
+        (
+            "unique_site_change",
+            "Unique-site change",
+        ),
+    ]
+
+    required_columns = [
+        f"{prefix}{metric}"
+        for metric, _ in metrics
+        for prefix in ("perturbed_", "")
+    ]
+
+    available_values = [
+        pd.to_numeric(data[column], errors="coerce")
+        for column in required_columns
+        if column in data.columns
+    ]
+
+    if not available_values or not any(
+        values.notna().any() for values in available_values
+    ):
+        print(
+            "No crystallographic symmetry metrics were found; "
+            "skipping supercell space-group plots."
+        )
+        return
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    datasets = [
+        ("before_relaxation", "perturbed_"),
+        ("after_relaxation", ""),
+    ]
+
+    for state_name, prefix in datasets:
+        for metric, label in metrics:
+            plot_attack_panels(
+                data,
+                f"{prefix}{metric}",
+                label,
+                output_dir / f"{metric}_{state_name}_by_atoms.png",
+            )
+
+    if "base_material_slug" not in data.columns:
+        return
+
+    for material, material_data in data.groupby(
+        "base_material_slug"
+    ):
+        material_name = (
+            str(material)
+            .replace("/", "_")
+            .replace("\\", "_")
+        )
+        material_dir = output_dir / material_name
+        material_dir.mkdir(parents=True, exist_ok=True)
+
+        for state_name, prefix in datasets:
+            for metric, label in metrics:
+                plot_attack_panels(
+                    material_data,
+                    f"{prefix}{metric}",
+                    label,
+                    material_dir
+                    / f"{metric}_{state_name}_by_atoms.png",
+                )
+
+
 def plot_command(args):
     apply_style()
 
@@ -1287,6 +1372,11 @@ def plot_command(args):
     make_topology_figures(
         primary,
         output_dir / "topology",
+    )
+
+    make_space_group_figures(
+        primary,
+        output_dir / "space_group",
     )
 
     # One folder containing figures 1-7 for each base material.

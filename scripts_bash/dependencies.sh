@@ -35,6 +35,7 @@ setup_env() {
 
   python -m pip install \
     pymatgen \
+    spglib \
     pytest \
     boto3 \
     botocore \
