@@ -1591,6 +1591,13 @@ def paired_relaxation_rows(
             continue
 
         def finite_median(metric_values):
+            if (
+                isinstance(metric_values, tuple)
+                and len(metric_values) == 2
+                and np.isscalar(metric_values[0])
+            ):
+                metric_values = metric_values[1]
+
             metric_values = np.asarray(
                 metric_values,
                 dtype=float,
@@ -4728,7 +4735,7 @@ def make_topology_metric_figure_set(
         paired_convergence_getters = [
             lambda row: scalar_distribution(
                 row,
-                "after_relax_steps",
+                "before_relax_steps",
             ),
             lambda row: scalar_distribution(
                 row,

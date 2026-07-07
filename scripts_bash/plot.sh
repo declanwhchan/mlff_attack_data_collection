@@ -113,7 +113,9 @@ run_dtype_branch() {
     --chgnet-dir "${scratch_trial_dir}/outputs_${dtype_str}/chgnet" \
     --output-dir "${project_trial_dir}/outputs_comprehensive/${dtype_str}"
 
-  if [ -f "${scratch_trial_dir}/outputs_${dtype_str}/mace/contour/summary.csv" ] || [ -f "${scratch_trial_dir}/outputs_${dtype_str}/uma/contour/summary.csv" ] || [ -f ".../chgnet/contour/summary.csv" ]; then
+  if [ -f "${scratch_trial_dir}/outputs_${dtype_str}/mace/contour/summary.csv" ] || \
+     [ -f "${scratch_trial_dir}/outputs_${dtype_str}/uma/contour/summary.csv" ] || \
+     [ -f "${scratch_trial_dir}/outputs_${dtype_str}/chgnet/contour/summary.csv" ]; then
     python -u scripts_python/contour_comprehensive.py \
       --mace-contour-dir "${scratch_trial_dir}/outputs_${dtype_str}/mace/contour" \
       --uma-contour-dir "${scratch_trial_dir}/outputs_${dtype_str}/uma/contour" \

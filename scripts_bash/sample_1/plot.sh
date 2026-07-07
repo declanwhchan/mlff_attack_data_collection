@@ -56,8 +56,8 @@ for dtype_str in float32 float64; do
     --output-dir "${TRIAL_NAME}/outputs_comprehensive/${dtype_str}"
 
   if [ -f "${TRIAL_NAME}/outputs_${dtype_str}/mace/contour/summary.csv" ] || \
-    [ -f "${TRIAL_NAME}/outputs_${dtype_str}/uma/contour/summary.csv" ] || \
-    [ -f "${TRIAL_NAME}/outputs_${dtype_str}/chgnet/contour/summary.csv" ]; then
+     [ -f "${TRIAL_NAME}/outputs_${dtype_str}/uma/contour/summary.csv" ] || \
+     [ -f "${TRIAL_NAME}/outputs_${dtype_str}/chgnet/contour/summary.csv" ]; then
     python -u scripts_python/contour_comprehensive.py \
       --mace-contour-dir "${TRIAL_NAME}/outputs_${dtype_str}/mace/contour" \
       --uma-contour-dir "${TRIAL_NAME}/outputs_${dtype_str}/uma/contour" \
