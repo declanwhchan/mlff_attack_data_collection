@@ -543,7 +543,6 @@ def resolve_run_dir(base_dir, row):
         "after_force_csv",
         "before_relax_traj",
         "after_attack_relax_traj",
-        "history_file",
     ]:
         value = clean_value(row.get(column))
         if value is not None:
