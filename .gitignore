@@ -6,10 +6,13 @@
 __pycache__/
 .pytest*
 
-# Inputs
+# Structures
 *.cif
+
+# MLFFs
 *.model
 *.pt
+*.almtp
 
 # Outputs
 outputs*/
