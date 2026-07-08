@@ -207,30 +207,6 @@ def attack_parameters(row):
     return ", ".join(parts)
 
 
-def save_attack_history(history, path):
-    rows = []
-    max_len = 0
-
-    for values in history.values():
-        if len(values) > max_len:
-            max_len = len(values)
-
-    for step in range(max_len):
-        row = {"step": step}
-
-        for key, values in history.items():
-            if step < len(values):
-                value = values[step]
-                if isinstance(value, np.ndarray):
-                    row[key] = value.tolist()
-                else:
-                    row[key] = value
-
-        rows.append(row)
-
-    pd.DataFrame(rows).to_json(path, orient="records", indent=2)
-
-
 def save_force_data(atoms, output_dir, label):
     forces = atoms.get_forces()
     positions = atoms.get_positions()
@@ -631,7 +607,7 @@ def run_one(row):
 
     output_cif = output_dir / "perturbed.cif"
 
-    output_file, perturbed_atoms, attack_history = make_attack(
+    output_file, perturbed_atoms, _ = make_attack(
         atoms=relaxed_atoms,
         model_path=model_path,
         device=row["device"],
@@ -668,9 +644,6 @@ def run_one(row):
         relax_max_steps,
         relax_optimizer,
     )
-
-    history_file = output_dir / "history.json"
-    save_attack_history(attack_history, history_file)
 
     before_force_csv = save_force_data(relaxed_atoms, output_dir, "before")
 
@@ -746,7 +719,6 @@ def run_one(row):
         "contour_energy_target": as_float_or_none(row["contour_energy_target"]),
         "output_cif": str(output_file),
         "final_relaxed_cif": str(final_relaxed_cif),
-        "history_file": str(history_file),
         "before_relax_traj": str(before_relax_traj),
         "after_attack_relax_traj": str(after_relax_traj),
         "before_force_csv": str(before_force_csv),

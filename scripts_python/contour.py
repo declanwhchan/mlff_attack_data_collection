@@ -4,6 +4,7 @@ import csv
 import json
 import os
 from pathlib import Path
+from types import MethodType
 
 import numpy as np
 import pandas as pd
@@ -127,6 +128,26 @@ def select_jobs(jobs, calculator=None, material_slug=None):
     return selected
 
 
+def add_chgnet_free_energy_compatibility(atoms):
+    original_get_potential_energy = atoms.calc.get_potential_energy
+
+    def get_potential_energy(
+        calculator,
+        atoms=None,
+        force_consistent=False,
+    ):
+        return original_get_potential_energy(
+            atoms=atoms,
+            force_consistent=False,
+        )
+
+    atoms.calc.get_potential_energy = MethodType(
+        get_potential_energy,
+        atoms.calc,
+    )
+    return atoms
+
+
 def setup_job_calculator(atoms, job, dtype_str, seed=None):
     calculator = job["calculator"]
 
@@ -151,6 +172,10 @@ def setup_job_calculator(atoms, job, dtype_str, seed=None):
     )
     if atoms is None:
         raise RuntimeError("setup_calculator returned None")
+
+    if calculator == "chgnet":
+        atoms = add_chgnet_free_energy_compatibility(atoms)
+
     return atoms
 
 
@@ -620,12 +645,43 @@ def run_contour(job, beta, config, args):
 
 
 def append_summary(dtype_str, calculator, rows):
-    summary_path = output_root() / f"outputs_{dtype_str}" / calculator / "contour" / "summary.csv"
+    summary_path = (
+        output_root()
+        / f"outputs_{dtype_str}"
+        / calculator
+        / "contour"
+        / "summary.csv"
+    )
     summary_path.parent.mkdir(parents=True, exist_ok=True)
 
-    existing = pd.read_csv(summary_path) if summary_path.exists() else pd.DataFrame()
-    combined = pd.concat([existing, pd.DataFrame(rows)], ignore_index=True)
-    combined = combined.drop_duplicates(["dtype_str", "calculator", "material_slug", "beta"], keep="last")
+    incoming = pd.DataFrame(rows)
+    incoming["dtype_str"] = dtype_str
+    incoming["calculator"] = calculator
+
+    existing = (
+        pd.read_csv(summary_path)
+        if summary_path.exists()
+        else pd.DataFrame()
+    )
+
+    if "dtype_str" not in existing.columns:
+        existing["dtype_str"] = dtype_str
+    else:
+        existing["dtype_str"] = existing["dtype_str"].fillna(dtype_str)
+
+    if "calculator" not in existing.columns:
+        existing["calculator"] = calculator
+    else:
+        existing["calculator"] = existing["calculator"].fillna(calculator)
+
+    combined = pd.concat(
+        [existing, incoming],
+        ignore_index=True,
+    )
+    combined = combined.drop_duplicates(
+        ["dtype_str", "calculator", "material_slug", "beta"],
+        keep="last",
+    )
     combined.to_csv(summary_path, index=False)
 
 
@@ -676,6 +732,7 @@ def main():
                 summary = {
                     "status": "failed",
                     "calculator": job["calculator"],
+                    "dtype_str": args.dtype_str,
                     "material_label": job["material_label"],
                     "material_slug": job["material_slug"],
                     "beta": float(beta),
