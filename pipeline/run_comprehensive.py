@@ -5512,7 +5512,7 @@ def main():
     parser.add_argument("--uma-dir", default=BASE_DIR / "outputs_uma", type=Path)
     parser.add_argument("--chgnet-dir", default=BASE_DIR / "outputs_chgnet", type=Path)
     parser.add_argument("--output-dir", default=BASE_DIR / "outputs_comprehensive", type=Path)
-    parser.add_argument("--materials", default=BASE_DIR / "tests_materials.csv", type=Path)
+    parser.add_argument("--materials", default=BASE_DIR / "datasets/tests_materials.csv", type=Path)
     parser.add_argument("--structures-dir", default=BASE_DIR / "mp_structures", type=Path)
     args = parser.parse_args()
 

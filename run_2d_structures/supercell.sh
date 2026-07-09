@@ -46,7 +46,7 @@ controller_mode() {
   echo "Project comprehensive output: $SUPER_COMPREHENSIVE_DIR"
 
   source ~/project/.venv-mace/bin/activate
-  python -u scripts_python/supercell.py generate --output-root "$SUPER_ROOT"
+  python -u pipeline/supercell.py generate --output-root "$SUPER_ROOT"
   deactivate
 
   ARRAY_JOB_ID=$(sbatch --parsable \
@@ -56,7 +56,7 @@ controller_mode() {
     --cpus-per-task=8 \
     --output=supercell-%A_%a.out \
     --export=ALL,SUPERCELL_MODE=run,PROJECT_OUTPUT_ROOT="$PROJECT_OUTPUT_ROOT",SCRATCH_OUTPUT_ROOT="$SCRATCH_OUTPUT_ROOT" \
-    scripts_bash/supercell.sh)
+    run_<dataset>/supercell.sh)
 
   PLOT_JOB_ID=$(sbatch --parsable \
     --dependency=afterok:$ARRAY_JOB_ID \
@@ -65,7 +65,7 @@ controller_mode() {
     --cpus-per-task=8 \
     --output=supercell-plot-%j.out \
     --export=ALL,SUPERCELL_MODE=plot,PROJECT_OUTPUT_ROOT="$PROJECT_OUTPUT_ROOT",SCRATCH_OUTPUT_ROOT="$SCRATCH_OUTPUT_ROOT" \
-    scripts_bash/supercell.sh)
+    run_<dataset>/supercell.sh)
 
   echo "Submitted supercell run array: $ARRAY_JOB_ID"
   echo "Submitted dependent supercell plot job: $PLOT_JOB_ID"
@@ -82,7 +82,7 @@ run_mode() {
 
   source ~/project/.venv-mace/bin/activate
 
-  TASK_ENV=$(python -u scripts_python/supercell.py task-info \
+  TASK_ENV=$(python -u pipeline/supercell.py task-info \
     --output-root "$SUPER_ROOT" \
     --task-id "$SLURM_ARRAY_TASK_ID")
 
@@ -120,7 +120,7 @@ run_mode() {
     exit 1
   fi
 
-  python -u scripts_python/runtime.py run \
+  python -u pipeline/runtime.py run \
   --tests "$TEST_CSV" \
   --summary-file "$SUMMARY_FILE"
 
@@ -144,11 +144,11 @@ plot_mode() {
 
   source ~/project/.venv-mace/bin/activate
 
-  python -u scripts_python/supercell.py combine --output-root "$SUPER_ROOT"
+  python -u pipeline/supercell.py combine --output-root "$SUPER_ROOT"
 
   mkdir -p "$SUPER_COMPREHENSIVE_DIR"
 
-  python -u scripts_python/runtime.py plot \
+  python -u pipeline/runtime.py plot \
     --mace-summary "$SUPER_ROOT/outputs_float64/mace/summary.csv" \
     --uma-summary "$SUPER_ROOT/outputs_float64/uma/summary.csv" \
     --chgnet-summary "$SUPER_ROOT/outputs_float64/chgnet/summary.csv" \

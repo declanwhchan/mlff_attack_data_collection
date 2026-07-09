@@ -41,7 +41,7 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 1 ]; then
     --cpus-per-task=4 \
     --output=random-seed-%j.out \
     --export=ALL,PROJECT_OUTPUT_ROOT="$PROJECT_OUTPUT_ROOT" \
-    --wrap="cd '$PROJECT_OUTPUT_ROOT' && '$HOME/project/.venv-mace/bin/python' -u scripts_python/random_seed_comprehensive.py --project-root '$PROJECT_OUTPUT_ROOT' --output-dir '$PROJECT_OUTPUT_ROOT/random_seed'")
+    --wrap="cd '$PROJECT_OUTPUT_ROOT' && '$HOME/project/.venv-mace/bin/python' -u pipeline/random_seed_comprehensive.py --project-root '$PROJECT_OUTPUT_ROOT' --output-dir '$PROJECT_OUTPUT_ROOT/random_seed'")
 
   echo "Submitted random-seed comparison job: $RANDOM_SEED_JOB"
   echo "It will run after plot array ${SLURM_ARRAY_JOB_ID} completes successfully."
@@ -107,7 +107,7 @@ run_dtype_branch() {
   export OPENBLAS_NUM_THREADS="$threads"
   export NUMEXPR_NUM_THREADS="$threads"
 
-  python -u scripts_python/run_comprehensive.py \
+  python -u pipeline/run_comprehensive.py \
     --mace-dir "${scratch_trial_dir}/outputs_${dtype_str}/mace" \
     --uma-dir "${scratch_trial_dir}/outputs_${dtype_str}/uma" \
     --chgnet-dir "${scratch_trial_dir}/outputs_${dtype_str}/chgnet" \
@@ -116,7 +116,7 @@ run_dtype_branch() {
   if [ -f "${scratch_trial_dir}/outputs_${dtype_str}/mace/contour/summary.csv" ] || \
      [ -f "${scratch_trial_dir}/outputs_${dtype_str}/uma/contour/summary.csv" ] || \
      [ -f "${scratch_trial_dir}/outputs_${dtype_str}/chgnet/contour/summary.csv" ]; then
-    python -u scripts_python/contour_comprehensive.py \
+    python -u pipeline/contour_comprehensive.py \
       --mace-contour-dir "${scratch_trial_dir}/outputs_${dtype_str}/mace/contour" \
       --uma-contour-dir "${scratch_trial_dir}/outputs_${dtype_str}/uma/contour" \
       --chgnet-contour-dir "${scratch_trial_dir}/outputs_${dtype_str}/chgnet/contour" \
@@ -141,7 +141,7 @@ export MKL_NUM_THREADS=8
 export OPENBLAS_NUM_THREADS=8
 export NUMEXPR_NUM_THREADS=8
 
-python -u scripts_python/float_comprehensive.py \
+python -u pipeline/float_comprehensive.py \
   --float32-dir "${PROJECT_TRIAL_DIR}/outputs_comprehensive/float32" \
   --float64-dir "${PROJECT_TRIAL_DIR}/outputs_comprehensive/float64" \
   --output-dir "${PROJECT_TRIAL_DIR}/outputs_comprehensive/comparison"

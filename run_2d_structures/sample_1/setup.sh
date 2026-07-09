@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH --account=rrg-j3goals
 #SBATCH --time=00:30:00
-#SBATCH --mem=8G
-#SBATCH --cpus-per-task=8
-#SBATCH --output=setup-%j.out
+#SBATCH --mem=16G
+#SBATCH --cpus-per-task=4
+#SBATCH --output=sample-1-setup-%j.out
 
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
@@ -25,11 +25,11 @@ module load gcc/12.3 python/3.11 arrow
 
 source ~/project/.venv-mace/bin/activate
 
-python -u scripts_python/run_material_mpids.py \
-  --materials tests_materials.csv \
-  --config tests_comprehensive.json \
+python -u pipeline/run_material_mpids.py \
+  --materials datasets/test_1.csv \
+  --config datasets/test_1.json \
   --tests-out generated_material_tests.csv
 
 deactivate
 
-echo "Setup complete."
+echo "Setup smoke test complete."

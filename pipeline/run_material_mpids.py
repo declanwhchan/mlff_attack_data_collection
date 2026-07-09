@@ -241,8 +241,8 @@ def write_tests(rows, output_path):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--materials", default="tests_materials.csv")
-    parser.add_argument("--config", default="tests_comprehensive.json")
+    parser.add_argument("--materials", default="datasets/tests_materials.csv")
+    parser.add_argument("--config", default="datasets/tests_comprehensive.json")
     parser.add_argument("--tests-out", default="generated_material_tests.csv")
     parser.add_argument("--structures-dir", default="mp_structures")
     parser.add_argument("--force-download", action="store_true")
@@ -278,7 +278,7 @@ def main():
         import run_tests
         run_tests.main(tests_out)
     else:
-        print(f"Next: python scripts_python/run_tests.py --tests {tests_out.name}")
+        print(f"Next: python pipeline/run_tests.py --tests {tests_out.name}")
 
 
 if __name__ == "__main__":
