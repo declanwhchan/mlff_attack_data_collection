@@ -688,7 +688,7 @@ def append_summary(dtype_str, calculator, rows):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--tests", default="generated_material_tests.csv")
-    parser.add_argument("--config", default="tests_comprehensive.json")
+    parser.add_argument("--config", default="datasets/tests_comprehensive.json")
     parser.add_argument("--calculator", choices=["mace", "uma", "chgnet"])
     parser.add_argument(
         "--dtype-str",

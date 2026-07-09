@@ -633,11 +633,11 @@ def main():
     )
     generate_parser.add_argument(
         "--materials",
-        default="tests_materials.csv",
+        default="datasets/tests_materials.csv",
     )
     generate_parser.add_argument(
         "--config",
-        default="tests_comprehensive.json",
+        default="datasets/tests_comprehensive.json",
     )
     generate_parser.add_argument(
         "--structures-dir",

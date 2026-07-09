@@ -4,9 +4,10 @@ This repo runs an HPC data-collection workflow from the `mlff_attack` package:
 
 > https://github.com/TRustworthy-AI-Tools-for-Science/mlff_attack
 
-The 20 Materials Project structures used in the comprehensive workflow are listed in [`tests_materials.csv`](tests_materials.csv).
+This repo has two dataset workflows:
 
-Practical-use context and literature sources are summarized in [`materials_practical_uses.md`](research/materials_practical_uses.md).
+- `run_2d_structures/`: [`20 Materials Project structures`](research/2d_structures.md).
+- `run_licohpf_database/`: [`LiCOHPF database`](https://github.com/gitliwq/LiCOHPF_database_1).
 
 ---
 
@@ -39,7 +40,7 @@ git clone https://github.com/declanwhchan/mlff_attack_data_collection.git
 
 ```bash
 cd ~/project/mlff_attack_data_collection
-bash scripts_bash/dependencies.sh
+bash run_<dataset>/dependencies.sh
 ```
 
 ## 3. Create `.env`
@@ -59,7 +60,7 @@ chmod 600 .env
 
 # Workflow
 
-Scripts in `scripts_bash/sample_1/` are the single-test versions of the same workflow, so you can run them for a quick check before running the full collection.
+Scripts in `run_<dataset>/sample_1/` are the single-test versions of the same workflow, so you can run them for a quick check before running the full collection.
 
 > **Reminder to sync local changes to HPC:** Before running or submitting jobs on the HPC, in SFTP, push/sync all local changes from this computer so the HPC copy is up to date.
 
@@ -72,25 +73,25 @@ All steps are to be executed in SSH.
 ### Step 1 — Run Setup
 
 ```bash
-sbatch scripts_bash/setup.sh
+sbatch run_<dataset>/setup.sh
 ```
 
 ### Step 2 — Run Main Jobs
 
 ```bash
-sbatch scripts_bash/main.sh
+sbatch run_<dataset>/main.sh
 
 # Run contour exploration (OPTIONAL)
-sbatch scripts_bash/contour.sh
+sbatch run_<dataset>/contour.sh
 ```
 
 ### Step 3 — Generate Plots
 
 ```bash
-sbatch scripts_bash/plot.sh
+sbatch run_<dataset>/plot.sh
 
 # Visualize initial atomic structures (OPTIONAL)
-sbatch scripts_bash/visualize.sh
+sbatch run_<dataset>/visualize.sh
 ```
 
 ### Optional — Run Supercell Stress Test
@@ -98,7 +99,7 @@ sbatch scripts_bash/visualize.sh
 This submits a controller job that generates supercell CIFs, launches the full MACE/UMA/CHGNet attack array, and then runs a dependent plotting job.
 
 ```bash
-sbatch scripts_bash/supercell.sh
+sbatch run_<dataset>/supercell.sh
 ```
 
 ### Check Status of Jobs

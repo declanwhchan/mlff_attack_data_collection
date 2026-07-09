@@ -5,7 +5,7 @@ import numpy as np
 from ase import Atoms
 
 
-scripts_dir = Path(__file__).resolve().parents[1] / "scripts_python"
+scripts_dir = Path(__file__).resolve().parents[1] / "pipeline"
 sys.path.insert(0, str(scripts_dir))
 
 

@@ -49,7 +49,7 @@ for dtype_str in ["float32", "float64"]:
 PY
 
 for dtype_str in float32 float64; do
-  python -u scripts_python/run_comprehensive.py \
+  python -u pipeline/run_comprehensive.py \
     --mace-dir "${TRIAL_NAME}/outputs_${dtype_str}/mace" \
     --uma-dir "${TRIAL_NAME}/outputs_${dtype_str}/uma" \
     --chgnet-dir "${TRIAL_NAME}/outputs_${dtype_str}/chgnet" \
@@ -58,7 +58,7 @@ for dtype_str in float32 float64; do
   if [ -f "${TRIAL_NAME}/outputs_${dtype_str}/mace/contour/summary.csv" ] || \
      [ -f "${TRIAL_NAME}/outputs_${dtype_str}/uma/contour/summary.csv" ] || \
      [ -f "${TRIAL_NAME}/outputs_${dtype_str}/chgnet/contour/summary.csv" ]; then
-    python -u scripts_python/contour_comprehensive.py \
+    python -u pipeline/contour_comprehensive.py \
       --mace-contour-dir "${TRIAL_NAME}/outputs_${dtype_str}/mace/contour" \
       --uma-contour-dir "${TRIAL_NAME}/outputs_${dtype_str}/uma/contour" \
       --chgnet-contour-dir "${TRIAL_NAME}/outputs_${dtype_str}/chgnet/contour" \
@@ -69,7 +69,7 @@ for dtype_str in float32 float64; do
   fi
 done
 
-python -u scripts_python/float_comprehensive.py \
+python -u pipeline/float_comprehensive.py \
   --float32-dir "${TRIAL_NAME}/outputs_comprehensive/float32" \
   --float64-dir "${TRIAL_NAME}/outputs_comprehensive/float64" \
   --output-dir "${TRIAL_NAME}/outputs_comprehensive/comparison"
