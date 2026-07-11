@@ -1433,6 +1433,41 @@ def draw_parametric_panel(
     ax.margins(x=0.03, y=0.05)
 
 
+EXACT_MIN_LATTICE_PERCENT_COL = "_epsilon_percent_displacement_exact"
+
+
+def bubble_column_for_figure(figure_name):
+    if "epsilon_percent_displacement" in figure_name:
+        return EXACT_MIN_LATTICE_PERCENT_COL
+    if "epsilon" in figure_name:
+        return "epsilon"
+    return "n_steps"
+
+
+def versioned_figure_name(figure_name, version):
+    return re.sub(r"^figure_(\d+)_", rf"figure_\1_{version}_", figure_name)
+
+
+def exact_min_lattice_records(records):
+    records = records.copy()
+    records[EXACT_MIN_LATTICE_PERCENT_COL] = records["epsilon_percent_displacement"]
+    return records
+
+
+def exact_min_lattice_axis_specs(records, figure_name, version=1):
+    if not has_percent_displacement_axis(records, "epsilon_percent_displacement"):
+        return []
+
+    return [(
+        EPSILON_AXIS_PERCENT,
+        EXACT_MIN_LATTICE_PERCENT_COL,
+        versioned_figure_name(
+            f"{figure_name}_percent_displacement",
+            version,
+        ),
+    )]
+
+
 def make_parametric_state_figure(
     records,
     output_dir,
@@ -1474,7 +1509,7 @@ def make_parametric_state_figure(
             records=records,
             x_getter=x_getter,
             y_getter=y_getter,
-            bubble_col="epsilon" if "epsilon" in figure_name else "n_steps",
+            bubble_col=bubble_column_for_figure(figure_name),
             missing_rows=missing_rows,
             figure_name=figure_name,
         )
@@ -5502,6 +5537,185 @@ def make_space_group_figures(records, output_dir):
         )
 
 
+def make_exact_min_lattice_figures_1_to_9(epsilon_records, output_dir):
+    exact_records = exact_min_lattice_records(epsilon_records)
+
+    make_convergence_figure(
+        exact_records,
+        output_dir,
+        axis_specs=exact_min_lattice_axis_specs(
+            exact_records,
+            "figure_1_convergence_by_epsilon",
+            version=1,
+        ),
+    )
+
+    force_rows = [
+        (
+            "After attack, before relaxation",
+            lambda: (lambda row: force_delta_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "perturbed_forces.csv",
+            )),
+        ),
+        (
+            "After attack, after relaxation",
+            lambda: (lambda row: force_delta_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "after_forces.csv",
+            )),
+        ),
+    ]
+
+    displacement_rows = [
+        (
+            "After attack, before relaxation",
+            lambda: (lambda row: displacement_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "perturbed_forces.csv",
+            )),
+        ),
+        (
+            "After attack, after relaxation",
+            lambda: (lambda row: displacement_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "after_forces.csv",
+            )),
+        ),
+    ]
+
+    make_distribution_figure(
+        records=exact_records,
+        output_dir=output_dir,
+        figure_name="figure_2_delta_force_by_epsilon",
+        ylabel=r"$\Delta$ force (eV/$\AA$)",
+        rows=force_rows,
+        axis_specs=exact_min_lattice_axis_specs(
+            exact_records,
+            "figure_2_delta_force_by_epsilon",
+            version=1,
+        ),
+    )
+
+    make_ci_figure(
+        records=exact_records,
+        output_dir=output_dir,
+        figure_name="figure_2_delta_force_ci_by_epsilon",
+        ylabel=r"Median $\Delta$ force with 95% CI (eV/$\AA$)",
+        rows=force_rows,
+        axis_specs=exact_min_lattice_axis_specs(
+            exact_records,
+            "figure_2_delta_force_ci_by_epsilon",
+            version=1,
+        ),
+    )
+
+    make_whisker_span_figure(
+        records=exact_records,
+        output_dir=output_dir,
+        figure_name="figure_2_delta_force_whisker_span_by_epsilon",
+        ylabel=r"$\Delta$ force whisker span (eV/$\AA$)",
+        rows=force_rows,
+        axis_specs=exact_min_lattice_axis_specs(
+            exact_records,
+            "figure_2_delta_force_whisker_span_by_epsilon",
+            version=1,
+        ),
+    )
+
+    make_distribution_figure(
+        records=exact_records,
+        output_dir=output_dir,
+        figure_name="figure_3_displacement_by_epsilon",
+        ylabel=r"Displacement ($\AA$)",
+        rows=displacement_rows,
+        axis_specs=exact_min_lattice_axis_specs(
+            exact_records,
+            "figure_3_displacement_by_epsilon",
+            version=1,
+        ),
+    )
+
+    make_ci_figure(
+        records=exact_records,
+        output_dir=output_dir,
+        figure_name="figure_3_displacement_ci_by_epsilon",
+        ylabel=r"Median displacement with 95% CI ($\AA$)",
+        rows=displacement_rows,
+        axis_specs=exact_min_lattice_axis_specs(
+            exact_records,
+            "figure_3_displacement_ci_by_epsilon",
+            version=1,
+        ),
+    )
+
+    make_whisker_span_figure(
+        records=exact_records,
+        output_dir=output_dir,
+        figure_name="figure_3_displacement_whisker_span_by_epsilon",
+        ylabel=r"Displacement whisker span ($\AA$)",
+        rows=displacement_rows,
+        axis_specs=exact_min_lattice_axis_specs(
+            exact_records,
+            "figure_3_displacement_whisker_span_by_epsilon",
+            version=1,
+        ),
+    )
+
+    displacement_getters = displacement_metric_getters()
+    force_getters = delta_force_metric_getters()
+    convergence_getters = [
+        lambda row: scalar_distribution(row, "after_relax_steps"),
+        lambda row: scalar_distribution(row, "after_relax_steps"),
+    ]
+
+    make_parametric_state_figure(
+        records=exact_records,
+        output_dir=output_dir,
+        figure_name="figure_7_2_convergence_vs_displacement_by_epsilon_percent_displacement",
+        title="Convergence vs displacement by % min lattice",
+        x_label=r"Median displacement ($\AA$)",
+        y_label="Relaxation steps",
+        bubble_label="% min lattice",
+        attacks_to_plot=ATTACK_ORDER,
+        x_getters=displacement_getters,
+        y_getters=convergence_getters,
+    )
+
+    make_parametric_state_figure(
+        records=exact_records,
+        output_dir=output_dir,
+        figure_name="figure_8_2_convergence_vs_delta_force_by_epsilon_percent_displacement",
+        title="Convergence vs delta force by % min lattice",
+        x_label=r"Median $\Delta$ force (eV/$\AA$)",
+        y_label="Relaxation steps",
+        bubble_label="% min lattice",
+        attacks_to_plot=ATTACK_ORDER,
+        x_getters=force_getters,
+        y_getters=convergence_getters,
+        x_log=True,
+    )
+
+    make_parametric_state_figure(
+        records=exact_records,
+        output_dir=output_dir,
+        figure_name="figure_9_2_delta_force_vs_displacement_by_epsilon_percent_displacement",
+        title="Delta force vs displacement by % min lattice",
+        x_label=r"Median displacement ($\AA$)",
+        y_label=r"Median $\Delta$ force (eV/$\AA$)",
+        bubble_label="% min lattice",
+        attacks_to_plot=ATTACK_ORDER,
+        x_getters=displacement_getters,
+        y_getters=force_getters,
+        x_log=True,
+        y_log=True,
+    )
+
+
 def main():
     apply_plot_style()
 
@@ -5512,7 +5726,7 @@ def main():
     parser.add_argument("--uma-dir", default=BASE_DIR / "outputs_uma", type=Path)
     parser.add_argument("--chgnet-dir", default=BASE_DIR / "outputs_chgnet", type=Path)
     parser.add_argument("--output-dir", default=BASE_DIR / "outputs_comprehensive", type=Path)
-    parser.add_argument("--materials", default=BASE_DIR / "datasets/tests_materials.csv", type=Path)
+    parser.add_argument("--materials", default=BASE_DIR / "datasets/2d_structures/tests_materials.csv", type=Path)
     parser.add_argument("--structures-dir", default=BASE_DIR / "mp_structures", type=Path)
     args = parser.parse_args()
 
@@ -5899,6 +6113,11 @@ def main():
                 )),
             ),
         ],
+    )
+
+    make_exact_min_lattice_figures_1_to_9(
+        epsilon_records,
+        args.output_dir,
     )
 
     force_angle_missing = make_delta_force_angle_figure_set(
