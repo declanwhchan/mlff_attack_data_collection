@@ -34,7 +34,7 @@ if [ ! -f generated_material_tests.csv ]; then
 fi
 
 source ~/project/.venv-mace/bin/activate
-mapfile -t CONTOUR_JOBS < <(env -u SLURM_ARRAY_TASK_ID python -u pipeline/contour.py --tests generated_material_tests.csv --config datasets/test_1.json --list-jobs)
+mapfile -t CONTOUR_JOBS < <(env -u SLURM_ARRAY_TASK_ID python -u pipeline/contour.py --tests generated_material_tests.csv --config datasets/2d_structures/test_1.json --list-jobs)
 deactivate
 
 TRIAL_NAME="trial1_seed42"
@@ -93,7 +93,7 @@ fi
 
 python -u pipeline/contour.py \
   --tests generated_material_tests.csv \
-  --config datasets/test_1.json \
+  --config datasets/2d_structures/test_1.json \
   --calculator "$CALCULATOR" \
   --material-slug "$MATERIAL_SLUG" \
   --dtype-str "$MLFF_DTYPE" \

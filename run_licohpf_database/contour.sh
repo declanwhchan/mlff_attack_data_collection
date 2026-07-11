@@ -4,7 +4,7 @@
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=8
 #SBATCH --array=1-700%150
-#SBATCH --output=main-cpu-%A_%a.out
+#SBATCH --output=contour-cpu-%A_%a.out
 
 set -euo pipefail
 
@@ -31,12 +31,14 @@ if [ -n "${HF_TOKEN:-}" ]; then
 fi
 
 TESTS_FILE="$REPO_ROOT/generated_licohpf_cpu_tests.csv"
+CONFIG_FILE="$REPO_ROOT/datasets/licohpf_database/tests_comprehensive.json"
 
-if [ ! -f "$TESTS_FILE" ]; then
-    echo "ERROR: $TESTS_FILE does not exist."
-    echo "Run: bash run_licohpf_database/setup.sh"
-    exit 1
-fi
+for path in "$TESTS_FILE" "$CONFIG_FILE"; do
+    if [ ! -f "$path" ]; then
+        echo "ERROR: missing required file: $path"
+        exit 1
+    fi
+done
 
 TASK_INFO="$(
 python - <<'PY'
@@ -108,7 +110,10 @@ TRIAL_DIR="$SCRATCH_BASE/$TRIAL_NAME"
 
 export MLFF_OUTPUT_ROOT="$TRIAL_DIR"
 
-mkdir -p "$TRIAL_DIR/array_summaries"
+CONTOUR_SUMMARY_DIR="$TRIAL_DIR/contour_array_summaries"
+mkdir -p "$CONTOUR_SUMMARY_DIR"
+
+export CONTOUR_SUMMARY_FILE="$CONTOUR_SUMMARY_DIR/${MLFF_DTYPE}_${MODEL_ID}_${MATERIAL_SLUG}_summary.csv"
 
 echo "Trial: $TRIAL_NAME"
 echo "Seed: $MLFF_SEED"
@@ -116,6 +121,7 @@ echo "Model: $MODEL_ID"
 echo "Dtype: $MLFF_DTYPE"
 echo "Structure: $MATERIAL_SLUG"
 echo "Output root: $MLFF_OUTPUT_ROOT"
+echo "Summary: $CONTOUR_SUMMARY_FILE"
 
 case "$MODEL_ID" in
     mace_mh)
@@ -164,76 +170,16 @@ if [ "$MODEL_ID" = "mtp" ]; then
     mlp list | head -n 3
 fi
 
-TASK_DIRECTORY="${SLURM_TMPDIR:-/tmp/$USER/mlff_attack_${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}}"
-mkdir -p "$TASK_DIRECTORY"
+python -u pipeline/contour.py \
+    --tests generated_licohpf_cpu_tests.csv \
+    --config datasets/licohpf_database/tests_comprehensive.json \
+    --calculator "$MODEL_ID" \
+    --dtype-str "$MLFF_DTYPE" \
+    --material-slug "$MATERIAL_SLUG" \
+    --seed "$MLFF_SEED"
 
-TASK_CSV="$TASK_DIRECTORY/tests.csv"
-
-export TESTS_FILE
-export TASK_CSV
-export MODEL_ID
-export MATERIAL_SLUG
-
-python - <<'PY'
-import csv
-import os
-from pathlib import Path
-
-source_path = Path(os.environ["TESTS_FILE"])
-output_path = Path(os.environ["TASK_CSV"])
-model_id = os.environ["MODEL_ID"]
-dtype_str = os.environ["MLFF_DTYPE"]
-material_slug = os.environ["MATERIAL_SLUG"]
-
-with source_path.open(
-    "r",
-    encoding="utf-8-sig",
-    newline="",
-) as handle:
-    reader = csv.DictReader(handle)
-    fieldnames = reader.fieldnames
-    rows = [
-        row
-        for row in reader
-        if row["model_id"] == model_id
-        and row["dtype_str"] == dtype_str
-        and row["material_slug"] == material_slug
-    ]
-
-if not rows:
-    raise SystemExit(
-        "ERROR: no rows selected for "
-        f"{model_id} {dtype_str} {material_slug}"
-    )
-
-if len(rows) != 85:
-    raise SystemExit(
-        f"ERROR: selected {len(rows)} rows; expected 85"
-    )
-
-with output_path.open(
-    "w",
-    encoding="utf-8",
-    newline="",
-) as handle:
-    writer = csv.DictWriter(
-        handle,
-        fieldnames=fieldnames,
-    )
-    writer.writeheader()
-    writer.writerows(rows)
-
-print(f"Temporary test rows: {len(rows)}")
-print(f"Temporary test file: {output_path}")
-PY
-
-SUMMARY_FILE="$TRIAL_DIR/array_summaries/${MLFF_DTYPE}_${MODEL_ID}_${MATERIAL_SLUG}_summary.csv"
-export SUMMARY_FILE
-
-python -u pipeline/run_tests.py --tests "$TASK_CSV"
-
-if [ ! -s "$SUMMARY_FILE" ]; then
-    echo "ERROR: summary was not created: $SUMMARY_FILE"
+if [ ! -s "$CONTOUR_SUMMARY_FILE" ]; then
+    echo "ERROR: contour summary was not created."
     exit 1
 fi
 
@@ -241,38 +187,47 @@ python - <<'PY'
 import os
 import pandas as pd
 
-summary_path = os.environ["SUMMARY_FILE"]
-rows = pd.read_csv(summary_path)
+path = os.environ["CONTOUR_SUMMARY_FILE"]
+expected_model = os.environ["MODEL_ID"]
+expected_dtype = os.environ["MLFF_DTYPE"]
+expected_material = os.environ["MATERIAL_SLUG"]
 
-if len(rows) != 85:
+rows = pd.read_csv(path)
+
+if len(rows) != 3:
     raise SystemExit(
-        f"ERROR: summary has {len(rows)} rows; expected 85"
+        f"ERROR: contour summary has {len(rows)} rows; expected 3"
     )
 
-failed = rows[rows["status"] != "success"]
+if set(rows["status"]) != {"success"}:
+    failed = rows[rows["status"] != "success"]
+    print(failed.to_string(index=False))
+    raise SystemExit("ERROR: contour calculations failed")
 
-if not failed.empty:
-    print(
-        failed[
-            [
-                column
-                for column in [
-                    "run_id",
-                    "status",
-                    "error",
-                    "reason",
-                ]
-                if column in failed.columns
-            ]
-        ].to_string(index=False)
-    )
+if set(rows["model_id"]) != {expected_model}:
+    raise SystemExit("ERROR: incorrect model_id in contour summary")
+
+if set(rows["dtype_str"]) != {expected_dtype}:
+    raise SystemExit("ERROR: incorrect dtype in contour summary")
+
+if set(rows["material_slug"]) != {expected_material}:
+    raise SystemExit("ERROR: incorrect material in contour summary")
+
+expected_betas = {0.0, 0.05, 0.1}
+actual_betas = {
+    round(float(value), 8)
+    for value in rows["beta"]
+}
+
+if actual_betas != expected_betas:
     raise SystemExit(
-        f"ERROR: {len(failed)} runs did not succeed"
+        f"ERROR: expected betas {expected_betas}; "
+        f"got {actual_betas}"
     )
 
-print(f"All {len(rows)} CPU runs succeeded")
+print("All three CPU contour calculations succeeded")
 PY
 
 deactivate
 
-echo "Finished CPU task successfully."
+echo "Finished CPU contour task successfully."

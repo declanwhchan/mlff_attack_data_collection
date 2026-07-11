@@ -1,10 +1,11 @@
 #!/bin/bash
 #SBATCH --account=rrg-j3goals
 #SBATCH --time=7-00:00:00
-#SBATCH --mem=16G
+#SBATCH --mem=32G
 #SBATCH --cpus-per-task=8
-#SBATCH --array=1-700%150
-#SBATCH --output=main-cpu-%A_%a.out
+#SBATCH --gpus-per-node=a100:1
+#SBATCH --array=1-200%40
+#SBATCH --output=main-gpu-%A_%a.out
 
 set -euo pipefail
 
@@ -20,17 +21,7 @@ export TORCH_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
 
 module load gcc/12.3 python/3.11 arrow
 
-if [ -f .env ]; then
-    set -a
-    source .env
-    set +a
-fi
-
-if [ -n "${HF_TOKEN:-}" ]; then
-    export HUGGINGFACE_HUB_TOKEN="$HF_TOKEN"
-fi
-
-TESTS_FILE="$REPO_ROOT/generated_licohpf_cpu_tests.csv"
+TESTS_FILE="$REPO_ROOT/generated_licohpf_gpu_tests.csv"
 
 if [ ! -f "$TESTS_FILE" ]; then
     echo "ERROR: $TESTS_FILE does not exist."
@@ -57,17 +48,12 @@ materials = [
     for index in range(1, 21)
 ]
 
-model_dtype_pairs = [
-    ("mace_mh", "float32"),
-    ("mace_mh", "float64"),
-    ("uma", "float32"),
-    ("uma", "float64"),
-    ("mtp", "float64"),
-    ("chgnet", "float32"),
-    ("chgnet", "float64"),
+dtypes = [
+    "float32",
+    "float64",
 ]
 
-tasks_per_trial = len(materials) * len(model_dtype_pairs)
+tasks_per_trial = len(materials) * len(dtypes)
 maximum_task_id = len(trials) * tasks_per_trial
 
 if task_id < 1 or task_id > maximum_task_id:
@@ -80,28 +66,31 @@ index = task_id - 1
 trial_index = index // tasks_per_trial
 within_trial = index % tasks_per_trial
 
-pair_index = within_trial // len(materials)
+dtype_index = within_trial // len(materials)
 material_index = within_trial % len(materials)
 
 trial_name, seed = trials[trial_index]
-model_id, dtype_str = model_dtype_pairs[pair_index]
+dtype_str = dtypes[dtype_index]
 material_slug = materials[material_index]
 
 print(
     trial_name,
     seed,
-    model_id,
     dtype_str,
     material_slug,
 )
 PY
 )"
 
-read -r TRIAL_NAME MLFF_SEED MODEL_ID MLFF_DTYPE MATERIAL_SLUG \
+read -r TRIAL_NAME MLFF_SEED MLFF_DTYPE MATERIAL_SLUG \
     <<< "$TASK_INFO"
+
+MODEL_ID="mace_model"
 
 export MLFF_SEED
 export MLFF_DTYPE
+export MODEL_ID
+export MATERIAL_SLUG
 
 SCRATCH_BASE="${SCRATCH_OUTPUT_ROOT:-/scratch/$USER/mlff_attack_data_collection/licohpf_database}"
 TRIAL_DIR="$SCRATCH_BASE/$TRIAL_NAME"
@@ -117,34 +106,7 @@ echo "Dtype: $MLFF_DTYPE"
 echo "Structure: $MATERIAL_SLUG"
 echo "Output root: $MLFF_OUTPUT_ROOT"
 
-case "$MODEL_ID" in
-    mace_mh)
-        ENVIRONMENT="$HOME/project/.venv-mace"
-        ;;
-
-    uma)
-        ENVIRONMENT="$HOME/project/.venv-uma"
-
-        if [ -z "${HF_TOKEN:-}" ] \
-            && [ -z "${HUGGINGFACE_HUB_TOKEN:-}" ]; then
-            echo "ERROR: UMA requires HF_TOKEN or HUGGINGFACE_HUB_TOKEN."
-            exit 1
-        fi
-        ;;
-
-    mtp)
-        ENVIRONMENT="$HOME/project/.venv-mtp"
-        ;;
-
-    chgnet)
-        ENVIRONMENT="$HOME/project/.venv-chgnet"
-        ;;
-
-    *)
-        echo "ERROR: unsupported CPU model: $MODEL_ID"
-        exit 1
-        ;;
-esac
+ENVIRONMENT="$HOME/project/.venv-mace"
 
 if [ ! -f "$ENVIRONMENT/bin/activate" ]; then
     echo "ERROR: missing environment: $ENVIRONMENT"
@@ -153,26 +115,24 @@ fi
 
 source "$ENVIRONMENT/bin/activate"
 
-echo "Python: $(which python)"
+python - <<'PY'
+import torch
 
-if [ "$MODEL_ID" = "mtp" ]; then
-    if ! command -v mlp >/dev/null 2>&1; then
-        echo "ERROR: mlp is not available in .venv-mtp"
-        exit 1
-    fi
+if not torch.cuda.is_available():
+    raise SystemExit("ERROR: CUDA is not available")
 
-    mlp list | head -n 3
-fi
+print("CUDA available:", torch.cuda.is_available())
+print("CUDA devices:", torch.cuda.device_count())
+print("CUDA device:", torch.cuda.get_device_name(0))
+PY
 
-TASK_DIRECTORY="${SLURM_TMPDIR:-/tmp/$USER/mlff_attack_${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}}"
+TASK_DIRECTORY="${SLURM_TMPDIR:-/tmp/$USER/mlff_attack_gpu_${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}}"
 mkdir -p "$TASK_DIRECTORY"
 
 TASK_CSV="$TASK_DIRECTORY/tests.csv"
 
 export TESTS_FILE
 export TASK_CSV
-export MODEL_ID
-export MATERIAL_SLUG
 
 python - <<'PY'
 import csv
@@ -270,9 +230,9 @@ if not failed.empty:
         f"ERROR: {len(failed)} runs did not succeed"
     )
 
-print(f"All {len(rows)} CPU runs succeeded")
+print(f"All {len(rows)} CUDA runs succeeded")
 PY
 
 deactivate
 
-echo "Finished CPU task successfully."
+echo "Finished CUDA task successfully."

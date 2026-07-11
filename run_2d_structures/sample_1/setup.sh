@@ -25,9 +25,9 @@ module load gcc/12.3 python/3.11 arrow
 
 source ~/project/.venv-mace/bin/activate
 
-python -u pipeline/run_material_mpids.py \
-  --materials datasets/test_1.csv \
-  --config datasets/test_1.json \
+python -u pipeline/setup_mpids.py \
+  --materials datasets/2d_structures/test_1.csv \
+  --config datasets/2d_structures/test_1.json \
   --tests-out generated_material_tests.csv
 
 deactivate

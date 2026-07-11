@@ -19,7 +19,7 @@ module load gcc/12.3 python/3.11 arrow
 source ~/project/.venv-mace/bin/activate
 
 python -u pipeline/visualize.py \
-  --materials datasets/tests_materials.csv \
+  --materials datasets/2d_structures/tests_materials.csv \
   --structures-dir mp_structures \
   --output-dir outputs_visuals \
   --dpi 600
