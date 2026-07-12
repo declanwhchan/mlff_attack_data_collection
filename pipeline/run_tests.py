@@ -28,8 +28,88 @@ except ImportError:
 BASE_DIR = Path(__file__).resolve().parent.parent
 TEST_FILE = BASE_DIR / "tests_sample.csv"
 outputs_mace_DIR = BASE_DIR / "outputs_mace"
+outputs_mace_mh_DIR = BASE_DIR / "outputs_mace_mh"
 outputs_uma_DIR = BASE_DIR / "outputs_uma"
 outputs_chgnet_DIR = BASE_DIR / "outputs_chgnet"
+outputs_mtp_DIR = BASE_DIR / "outputs_mtp"
+
+MODEL_BACKENDS = {
+    "mace_mh": "mace",
+    "uma": "uma",
+    "mtp": "mtp",
+    "chgnet": "chgnet",
+    "mace_model": "mace",
+}
+
+MODEL_IDS = tuple(MODEL_BACKENDS)
+
+
+def optional_row_text(row, column):
+    if column not in row:
+        return None
+
+    value = row[column]
+    if pd.isna(value) or str(value).strip() == "":
+        return None
+
+    return str(value).strip()
+
+
+def infer_model_id(row):
+    explicit_model_id = optional_row_text(row, "model_id")
+    if explicit_model_id is not None:
+        explicit_model_id = explicit_model_id.lower()
+
+        if explicit_model_id not in MODEL_BACKENDS:
+            raise RuntimeError(
+                f"Unknown model_id {explicit_model_id!r}. "
+                f"Expected one of: {', '.join(MODEL_IDS)}"
+            )
+
+        return explicit_model_id
+
+    model_name = Path(str(row["model_path"])).name.lower()
+
+    if model_name == "mace-mh-1.model":
+        return "mace_mh"
+
+    if model_name in {"uma-s-1p1", "uma-s-1p1.pt"}:
+        return "uma"
+
+    if model_name == "pot.almtp":
+        return "mtp"
+
+    if model_name.startswith("chgnet"):
+        return "chgnet"
+
+    if model_name == "mace_model.model":
+        return "mace_model"
+
+    raise RuntimeError(
+        f"Could not infer model identity from model_path={row['model_path']!r}. "
+        "Add a model_id column containing mace_mh, uma, mtp, chgnet, or mace_model."
+    )
+
+
+def calculator_backend_for_row(row):
+    model_id = infer_model_id(row)
+    expected_backend = MODEL_BACKENDS[model_id]
+
+    explicit_backend = optional_row_text(row, "calculator_backend")
+    if explicit_backend is None:
+        explicit_backend = optional_row_text(row, "calculator")
+
+    if explicit_backend is not None:
+        explicit_backend = explicit_backend.lower()
+        explicit_backend = MODEL_BACKENDS.get(explicit_backend, explicit_backend)
+
+        if explicit_backend != expected_backend:
+            raise RuntimeError(
+                f"Model {model_id!r} requires calculator backend "
+                f"{expected_backend!r}, not {explicit_backend!r}."
+            )
+
+    return expected_backend
 
 
 def active_environment():
@@ -40,6 +120,8 @@ def active_environment():
         return "uma"
     elif ".venv-chgnet" in exe:
         return "chgnet"
+    elif ".venv-mtp" in exe:
+        return "mtp"
     return None
 
 
@@ -56,17 +138,21 @@ def dtype_for_row(row):
 def infer_calculator(model_path):
     model_name = Path(str(model_path)).name.lower()
 
-    if model_name.startswith("mace"):
+    if model_name in {"mace-mh-1.model", "mace_model.model"}:
         return "mace"
 
-    elif model_name.startswith("uma"):
+    if model_name in {"uma-s-1p1", "uma-s-1p1.pt"}:
         return "uma"
 
-    elif model_name.startswith("chgnet"):
+    if model_name.startswith("chgnet"):
         return "chgnet"
 
+    if model_name.endswith(".almtp"):
+        return "mtp"
+
     raise RuntimeError(
-        "Could not infer calculator. model_path basename must start with 'mace', 'uma', or 'chgnet'."
+        "Could not infer calculator backend from "
+        f"model_path={model_path!r}."
     )
 
 
@@ -129,19 +215,18 @@ def run_seed_for(row):
     return int(os.environ.get("MLFF_SEED", "42"))
 
 
-def output_base_for(calculator, dtype_str):
-    calculator = str(calculator).strip().lower()
+def output_base_for(model_id, dtype_str):
+    model_id = str(model_id).strip().lower()
 
-    if calculator == "mace":
-        return output_root() / f"outputs_{dtype_str}" / "mace"
+    if model_id not in MODEL_BACKENDS:
+        raise RuntimeError(
+            f"Unknown model_id for output folder: {model_id!r}"
+        )
 
-    elif calculator == "uma":
-        return output_root() / f"outputs_{dtype_str}" / "uma"
+    if model_id == "mtp" and dtype_str != "float64":
+        raise RuntimeError("MTP supports float64 only.")
 
-    elif calculator == "chgnet":
-        return output_root() / f"outputs_{dtype_str}" / "chgnet"
-
-    raise RuntimeError(f"Unknown calculator for output folder: {calculator}")
+    return output_root() / f"outputs_{dtype_str}" / model_id
 
 
 def as_none(value):
@@ -486,25 +571,56 @@ def symmetry_change_metrics(initial, current):
 def validate_row(row):
     if "C:\\path\\to\\" in str(row["model_path"]):
         raise RuntimeError(
-            "Replace the placeholder model_path in tests.csv with a real model path."
+            "Replace the placeholder model_path with a real model path."
         )
 
-    calculator = infer_calculator(row["model_path"])
+    model_id = infer_model_id(row)
+    calculator_backend = calculator_backend_for_row(row)
+    dtype_str = dtype_for_row(row)
+    device = str(row["device"]).strip().lower()
 
     input_path = BASE_DIR / str(row["input_path"])
     if not input_path.exists():
-        raise RuntimeError(f"Input structure does not exist: {input_path}")
+        raise RuntimeError(
+            f"Input structure does not exist: {input_path}"
+        )
 
-    if calculator == "mace":
+    if calculator_backend in {"mace", "mtp"}:
         model_path = BASE_DIR / str(row["model_path"])
         if not model_path.exists():
-            raise RuntimeError(f"MACE model does not exist: {model_path}")
+            raise RuntimeError(
+                f"Model file does not exist: {model_path}"
+            )
+
+    if model_id == "mtp":
+        if dtype_str != "float64":
+            raise RuntimeError("MTP must be run with float64.")
+
+        if device != "cpu":
+            raise RuntimeError("MTP must be run on CPU.")
+
+        elements_path = BASE_DIR / "pot.almtp.elements"
+        if not elements_path.exists():
+            raise RuntimeError(
+                f"MTP elements file does not exist: {elements_path}"
+            )
+
+    if model_id == "mace_model":
+        if not device.startswith("cuda"):
+            raise RuntimeError(
+                "MACE_model.model must be run with device='cuda'."
+            )
+
+    elif device.startswith("cuda"):
+        raise RuntimeError(
+            f"{model_id} belongs to the CPU workflow, not the CUDA workflow."
+        )
 
     if int(row["n_steps"]) <= 0:
         raise RuntimeError("n_steps must be greater than 0")
 
     attack_type = str(row["attack_type"]).lower()
-    if attack_type not in ["fgsm", "pgd"]:
+    if attack_type not in {"fgsm", "pgd"}:
         raise RuntimeError("attack_type must be fgsm or pgd")
 
     target_energy = as_none(row["target_energy"])
@@ -514,7 +630,7 @@ def validate_row(row):
         except ValueError as exc:
             raise RuntimeError(
                 "target_energy must be blank or a number. "
-                f"Got {target_energy!r}. Check comma alignment in tests_sample.csv."
+                f"Got {target_energy!r}."
             ) from exc
 
     relax_fmax = as_float_or_none(row["relax_fmax"])
@@ -525,9 +641,14 @@ def validate_row(row):
     if relax_max_steps is not None and relax_max_steps <= 0:
         raise RuntimeError("relax_max_steps must be greater than 0")
 
-    relax_optimizer = str(value_or_default(row["relax_optimizer"], "LBFGS")).upper()
-    if relax_optimizer not in ["BFGS", "LBFGS"]:
-        raise RuntimeError("relax_optimizer must be BFGS or LBFGS")
+    relax_optimizer = str(
+        value_or_default(row["relax_optimizer"], "LBFGS")
+    ).upper()
+
+    if relax_optimizer not in {"BFGS", "LBFGS"}:
+        raise RuntimeError(
+            "relax_optimizer must be BFGS or LBFGS"
+        )
 
 
 def run_one(row):
@@ -536,7 +657,8 @@ def run_one(row):
     run_id = str(row["run_id"])
     dtype_str = dtype_for_row(row)
     run_seed = run_seed_for(row)
-    calculator = infer_calculator(row["model_path"])
+    model_id = infer_model_id(row)
+    calculator_backend = calculator_backend_for_row(row)
     material_slug = summary_text(row, "material_slug")
     if material_slug is None:
         material_slug = Path(str(row["input_path"])).stem.lower()
@@ -545,24 +667,22 @@ def run_one(row):
     if run_folder is None:
         run_folder = run_id
 
-    output_dir = output_base_for(calculator, dtype_str) / material_slug / run_folder
+    output_dir = output_base_for(model_id, dtype_str) / material_slug / run_folder
     output_dir.mkdir(parents=True, exist_ok=True)
 
     logging.basicConfig(
-        filename=output_dir / "run.log",
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         force=True,
-        encoding="utf-8",
     )
 
     atoms = load_structure(BASE_DIR / str(row["input_path"]))
     if atoms is None:
         raise RuntimeError(f"Could not load structure: {row['input_path']}")
 
-    if calculator == "mace":
+    if calculator_backend in {"mace", "mtp"}:
         model_path = BASE_DIR / str(row["model_path"])
-    elif calculator == "uma":
+    elif calculator_backend == "uma":
         model_path = Path(str(row["model_path"])).stem
     else:
         model_path = str(row["model_path"])
@@ -584,7 +704,7 @@ def run_one(row):
         device=row["device"],
         dtype_str=dtype_str,
         seed=run_seed,
-        calculator=calculator,
+        calculator=calculator_backend,
         mace_head=as_none(row["mace_head"]),
         uma_task=as_none(row["uma_task"]),
         uma_charge=as_int_or_none(row["uma_charge"]),
@@ -621,7 +741,7 @@ def run_one(row):
         target_energy=as_float_or_none(row["target_energy"]),
         clip=as_bool(row["clip"]),
         verbose=True,
-        calculator=calculator,
+        calculator=calculator_backend,
         mace_head=as_none(row["mace_head"]),
         uma_task=as_none(row["uma_task"]),
         uma_charge=as_int_or_none(row["uma_charge"]),
@@ -692,7 +812,9 @@ def run_one(row):
         "status": "success",
         "input_path": row["input_path"],
         "model_path": row["model_path"],
-        "calculator": calculator,
+        "calculator": model_id,
+        "model_id": model_id,
+        "calculator_backend": calculator_backend,
         "dtype_str": dtype_str,
         "seed": run_seed,
         "attack_type": row["attack_type"],
@@ -753,6 +875,8 @@ def main(test_file=TEST_FILE):
         summary_file = output_root_dir / "outputs_uma" / "summary.csv"
     elif current_env == "chgnet":
         summary_file = output_root_dir / "outputs_chgnet" / "summary.csv"
+    elif current_env == "mtp":
+        summary_file = output_root_dir / "outputs_mtp" / "summary.csv"
     else:
         summary_file = output_root_dir / "summary.csv"
 
@@ -763,17 +887,30 @@ def main(test_file=TEST_FILE):
 
     for index, row in experiments.iterrows():
         run_id = row["run_id"]
-        calculator = infer_calculator(row["model_path"])
+        model_id = infer_model_id(row)
+        calculator_backend = calculator_backend_for_row(row)
 
         print(f"Running row {index + 1}: {run_id}")
 
-        if current_env in ["mace", "uma", "chgnet"] and calculator != current_env:
+        if (
+            current_env in {"mace", "uma", "chgnet", "mtp"}
+            and calculator_backend != current_env
+        ):
             summary = {
                 "run_id": run_id,
                 "status": "skipped",
-                "reason": f"Active environment is {current_env}, row calculator is {calculator}",
+                "model_id": model_id,
+                "calculator": model_id,
+                "calculator_backend": calculator_backend,
+                "reason": (
+                    f"Active environment is {current_env}, "
+                    f"row backend is {calculator_backend}"
+                ),
             }
-            print(f"Skipped {run_id}: wrong environment")
+            print(
+                f"Skipped {run_id}: active environment {current_env}, "
+                f"required backend {calculator_backend}"
+            )
 
         else:
             try:

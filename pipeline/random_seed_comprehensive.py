@@ -33,14 +33,42 @@ TRIALS = [
     ("trial5_seed46", 46),
 ]
 
-ATTACKS = ["FGSM", "I-FGSM", "PGD"]
-CALCULATORS = ["mace", "uma", "chgnet"]
+ATTACKS = [
+    "FGSM",
+    "I-FGSM",
+    "PGD",
+]
+
+CALCULATORS = [
+    "mace_mh",
+    "uma",
+    "mtp",
+    "chgnet",
+    "mace_model",
+]
+
+MODEL_LABELS = {
+    "mace_mh": "MACE-MH-1",
+    "uma": "UMA-S-1p1",
+    "mtp": "MTP",
+    "chgnet": "CHGNet",
+    "mace_model": "MACE Model",
+}
 
 COLORS = {
-    "mace": "#0072B2",
+    "mace_mh": "#0072B2",
     "uma": "#D55E00",
+    "mtp": "#CC79A7",
     "chgnet": "#009E73",
+    "mace_model": "#E69F00",
 }
+
+
+def model_label(model_id):
+    return MODEL_LABELS.get(
+        str(model_id),
+        str(model_id),
+    )
 
 SEED_STYLES = {
     42: ("-", "o"),
@@ -495,6 +523,30 @@ def prepare_records(records):
         & data["calculator"].isin(CALCULATORS)
     ].copy()
 
+    present_models = set(
+        data["calculator"].dropna()
+    )
+    expected_models = set(CALCULATORS)
+
+    missing_models = expected_models.difference(
+        present_models
+    )
+    unexpected_models = present_models.difference(
+        expected_models
+    )
+
+    if missing_models:
+        raise SystemExit(
+            "ERROR: random-seed data is missing models: "
+            f"{sorted(missing_models)}"
+        )
+
+    if unexpected_models:
+        raise SystemExit(
+            "ERROR: random-seed data contains unexpected models: "
+            f"{sorted(unexpected_models)}"
+        )
+
     data["epsilon"] = numeric(data["epsilon"])
     data["epsilon_percent_displacement"] = numeric(
         data["epsilon_percent_displacement"]
@@ -767,7 +819,7 @@ def figure_legend():
             [0],
             color=COLORS[calculator],
             linewidth=2.5,
-            label=calculator.upper(),
+            label=model_label(calculator),
         )
         for calculator in CALCULATORS
     ]
@@ -852,7 +904,7 @@ def make_metric_figure(
     fig.legend(
         handles=figure_legend(),
         loc="upper center",
-        ncol=4,
+        ncol=5,
         frameon=False,
         bbox_to_anchor=(0.5, 0.985),
     )

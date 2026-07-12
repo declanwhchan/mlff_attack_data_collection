@@ -26,11 +26,43 @@ BETA_COLORS = {
     0.00: "#7B3294",
 }
 
-CALC_COLORS = {
-    "mace": "#0072B2",
-    "uma": "#D55E00",
-    "chgnet": "#009E73",
+MODEL_ORDER = [
+    "mace_mh",
+    "uma",
+    "mtp",
+    "chgnet",
+    "mace_model",
+]
+
+FLOAT32_MODEL_ORDER = [
+    "mace_mh",
+    "uma",
+    "chgnet",
+    "mace_model",
+]
+
+MODEL_LABELS = {
+    "mace_mh": "MACE-MH-1",
+    "uma": "UMA-S-1p1",
+    "mtp": "MTP",
+    "chgnet": "CHGNet",
+    "mace_model": "MACE Model",
 }
+
+CALC_COLORS = {
+    "mace_mh": "#0072B2",
+    "uma": "#D55E00",
+    "mtp": "#CC79A7",
+    "chgnet": "#009E73",
+    "mace_model": "#E69F00",
+}
+
+
+def model_label(model_id):
+    return MODEL_LABELS.get(
+        str(model_id),
+        str(model_id),
+    )
 
 CONTOUR_BAND_COLOR = "#66C2A5"
 ATTACK_ORDER = ["FGSM", "I-FGSM", "PGD"]
@@ -725,7 +757,7 @@ def draw_contour_scatter(
         np.isclose(beta_values, beta)
     ].copy()
 
-    for calculator in ["mace", "uma", "chgnet"]:
+    for calculator in MODEL_ORDER:
         selected = clean_scatter_data(
             beta_data[
                 beta_data["calculator"] == calculator
@@ -745,7 +777,7 @@ def draw_contour_scatter(
             color=CALC_COLORS[calculator],
             marker="o",
             edgecolor="none",
-            label=calculator.upper(),
+            label=model_label(calculator),
         )
 
     axis.set_title(rf"$\beta={beta:.2f}$")
@@ -772,7 +804,7 @@ def draw_relaxed_contour_scatter(
         np.isclose(beta_values, beta)
     ].copy()
 
-    for calculator in ["mace", "uma", "chgnet"]:
+    for calculator in MODEL_ORDER:
         selected = clean_scatter_data(
             beta_data[
                 beta_data["calculator"] == calculator
@@ -795,7 +827,7 @@ def draw_relaxed_contour_scatter(
             marker="o",
             edgecolor="white",
             linewidth=0.4,
-            label=calculator.upper(),
+            label=model_label(calculator),
         )
 
     axis.set_title(rf"$\beta={beta:.2f}$")
@@ -847,37 +879,29 @@ def plot_contour_metric_vs_displacement(
 
     label_axes(axes.ravel())
 
+    present_models = set(
+        contour_data["calculator"].dropna()
+    ).union(
+        set(relaxed_data["calculator"].dropna())
+    )
+
     handles = [
         plt.Line2D(
             [0],
             [0],
             marker="o",
             linestyle="none",
-            color=CALC_COLORS["mace"],
-            label="MACE",
-        ),
-        plt.Line2D(
-            [0],
-            [0],
-            marker="o",
-            linestyle="none",
-            color=CALC_COLORS["uma"],
-            label="UMA",
-        ),
-        plt.Line2D(
-            [0],
-            [0],
-            marker="o",
-            linestyle="none",
-            color=CALC_COLORS["chgnet"],
-            label="CHGNet",
-        ),
+            color=CALC_COLORS[model_id],
+            label=model_label(model_id),
+        )
+        for model_id in MODEL_ORDER
+        if model_id in present_models
     ]
 
     fig.legend(
         handles=handles,
         loc="upper center",
-        ncol=3,
+        ncol=max(1, len(handles)),
         frameon=False,
         bbox_to_anchor=(0.5, 0.985),
     )
@@ -1310,7 +1334,10 @@ def plot_contour_vs_attack(
             x_label=r"$\epsilon$ ($\AA$)",
             calculator=calculator,
             contour_frames=contour_frames,
-            title=f"{material_slug} {calculator.upper()}: attacks vs contour baseline by epsilon",
+            title=(
+                f"{material_slug} {model_label(calculator)}: "
+                "attacks vs contour baseline by epsilon"
+            ),
             attacks_to_plot=ATTACK_ORDER,
         )
         label_axes(axes)
@@ -1332,7 +1359,10 @@ def plot_contour_vs_attack(
             x_label="n_steps",
             calculator=calculator,
             contour_frames=contour_frames,
-            title=f"{material_slug} {calculator.upper()}: attacks vs contour baseline by n_steps",
+            title=(
+                f"{material_slug} {model_label(calculator)}: "
+                "attacks vs contour baseline by n_steps"
+            ),
             attacks_to_plot=["I-FGSM", "PGD"],
         )
         label_axes(axes)
@@ -1432,7 +1462,14 @@ def plot_six_panel(material_slug, calculator, rows, output_dir):
     axes[1, 2].legend(loc="upper right")
 
     label_axes(axes)
-    fig.suptitle(f"{material_slug} {calculator.upper()} contour exploration", fontsize=10)
+    fig.suptitle(
+        (
+            f"{material_slug} "
+            f"{model_label(calculator)} "
+            "contour exploration"
+        ),
+        fontsize=10,
+    )
     fig.tight_layout(rect=[0, 0, 1, 0.96])
 
     material_dir = output_dir / material_slug
@@ -1442,8 +1479,23 @@ def plot_six_panel(material_slug, calculator, rows, output_dir):
 
 
 def plot_mlffs_comparison(material_slug, all_rows, output_dir):
-    rows = all_rows[all_rows["material_slug"] == material_slug].copy()
-    if rows.empty or set(rows["calculator"]) != {"mace", "uma", "chgnet"}:
+    rows = all_rows[
+        all_rows["material_slug"] == material_slug
+    ].copy()
+
+    if rows.empty:
+        return
+
+    present_models = set(
+        rows["calculator"].dropna()
+    )
+
+    if "mtp" in present_models:
+        expected_models = set(MODEL_ORDER)
+    else:
+        expected_models = set(FLOAT32_MODEL_ORDER)
+
+    if not expected_models.issubset(present_models):
         return
 
     grouped = rows.groupby(["calculator", "beta"], as_index=False).agg({
@@ -1471,7 +1523,7 @@ def plot_mlffs_comparison(material_slug, all_rows, output_dir):
                 markersize=4,
                 linewidth=1.5,
                 color=color,
-                label=calculator.upper(),
+                label=model_label(calculator),
             )
         ax.set_xlabel(r"$\beta$")
         ax.set_ylabel(ylabel)
@@ -1588,7 +1640,7 @@ def plot_one_global_panel(ax, data, x_col, y_col, xlabel, ylabel, title):
             alpha=0.68,
             edgecolor="white",
             linewidth=0.35,
-            label=calculator.upper(),
+            label=model_label(calculator),
             zorder=3,
         )
 
@@ -1694,7 +1746,7 @@ def plot_relaxation_attack_grid_panel(
             alpha=0.68,
             edgecolor="white",
             linewidth=0.32,
-            label=calculator.upper(),
+            label=model_label(calculator),
             zorder=3,
         )
 
@@ -1821,27 +1873,134 @@ def plot_global(records, output_dir):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mace-contour-dir", default=BASE_DIR / "outputs_mace" / "contour", type=Path)
-    parser.add_argument("--uma-contour-dir", default=BASE_DIR / "outputs_uma" / "contour", type=Path)
-    parser.add_argument("--chgnet-contour-dir", default=BASE_DIR / "outputs_chgnet" / "contour", type=Path)
-    parser.add_argument("--comprehensive-dir", default=BASE_DIR / "outputs_comprehensive", type=Path)
-    parser.add_argument("--output-dir", default=BASE_DIR / "outputs_comprehensive" / "contour", type=Path)
+
+    parser.add_argument(
+        "--mace-mh-contour-dir",
+        default=(
+            BASE_DIR
+            / "outputs_mace_mh"
+            / "contour"
+        ),
+        type=Path,
+    )
+    parser.add_argument(
+        "--uma-contour-dir",
+        default=(
+            BASE_DIR
+            / "outputs_uma"
+            / "contour"
+        ),
+        type=Path,
+    )
+    parser.add_argument(
+        "--mtp-contour-dir",
+        default=(
+            BASE_DIR
+            / "outputs_mtp"
+            / "contour"
+        ),
+        type=Path,
+    )
+    parser.add_argument(
+        "--chgnet-contour-dir",
+        default=(
+            BASE_DIR
+            / "outputs_chgnet"
+            / "contour"
+        ),
+        type=Path,
+    )
+    parser.add_argument(
+        "--mace-model-contour-dir",
+        default=(
+            BASE_DIR
+            / "outputs_mace_model"
+            / "contour"
+        ),
+        type=Path,
+    )
+    parser.add_argument(
+        "--comprehensive-dir",
+        default=BASE_DIR / "outputs_comprehensive",
+        type=Path,
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=(
+            BASE_DIR
+            / "outputs_comprehensive"
+            / "contour"
+        ),
+        type=Path,
+    )
+
     args = parser.parse_args()
 
     apply_style()
-    args.output_dir.mkdir(parents=True, exist_ok=True)
+
+    args.output_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    contour_directories = {
+        "mace_mh": args.mace_mh_contour_dir,
+        "uma": args.uma_contour_dir,
+        "mtp": args.mtp_contour_dir,
+        "chgnet": args.chgnet_contour_dir,
+        "mace_model": args.mace_model_contour_dir,
+    }
 
     summaries = []
-    for contour_dir in [args.mace_contour_dir, args.uma_contour_dir, args.chgnet_contour_dir]:
+
+    for model_id in MODEL_ORDER:
+        contour_dir = contour_directories[model_id]
         data = summary_rows(contour_dir)
-        if not data.empty:
-            summaries.append(data)
+
+        if data.empty:
+            continue
+
+        data = data.copy()
+        data["calculator"] = model_id
+        data["model_id"] = model_id
+
+        summaries.append(data)
 
     if not summaries:
         print("No contour summaries found.")
         return
 
     all_rows = pd.concat(summaries, ignore_index=True)
+
+    present_models = set(
+        all_rows["calculator"].dropna()
+    )
+
+    unexpected_models = (
+        present_models.difference(MODEL_ORDER)
+    )
+
+    if unexpected_models:
+        raise SystemExit(
+            "ERROR: unexpected contour models: "
+            f"{sorted(unexpected_models)}"
+        )
+
+    if "mtp" in present_models:
+        expected_models = set(MODEL_ORDER)
+    else:
+        expected_models = set(FLOAT32_MODEL_ORDER)
+
+    missing_models = expected_models.difference(
+        present_models
+    )
+
+    if missing_models:
+        raise SystemExit(
+            "ERROR: missing contour models: "
+            f"{sorted(missing_models)}"
+        )
+
     all_rows.to_csv(
         args.output_dir / "contour_summary_combined.csv",
         index=False,

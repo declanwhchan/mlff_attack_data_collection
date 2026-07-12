@@ -21,10 +21,34 @@ from run_tests import (
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+MODEL_ORDER = [
+    "mace_mh",
+    "uma",
+    "mtp",
+    "chgnet",
+    "mace_model",
+]
+
+MODEL_LABELS = {
+    "mace_mh": "MACE-MH-1",
+    "uma": "UMA-S-1p1",
+    "mtp": "MTP",
+    "chgnet": "CHGNet",
+    "mace_model": "MACE Model",
+}
+
+def model_label(model_id):
+    return MODEL_LABELS.get(
+        str(model_id),
+        str(model_id),
+    )
+
 CALCULATOR_COLORS = {
-    "mace": "#0072B2",
+    "mace_mh": "#0072B2",
     "uma": "#D55E00",
+    "mtp": "#CC79A7",
     "chgnet": "#009E73",
+    "mace_model": "#E69F00",
 }
 
 ATTACK_ORDER = ["FGSM", "I-FGSM", "PGD"]
@@ -36,15 +60,19 @@ ATTACK_FOLDER = {
 }
 
 MODEL_OFFSETS = {
-    "mace": -0.24,
-    "uma": 0.0,
-    "chgnet": 0.24,
+    "mace_mh": -0.32,
+    "uma": -0.16,
+    "mtp": 0.0,
+    "chgnet": 0.16,
+    "mace_model": 0.32,
 }
 
 EPSILON_POSITION_FACTORS = {
-    "mace": 10 ** (-0.05),
-    "uma": 1.0,
-    "chgnet": 10 ** (0.05),
+    "mace_mh": 10 ** (-0.10),
+    "uma": 10 ** (-0.05),
+    "mtp": 1.0,
+    "chgnet": 10 ** 0.05,
+    "mace_model": 10 ** 0.10,
 }
 
 EPSILON_BOX_WIDTH_LOG10 = 0.020
@@ -360,7 +388,15 @@ def as_int(value):
 
 
 def normalized_run_id(run_id):
-    return str(run_id).replace("_mace_", "_").replace("_uma_", "_").replace("_chgnet_", "_")
+    normalized = str(run_id)
+
+    for model_id in MODEL_ORDER:
+        normalized = normalized.replace(
+            f"_{model_id}_",
+            "_",
+        )
+
+    return normalized
 
 
 def slug_text(value):
@@ -394,29 +430,97 @@ def read_material_rows(path):
         return list(csv.DictReader(handle))
 
 
-def structure_path_for_material(row, structures_dir):
-    mpid = str(row["mpid"]).strip()
-    label = material_file_slug(row["material_label"])
-    return Path(structures_dir) / f"{mpid}_{label}.cif"
+def structure_path_for_material(
+    row,
+    structures_dir,
+):
+    input_path = clean_value(row.get("input_path"))
+
+    if input_path is not None:
+        path = Path(str(input_path))
+
+        if not path.is_absolute():
+            path = BASE_DIR / path
+
+        return path
+
+    mpid = clean_value(row.get("mpid"))
+    material_label = clean_value(
+        row.get("material_label")
+    )
+
+    if mpid is None or material_label is None:
+        return Path(structures_dir) / "__missing_structure__"
+
+    label = material_file_slug(material_label)
+
+    return (
+        Path(structures_dir)
+        / f"{mpid}_{label}.cif"
+    )
 
 
-def make_structure_summary(materials_path, structures_dir, output_dir):
+def make_structure_summary(
+    materials_path,
+    structures_dir,
+    output_dir,
+):
     material_rows = read_material_rows(materials_path)
+
     if not material_rows:
         return
 
     rows = []
     missing = []
+    seen_materials = set()
 
     for material in material_rows:
-        path = structure_path_for_material(material, structures_dir)
+        material_slug = (
+            clean_value(material.get("material_slug"))
+            or clean_value(material.get("mpid"))
+            or material_file_slug(
+                material.get(
+                    "material_label",
+                    "material",
+                )
+            )
+        )
+
+        if material_slug in seen_materials:
+            continue
+
+        seen_materials.add(material_slug)
+
+        path = structure_path_for_material(
+            material,
+            structures_dir,
+        )
+
+        material_label = (
+            clean_value(material.get("material_label"))
+            or material_slug
+        )
+        category = (
+            clean_value(material.get("category"))
+            or "LiCOHPF"
+        )
+        mpid = (
+            clean_value(material.get("mpid"))
+            or material_slug
+        )
+
         if not path.exists():
-            missing.append({
-                "category": material.get("category"),
-                "material_label": material.get("material_label"),
-                "mpid": material.get("mpid"),
-                "reason": f"Missing structure file: {path}",
-            })
+            missing.append(
+                {
+                    "category": category,
+                    "material_label": material_label,
+                    "material_slug": material_slug,
+                    "mpid": mpid,
+                    "reason": (
+                        f"Missing structure file: {path}"
+                    ),
+                }
+            )
             continue
 
         atoms = read_structure(path)
@@ -427,35 +531,58 @@ def make_structure_summary(materials_path, structures_dir, output_dir):
         volume = float(atoms.get_volume())
         n_atoms = len(atoms)
 
-        rows.append({
-            "category": material.get("category"),
-            "material_label": material.get("material_label"),
-            "formula": material.get("formula"),
-            "mpid": material.get("mpid"),
-            "n_atoms": n_atoms,
-            "n_elements": len(elements),
-            "elements": ";".join(elements),
-            "volume_a3": volume,
-            "volume_per_atom_a3": volume / n_atoms if n_atoms else np.nan,
-            "cell_a": float(cell_lengths[0]),
-            "cell_b": float(cell_lengths[1]),
-            "cell_c": float(cell_lengths[2]),
-            "cell_alpha": float(cell_angles[0]),
-            "cell_beta": float(cell_angles[1]),
-            "cell_gamma": float(cell_angles[2]),
-        })
+        rows.append(
+            {
+                "category": category,
+                "material_label": material_label,
+                "material_slug": material_slug,
+                "formula": atoms.get_chemical_formula(),
+                "mpid": mpid,
+                "input_path": str(path),
+                "n_atoms": n_atoms,
+                "n_elements": len(elements),
+                "elements": ";".join(elements),
+                "volume_a3": volume,
+                "volume_per_atom_a3": (
+                    volume / n_atoms
+                    if n_atoms
+                    else np.nan
+                ),
+                "cell_a": float(cell_lengths[0]),
+                "cell_b": float(cell_lengths[1]),
+                "cell_c": float(cell_lengths[2]),
+                "cell_alpha": float(cell_angles[0]),
+                "cell_beta": float(cell_angles[1]),
+                "cell_gamma": float(cell_angles[2]),
+            }
+        )
 
     output_dir = Path(output_dir)
+
     if rows:
         summary = pd.DataFrame(rows)
-        summary.to_csv(output_dir / "materials_summary_combined.csv", index=False)
 
-        by_category = summary.groupby("category", as_index=False).agg({
-            "material_label": "count",
-            "n_atoms": ["median", "min", "max"],
-            "n_elements": "median",
-            "volume_per_atom_a3": ["median", "min", "max"],
-        })
+        summary.to_csv(
+            output_dir
+            / "materials_summary_combined.csv",
+            index=False,
+        )
+
+        by_category = summary.groupby(
+            "category",
+            as_index=False,
+        ).agg(
+            {
+                "material_label": "count",
+                "n_atoms": ["median", "min", "max"],
+                "n_elements": "median",
+                "volume_per_atom_a3": [
+                    "median",
+                    "min",
+                    "max",
+                ],
+            }
+        )
 
         by_category.columns = [
             "category",
@@ -469,17 +596,33 @@ def make_structure_summary(materials_path, structures_dir, output_dir):
             "max_volume_per_atom_a3",
         ]
 
-        by_category.to_csv(output_dir / "structure_summary_by_category.csv", index=False)
+        by_category.to_csv(
+            output_dir
+            / "structure_summary_by_category.csv",
+            index=False,
+        )
 
     if missing:
-        pd.DataFrame(missing).to_csv(output_dir / "structure_summary_missing.csv", index=False)
+        pd.DataFrame(missing).to_csv(
+            output_dir
+            / "structure_summary_missing.csv",
+            index=False,
+        )
 
 
 def material_info(row, run_dir):
     material_label = clean_value(row.get("material_label"))
     material_slug = clean_value(row.get("material_slug"))
 
-    if material_slug is None and run_dir.parent.name not in ["outputs_mace", "outputs_uma", "outputs_chgnet"]:
+    output_folder_names = {
+        f"outputs_{model_id}"
+        for model_id in MODEL_ORDER
+    }
+
+    if (
+        material_slug is None
+        and run_dir.parent.name not in output_folder_names
+    ):
         material_slug = run_dir.parent.name
 
     if material_label is None:
@@ -748,27 +891,12 @@ def model_legend_handles():
         plt.Line2D(
             [0],
             [0],
-            color=CALCULATOR_COLORS["mace"],
+            color=CALCULATOR_COLORS[model_id],
             lw=7,
             alpha=0.72,
-            label="MACE",
-        ),
-        plt.Line2D(
-            [0],
-            [0],
-            color=CALCULATOR_COLORS["uma"],
-            lw=7,
-            alpha=0.72,
-            label="UMA",
-        ),
-        plt.Line2D(
-            [0],
-            [0],
-            color=CALCULATOR_COLORS["chgnet"],
-            lw=7,
-            alpha=0.72,
-            label="CHGNet",
-        ),
+            label=MODEL_LABELS[model_id],
+        )
+        for model_id in MODEL_ORDER
     ]
 
 
@@ -777,7 +905,7 @@ def apply_shared_figure_header(fig, subtitle=None, left=0.05):
         fig.legend(
             handles=model_legend_handles(),
             loc="upper center",
-            ncol=2,
+            ncol=len(MODEL_ORDER),
             bbox_to_anchor=(0.5, 1.045),
             borderaxespad=0.0,
         )
@@ -787,7 +915,7 @@ def apply_shared_figure_header(fig, subtitle=None, left=0.05):
         fig.legend(
             handles=model_legend_handles(),
             loc="upper center",
-            ncol=2,
+            ncol=len(MODEL_ORDER),
             bbox_to_anchor=(0.5, 1.015),
             borderaxespad=0.0,
         )
@@ -1401,7 +1529,11 @@ def draw_parametric_panel(
                 edgecolor="white",
                 linewidth=0.45,
                 zorder=3,
-                label=calculator.upper() if first_label else None,
+                label=(
+                    model_label(calculator)
+                    if first_label
+                    else None
+                ),
             )
 
             first_label = False
@@ -1431,6 +1563,41 @@ def draw_parametric_panel(
 
     ax.grid(True, alpha=0.35)
     ax.margins(x=0.03, y=0.05)
+
+
+EXACT_MIN_LATTICE_PERCENT_COL = "_epsilon_percent_displacement_exact"
+
+
+def bubble_column_for_figure(figure_name):
+    if "epsilon_percent_displacement" in figure_name:
+        return EXACT_MIN_LATTICE_PERCENT_COL
+    if "epsilon" in figure_name:
+        return "epsilon"
+    return "n_steps"
+
+
+def versioned_figure_name(figure_name, version):
+    return re.sub(r"^figure_(\d+)_", rf"figure_\1_{version}_", figure_name)
+
+
+def exact_min_lattice_records(records):
+    records = records.copy()
+    records[EXACT_MIN_LATTICE_PERCENT_COL] = records["epsilon_percent_displacement"]
+    return records
+
+
+def exact_min_lattice_axis_specs(records, figure_name, version=1):
+    if not has_percent_displacement_axis(records, "epsilon_percent_displacement"):
+        return []
+
+    return [(
+        EPSILON_AXIS_PERCENT,
+        EXACT_MIN_LATTICE_PERCENT_COL,
+        versioned_figure_name(
+            f"{figure_name}_percent_displacement",
+            version,
+        ),
+    )]
 
 
 def make_parametric_state_figure(
@@ -1474,7 +1641,7 @@ def make_parametric_state_figure(
             records=records,
             x_getter=x_getter,
             y_getter=y_getter,
-            bubble_col="epsilon" if "epsilon" in figure_name else "n_steps",
+            bubble_col=bubble_column_for_figure(figure_name),
             missing_rows=missing_rows,
             figure_name=figure_name,
         )
@@ -1860,7 +2027,7 @@ def make_paired_relaxation_figure(
 
         annotation_lines = ["Relaxation"]
 
-        for calculator in ["mace", "uma", "chgnet"]:
+        for calculator in MODEL_ORDER:
             calculator_pairs = attack_pairs[
                 attack_pairs["calculator"] == calculator
             ]
@@ -1879,7 +2046,7 @@ def make_paired_relaxation_figure(
 
             annotation_lines.append(
                 (
-                    f"{calculator.upper()}: "
+                    f"{model_label(calculator)}: "
                     rf"$\Delta x$={delta_x:.3g}, "
                     rf"$\Delta y$={delta_y:.3g}"
                 )
@@ -2089,7 +2256,7 @@ def collect_box_data(records, attack, value_getter, missing_rows, x_col="epsilon
     rng = np.random.default_rng(12345)
 
     for x_value in x_values:
-        for calculator in ["mace", "uma", "chgnet"]:
+        for calculator in MODEL_ORDER:
             rowset = attack_records[
                 (attack_records[plot_x_col] == x_value)
                 & (attack_records["calculator"] == calculator)
@@ -2232,7 +2399,7 @@ def plot_convergence_panel(
             markersize=4,
             linewidth=1.8,
             color=color,
-            label=calculator.upper(),
+            label=model_label(calculator),
         )
 
     ax._preserve_manual_limits = True
@@ -2380,7 +2547,7 @@ def draw_grouped_ci(
             markersize=4,
             linewidth=1.8,
             color=color,
-            label=calculator.upper(),
+            label=model_label(calculator),
         )
 
     ax._preserve_manual_limits = True
@@ -2560,7 +2727,7 @@ def collect_box_data_by_steps(records, attack, epsilon, value_getter, missing_ro
     rng = np.random.default_rng(12345)
 
     for n_steps in steps:
-        for calculator in ["mace", "uma", "chgnet"]:
+        for calculator in MODEL_ORDER:
             rowset = attack_records[
                 (attack_records["n_steps"] == n_steps)
                 & (attack_records["calculator"] == calculator)
@@ -2703,7 +2870,7 @@ def collect_whisker_span_data(records, attack, value_getter, missing_rows, x_col
     points = []
 
     for x_value in x_values:
-        for calculator in ["mace", "uma", "chgnet"]:
+        for calculator in MODEL_ORDER:
             rowset = attack_records[
                 (attack_records[x_col] == x_value)
                 & (attack_records["calculator"] == calculator)
@@ -2775,7 +2942,7 @@ def draw_whisker_span(
             markersize=4,
             linewidth=1.8,
             color=color,
-            label=calculator.upper(),
+            label=model_label(calculator),
             zorder=3,
         )
 
@@ -2862,7 +3029,7 @@ def collect_whisker_span_data_by_steps(records, attack, epsilon, value_getter, m
     points = []
 
     for i, n_steps in enumerate(steps, start=1):
-        for calculator in ["mace", "uma", "chgnet"]:
+        for calculator in MODEL_ORDER:
             rowset = attack_records[
                 (attack_records["n_steps"] == n_steps)
                 & (attack_records["calculator"] == calculator)
@@ -2924,7 +3091,7 @@ def draw_whisker_span_by_steps(ax, records, attack, epsilon, value_getter, ylabe
             markersize=4,
             linewidth=1.8,
             color=color,
-            label=calculator.upper(),
+            label=model_label(calculator),
             zorder=3,
         )
 
@@ -3026,7 +3193,7 @@ def plot_convergence_panel_by_steps(ax, records, attack, epsilon, step_col, conv
             markersize=4,
             linewidth=1.8,
             color=color,
-            label=calculator.upper(),
+            label=model_label(calculator),
         )
 
     ax._preserve_manual_limits = True
@@ -3140,7 +3307,7 @@ def draw_grouped_ci_by_steps(ax, records, attack, epsilon, value_getter, ylabel,
             markersize=4,
             linewidth=1.8,
             color=color,
-            label=calculator.upper(),
+            label=model_label(calculator),
         )
 
     ax._preserve_manual_limits = True
@@ -3736,17 +3903,10 @@ def save_material_ranking_plot(
 
     legend_handles = [
         Patch(
-            facecolor=CALCULATOR_COLORS["mace"],
-            label="MACE",
-        ),
-        Patch(
-            facecolor=CALCULATOR_COLORS["uma"],
-            label="UMA",
-        ),
-        Patch(
-            facecolor=CALCULATOR_COLORS["chgnet"],
-            label="CHGNet",
-        ),
+            facecolor=CALCULATOR_COLORS[model_id],
+            label=MODEL_LABELS[model_id],
+        )
+        for model_id in MODEL_ORDER
     ]
 
     if comparison_getter is not None:
@@ -5502,51 +5662,316 @@ def make_space_group_figures(records, output_dir):
         )
 
 
+def make_exact_min_lattice_figures_1_to_9(epsilon_records, output_dir):
+    exact_records = exact_min_lattice_records(epsilon_records)
+
+    make_convergence_figure(
+        exact_records,
+        output_dir,
+        axis_specs=exact_min_lattice_axis_specs(
+            exact_records,
+            "figure_1_convergence_by_epsilon",
+            version=1,
+        ),
+    )
+
+    force_rows = [
+        (
+            "After attack, before relaxation",
+            lambda: (lambda row: force_delta_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "perturbed_forces.csv",
+            )),
+        ),
+        (
+            "After attack, after relaxation",
+            lambda: (lambda row: force_delta_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "after_forces.csv",
+            )),
+        ),
+    ]
+
+    displacement_rows = [
+        (
+            "After attack, before relaxation",
+            lambda: (lambda row: displacement_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "perturbed_forces.csv",
+            )),
+        ),
+        (
+            "After attack, after relaxation",
+            lambda: (lambda row: displacement_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "after_forces.csv",
+            )),
+        ),
+    ]
+
+    make_distribution_figure(
+        records=exact_records,
+        output_dir=output_dir,
+        figure_name="figure_2_delta_force_by_epsilon",
+        ylabel=r"$\Delta$ force (eV/$\AA$)",
+        rows=force_rows,
+        axis_specs=exact_min_lattice_axis_specs(
+            exact_records,
+            "figure_2_delta_force_by_epsilon",
+            version=1,
+        ),
+    )
+
+    make_ci_figure(
+        records=exact_records,
+        output_dir=output_dir,
+        figure_name="figure_2_delta_force_ci_by_epsilon",
+        ylabel=r"Median $\Delta$ force with 95% CI (eV/$\AA$)",
+        rows=force_rows,
+        axis_specs=exact_min_lattice_axis_specs(
+            exact_records,
+            "figure_2_delta_force_ci_by_epsilon",
+            version=1,
+        ),
+    )
+
+    make_whisker_span_figure(
+        records=exact_records,
+        output_dir=output_dir,
+        figure_name="figure_2_delta_force_whisker_span_by_epsilon",
+        ylabel=r"$\Delta$ force whisker span (eV/$\AA$)",
+        rows=force_rows,
+        axis_specs=exact_min_lattice_axis_specs(
+            exact_records,
+            "figure_2_delta_force_whisker_span_by_epsilon",
+            version=1,
+        ),
+    )
+
+    make_distribution_figure(
+        records=exact_records,
+        output_dir=output_dir,
+        figure_name="figure_3_displacement_by_epsilon",
+        ylabel=r"Displacement ($\AA$)",
+        rows=displacement_rows,
+        axis_specs=exact_min_lattice_axis_specs(
+            exact_records,
+            "figure_3_displacement_by_epsilon",
+            version=1,
+        ),
+    )
+
+    make_ci_figure(
+        records=exact_records,
+        output_dir=output_dir,
+        figure_name="figure_3_displacement_ci_by_epsilon",
+        ylabel=r"Median displacement with 95% CI ($\AA$)",
+        rows=displacement_rows,
+        axis_specs=exact_min_lattice_axis_specs(
+            exact_records,
+            "figure_3_displacement_ci_by_epsilon",
+            version=1,
+        ),
+    )
+
+    make_whisker_span_figure(
+        records=exact_records,
+        output_dir=output_dir,
+        figure_name="figure_3_displacement_whisker_span_by_epsilon",
+        ylabel=r"Displacement whisker span ($\AA$)",
+        rows=displacement_rows,
+        axis_specs=exact_min_lattice_axis_specs(
+            exact_records,
+            "figure_3_displacement_whisker_span_by_epsilon",
+            version=1,
+        ),
+    )
+
+    displacement_getters = displacement_metric_getters()
+    force_getters = delta_force_metric_getters()
+    convergence_getters = [
+        lambda row: scalar_distribution(row, "after_relax_steps"),
+        lambda row: scalar_distribution(row, "after_relax_steps"),
+    ]
+
+    make_parametric_state_figure(
+        records=exact_records,
+        output_dir=output_dir,
+        figure_name="figure_7_2_convergence_vs_displacement_by_epsilon_percent_displacement",
+        title="Convergence vs displacement by % min lattice",
+        x_label=r"Median displacement ($\AA$)",
+        y_label="Relaxation steps",
+        bubble_label="% min lattice",
+        attacks_to_plot=ATTACK_ORDER,
+        x_getters=displacement_getters,
+        y_getters=convergence_getters,
+    )
+
+    make_parametric_state_figure(
+        records=exact_records,
+        output_dir=output_dir,
+        figure_name="figure_8_2_convergence_vs_delta_force_by_epsilon_percent_displacement",
+        title="Convergence vs delta force by % min lattice",
+        x_label=r"Median $\Delta$ force (eV/$\AA$)",
+        y_label="Relaxation steps",
+        bubble_label="% min lattice",
+        attacks_to_plot=ATTACK_ORDER,
+        x_getters=force_getters,
+        y_getters=convergence_getters,
+        x_log=True,
+    )
+
+    make_parametric_state_figure(
+        records=exact_records,
+        output_dir=output_dir,
+        figure_name="figure_9_2_delta_force_vs_displacement_by_epsilon_percent_displacement",
+        title="Delta force vs displacement by % min lattice",
+        x_label=r"Median displacement ($\AA$)",
+        y_label=r"Median $\Delta$ force (eV/$\AA$)",
+        bubble_label="% min lattice",
+        attacks_to_plot=ATTACK_ORDER,
+        x_getters=displacement_getters,
+        y_getters=force_getters,
+        x_log=True,
+        y_log=True,
+    )
+
+
 def main():
     apply_plot_style()
 
     parser = argparse.ArgumentParser(
-        description="Create publication-quality comprehensive MLFF plots."
+        description=(
+            "Create comprehensive five-model MLFF plots."
+        )
     )
-    parser.add_argument("--mace-dir", default=BASE_DIR / "outputs_mace", type=Path)
-    parser.add_argument("--uma-dir", default=BASE_DIR / "outputs_uma", type=Path)
-    parser.add_argument("--chgnet-dir", default=BASE_DIR / "outputs_chgnet", type=Path)
-    parser.add_argument("--output-dir", default=BASE_DIR / "outputs_comprehensive", type=Path)
-    parser.add_argument("--materials", default=BASE_DIR / "datasets/tests_materials.csv", type=Path)
-    parser.add_argument("--structures-dir", default=BASE_DIR / "mp_structures", type=Path)
+
+    parser.add_argument(
+        "--mace-mh-dir",
+        default=BASE_DIR / "outputs_mace_mh",
+        type=Path,
+    )
+    parser.add_argument(
+        "--uma-dir",
+        default=BASE_DIR / "outputs_uma",
+        type=Path,
+    )
+    parser.add_argument(
+        "--mtp-dir",
+        default=BASE_DIR / "outputs_mtp",
+        type=Path,
+    )
+    parser.add_argument(
+        "--chgnet-dir",
+        default=BASE_DIR / "outputs_chgnet",
+        type=Path,
+    )
+    parser.add_argument(
+        "--mace-model-dir",
+        default=BASE_DIR / "outputs_mace_model",
+        type=Path,
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=BASE_DIR / "outputs_comprehensive",
+        type=Path,
+    )
+    parser.add_argument(
+        "--materials",
+        default=(
+            BASE_DIR
+            / "generated_licohpf_tests.csv"
+        ),
+        type=Path,
+    )
+    parser.add_argument(
+        "--structures-dir",
+        default=(
+            BASE_DIR
+            / "datasets"
+            / "licohpf_database"
+            / "structures"
+        ),
+        type=Path,
+    )
+
     args = parser.parse_args()
 
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-
-    make_structure_summary(args.materials, args.structures_dir, args.output_dir)
-
-    mace_records, mace_missing = load_summary(
-        args.mace_dir / "summary.csv",
-        args.mace_dir,
-        "mace",
-    )
-    uma_records, uma_missing = load_summary(
-        args.uma_dir / "summary.csv",
-        args.uma_dir,
-        "uma",
-    )
-    chgnet_records, chgnet_missing = load_summary(
-        args.chgnet_dir / "summary.csv",
-        args.chgnet_dir,
-        "chgnet",
+    args.output_dir.mkdir(
+        parents=True,
+        exist_ok=True,
     )
 
-    records = pd.DataFrame(mace_records + uma_records + chgnet_records)
-    missing_rows = [{"reason": item} for item in mace_missing + uma_missing + chgnet_missing]
+    make_structure_summary(
+        args.materials,
+        args.structures_dir,
+        args.output_dir,
+    )
+
+    model_directories = {
+        "mace_mh": args.mace_mh_dir,
+        "uma": args.uma_dir,
+        "mtp": args.mtp_dir,
+        "chgnet": args.chgnet_dir,
+        "mace_model": args.mace_model_dir,
+    }
+
+    all_records = []
+    all_missing = []
+
+    for model_id in MODEL_ORDER:
+        model_directory = model_directories[model_id]
+        summary_path = model_directory / "summary.csv"
+
+        model_records, model_missing = load_summary(
+            summary_path,
+            model_directory,
+            model_id,
+        )
+
+        all_records.extend(model_records)
+        all_missing.extend(model_missing)
+
+    records = pd.DataFrame(all_records)
+
+    missing_rows = [
+        {"reason": item}
+        for item in all_missing
+    ]
 
     if records.empty:
         pd.DataFrame(missing_rows).to_csv(
-            args.output_dir / "missing_data_report.csv",
+            args.output_dir
+            / "missing_data_report.csv",
             index=False,
         )
-        raise SystemExit("No successful runs found in outputs_mace, outputs_uma, or outputs_chgnet.")
 
-    records.to_csv(args.output_dir / "combined_dataset.csv", index=False)
+        raise SystemExit(
+            "No successful model runs were found."
+        )
+
+    present_models = set(
+        records["calculator"].dropna()
+    )
+
+    unexpected_models = (
+        present_models.difference(MODEL_ORDER)
+    )
+
+    if unexpected_models:
+        raise SystemExit(
+            "Unexpected models in comprehensive data: "
+            f"{sorted(unexpected_models)}"
+        )
+
+    records.to_csv(
+        args.output_dir / "combined_dataset.csv",
+        index=False,
+    )
 
     make_topology_figures(records, args.output_dir / "topology")
     make_space_group_figures(records, args.output_dir / "space_group")
@@ -5899,6 +6324,11 @@ def main():
                 )),
             ),
         ],
+    )
+
+    make_exact_min_lattice_figures_1_to_9(
+        epsilon_records,
+        args.output_dir,
     )
 
     force_angle_missing = make_delta_force_angle_figure_set(

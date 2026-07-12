@@ -1,6 +1,6 @@
 ﻿# Practical Uses Report for 20 MPIDs
 
-This file maps each material in `datasets/tests_materials.csv` to a practical use found in the literature. Exact-compound evidence is preferred; sources using a variant of the compound are marked in the notes.
+This file maps each material in `datasets/2d_structures/tests_materials.csv` to a practical use found in the literature. Exact-compound evidence is preferred; sources using a variant of the compound are marked in the notes.
 
 | Category | Material Label | Formula | MPID | Practical Uses | Source | Notes |
 |---|---|---:|---|---|---|---|

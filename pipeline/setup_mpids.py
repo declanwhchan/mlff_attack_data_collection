@@ -241,8 +241,8 @@ def write_tests(rows, output_path):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--materials", default="datasets/tests_materials.csv")
-    parser.add_argument("--config", default="datasets/tests_comprehensive.json")
+    parser.add_argument("--materials", default="datasets/2d_structures/tests_materials.csv")
+    parser.add_argument("--config", default="datasets/2d_structures/tests_comprehensive.json")
     parser.add_argument("--tests-out", default="generated_material_tests.csv")
     parser.add_argument("--structures-dir", default="mp_structures")
     parser.add_argument("--force-download", action="store_true")

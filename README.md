@@ -25,8 +25,11 @@ After completing the following 3 steps:
 ├── mlff_attack_data_collection/
 │   └── .env
 ├── .venv-mace/
-└── .venv-uma/
-└── .venv-chgnet/
+├── .venv-uma/
+├── .venv-chgnet/
+├── mlip-3/bin/mlp
+└── .venv-mtp/bin/mlp
+
 ```
 
 ## 1. Clone Repos

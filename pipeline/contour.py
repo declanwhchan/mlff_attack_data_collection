@@ -16,8 +16,10 @@ from ase.optimize import LBFGS
 
 from mlff_attack.relaxation import setup_calculator
 from run_tests import (
+    calculator_backend_for_row,
     coordination_by_atom,
     edge_jaccard_distance,
+    infer_model_id,
     neighbor_edge_set,
     rdf_l1_distance,
     symmetry_change_metrics,
@@ -58,15 +60,36 @@ def slug_from_input(path):
     return Path(str(path)).stem.lower()
 
 
-def infer_calculator(model_path):
-    name = Path(str(model_path)).name.lower()
-    if name.startswith("mace"):
-        return "mace"
-    if name.startswith("uma"):
-        return "uma"
-    if name.startswith("chgnet"):
-        return "chgnet"
-    raise RuntimeError(f"Cannot infer calculator from model_path={model_path!r}")
+def model_id_for_row(row):
+    return infer_model_id(row)
+
+
+def calculator_backend_for_job(job):
+    model_id = job["model_id"]
+
+    expected_backends = {
+        "mace_mh": "mace",
+        "uma": "uma",
+        "mtp": "mtp",
+        "chgnet": "chgnet",
+        "mace_model": "mace",
+    }
+
+    if model_id not in expected_backends:
+        raise RuntimeError(
+            f"Unknown contour model_id: {model_id!r}"
+        )
+
+    backend = job["calculator_backend"]
+
+    if backend != expected_backends[model_id]:
+        raise RuntimeError(
+            f"{model_id} requires backend "
+            f"{expected_backends[model_id]!r}, "
+            f"not {backend!r}"
+        )
+
+    return backend
 
 
 def parse_betas(text, default):
@@ -85,45 +108,121 @@ def read_config(path):
 
 
 def read_jobs(tests_path):
-    with Path(tests_path).open("r", encoding="utf-8-sig", newline="") as handle:
+    with Path(tests_path).open(
+        "r",
+        encoding="utf-8-sig",
+        newline="",
+    ) as handle:
         rows = list(csv.DictReader(handle))
 
+    if not rows:
+        raise RuntimeError(
+            f"No contour jobs found in {tests_path}"
+        )
+
     jobs = {}
+
     for row in rows:
-        calculator = infer_calculator(row["model_path"])
-        material_slug = clean(row.get("material_slug")) or slug_from_input(row["input_path"])
-        material_label = clean(row.get("material_label")) or material_slug
-        key = (calculator, material_slug)
-        if key not in jobs:
-            jobs[key] = {
-                "calculator": calculator,
-                "material_slug": material_slug,
-                "material_label": material_label,
-                "input_path": row["input_path"],
-                "model_path": row["model_path"],
-                "device": clean(row.get("device")) or "cpu",
-                "mace_head": clean(row.get("mace_head")),
-                "uma_task": clean(row.get("uma_task")),
-                "uma_charge": clean(row.get("uma_charge")),
-                "uma_spin": clean(row.get("uma_spin")),
-            }
+        model_id = model_id_for_row(row)
+        calculator_backend = calculator_backend_for_row(row)
 
-    return [jobs[key] for key in sorted(jobs)]
+        material_slug = (
+            clean(row.get("material_slug"))
+            or slug_from_input(row["input_path"])
+        )
+        material_label = (
+            clean(row.get("material_label"))
+            or material_slug
+        )
+
+        key = (
+            model_id,
+            material_slug,
+        )
+
+        job = {
+            "calculator": model_id,
+            "model_id": model_id,
+            "calculator_backend": calculator_backend,
+            "material_slug": material_slug,
+            "material_label": material_label,
+            "input_path": row["input_path"],
+            "model_path": row["model_path"],
+            "device": clean(row.get("device")) or "cpu",
+            "mace_head": clean(row.get("mace_head")),
+            "uma_task": clean(row.get("uma_task")),
+            "uma_charge": clean(row.get("uma_charge")),
+            "uma_spin": clean(row.get("uma_spin")),
+        }
+
+        if key in jobs:
+            existing = jobs[key]
+
+            fields_to_compare = [
+                "calculator_backend",
+                "input_path",
+                "model_path",
+                "device",
+                "mace_head",
+                "uma_task",
+                "uma_charge",
+                "uma_spin",
+            ]
+
+            for field in fields_to_compare:
+                if existing[field] != job[field]:
+                    raise RuntimeError(
+                        f"Inconsistent {field} for contour job "
+                        f"{model_id} {material_slug}: "
+                        f"{existing[field]!r} != {job[field]!r}"
+                    )
+        else:
+            jobs[key] = job
+
+    return [
+        jobs[key]
+        for key in sorted(jobs)
+    ]
 
 
-def select_jobs(jobs, calculator=None, material_slug=None):
+def select_jobs(
+    jobs,
+    calculator=None,
+    material_slug=None,
+):
     selected = jobs
+
     if calculator:
-        selected = [job for job in selected if job["calculator"] == calculator]
+        selected = [
+            job
+            for job in selected
+            if job["model_id"] == calculator
+        ]
+
     if material_slug:
-        selected = [job for job in selected if job["material_slug"] == material_slug]
+        selected = [
+            job
+            for job in selected
+            if job["material_slug"] == material_slug
+        ]
 
     task_id = os.environ.get("SLURM_ARRAY_TASK_ID")
+
     if task_id and not calculator and not material_slug:
         index = int(task_id) - 1
+
         if index < 0 or index >= len(selected):
-            raise SystemExit(f"ERROR: SLURM_ARRAY_TASK_ID must be 1..{len(selected)}, got {task_id}")
+            raise SystemExit(
+                "ERROR: SLURM_ARRAY_TASK_ID must be "
+                f"1..{len(selected)}, got {task_id}"
+            )
+
         selected = [selected[index]]
+
+    if not selected:
+        raise SystemExit(
+            "ERROR: no contour jobs matched the selection"
+        )
 
     return selected
 
@@ -148,12 +247,42 @@ def add_chgnet_free_energy_compatibility(atoms):
     return atoms
 
 
-def setup_job_calculator(atoms, job, dtype_str, seed=None):
-    calculator = job["calculator"]
+def setup_job_calculator(
+    atoms,
+    job,
+    dtype_str,
+    seed=None,
+):
+    model_id = job["model_id"]
+    calculator_backend = calculator_backend_for_job(job)
+    device = clean(job.get("device")) or "cpu"
+    dtype_str = str(dtype_str).strip().lower()
 
-    if calculator == "mace":
+    if model_id == "mtp":
+        if dtype_str != "float64":
+            raise RuntimeError(
+                "MTP contour exploration supports float64 only."
+            )
+
+        if device != "cpu":
+            raise RuntimeError(
+                "MTP contour exploration must run on CPU."
+            )
+
+    if model_id == "mace_model":
+        if not device.startswith("cuda"):
+            raise RuntimeError(
+                "mace_model contour exploration requires CUDA."
+            )
+
+    elif device.startswith("cuda"):
+        raise RuntimeError(
+            f"{model_id} belongs to the CPU contour workflow."
+        )
+
+    if calculator_backend in {"mace", "mtp"}:
         model_path = BASE_DIR / job["model_path"]
-    elif calculator == "uma":
+    elif calculator_backend == "uma":
         model_path = Path(job["model_path"]).stem
     else:
         model_path = str(job["model_path"])
@@ -161,20 +290,25 @@ def setup_job_calculator(atoms, job, dtype_str, seed=None):
     atoms = setup_calculator(
         atoms,
         model_path,
-        device=job["device"],
+        device=device,
         dtype_str=dtype_str,
         seed=seed,
-        calculator=calculator,
+        calculator=calculator_backend,
         mace_head=job["mace_head"] or None,
         uma_task=job["uma_task"] or None,
         uma_charge=as_int(job["uma_charge"]),
         uma_spin=as_int(job["uma_spin"]),
     )
-    if atoms is None:
-        raise RuntimeError("setup_calculator returned None")
 
-    if calculator == "chgnet":
-        atoms = add_chgnet_free_energy_compatibility(atoms)
+    if atoms is None:
+        raise RuntimeError(
+            f"setup_calculator returned None for {model_id}"
+        )
+
+    if calculator_backend == "chgnet":
+        atoms = add_chgnet_free_energy_compatibility(
+            atoms
+        )
 
     return atoms
 
@@ -363,7 +497,11 @@ def relax_contour_endpoint(
     optimizer = LBFGS(
         relaxed,
         logfile=None,
-        trajectory=str(trajectory_path),
+        trajectory=(
+            None
+            if trajectory_path is None
+            else str(trajectory_path)
+        ),
     )
 
     optimizer.run(
@@ -390,9 +528,23 @@ def relax_contour_endpoint(
 
 
 def run_contour(job, beta, config, args):
-    calculator = job["calculator"]
+    model_id = job["model_id"]
+    calculator = model_id
+    calculator_backend = calculator_backend_for_job(job)
     material_slug = job["material_slug"]
     dtype_str = args.dtype_str
+
+    if model_id == "mtp" and dtype_str != "float64":
+        raise RuntimeError(
+            "MTP contour exploration supports float64 only."
+        )
+
+    if model_id == "mace_model":
+        if not str(job["device"]).startswith("cuda"):
+            raise RuntimeError(
+                "mace_model contour exploration requires CUDA."
+            )
+
     seed = as_int(args.seed, as_int(config.get("contour_seed"), 12345))
     outdir = output_root() / f"outputs_{dtype_str}" / calculator / "contour" / material_slug / beta_tag(beta)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -426,7 +578,6 @@ def run_contour(job, beta, config, args):
     pairs = neighbor_pairs(atoms)
 
     traj_path = outdir / "contour.traj"
-    log_path = outdir / "contour.log"
 
     dyn = ContourExploration(
         atoms,
@@ -436,7 +587,7 @@ def run_contour(job, beta, config, args):
         angle_limit=as_float(args.angle_limit, as_float(config.get("contour_angle_limit"), 20.0)),
         rng=np.random.default_rng(seed + int(round(beta * 1000))),
         trajectory=str(traj_path),
-        logfile=str(log_path),
+        logfile=None,
         loginterval=1,
     )
 
@@ -452,7 +603,9 @@ def run_contour(job, beta, config, args):
             "step": step,
             "material_label": job["material_label"],
             "material_slug": material_slug,
-            "calculator": calculator,
+            "calculator": model_id,
+            "model_id": model_id,
+            "calculator_backend": calculator_backend,
             "beta": float(beta),
             "energy_target_ev": energy_target,
             "energy_ev": energy,
@@ -505,9 +658,6 @@ def run_contour(job, beta, config, args):
         as_int(config.get("relax_max_steps"), 300),
     )
 
-    relaxed_trajectory_path = (
-        outdir / "contour_endpoint_relaxation.traj"
-    )
     relaxed_cif_path = (
         outdir / "final_contour_relaxed.cif"
     )
@@ -516,7 +666,6 @@ def run_contour(job, beta, config, args):
         "contour_endpoint_relaxation_status": "failed",
         "contour_endpoint_relaxation_error": "",
         "final_contour_relaxed_cif": "",
-        "contour_endpoint_relaxation_traj": "",
         "contour_endpoint_relaxation_steps": np.nan,
         "contour_endpoint_relaxation_converged": False,
         "contour_endpoint_relaxation_max_force_ev_a": np.nan,
@@ -538,7 +687,7 @@ def run_contour(job, beta, config, args):
             relaxed_max_force,
         ) = relax_contour_endpoint(
             atoms,
-            relaxed_trajectory_path,
+            None,
             post_relax_fmax,
             post_relax_steps,
         )
@@ -567,9 +716,6 @@ def run_contour(job, beta, config, args):
             ),
             "final_contour_relaxed_cif": str(
                 relaxed_cif_path
-            ),
-            "contour_endpoint_relaxation_traj": str(
-                relaxed_trajectory_path
             ),
             "contour_endpoint_relaxation_steps": (
                 relaxed_steps
@@ -620,7 +766,9 @@ def run_contour(job, beta, config, args):
 
     return {
         "status": "success",
-        "calculator": calculator,
+        "calculator": model_id,
+        "model_id": model_id,
+        "calculator_backend": calculator_backend,
         "dtype_str": dtype_str,
         "material_label": job["material_label"],
         "material_slug": material_slug,
@@ -629,7 +777,6 @@ def run_contour(job, beta, config, args):
         "output_dir": str(outdir),
         "metrics_csv": str(outdir / "contour_metrics.csv"),
         "traj": str(traj_path),
-        "log": str(log_path),
         "final_contour_cif": str(final_contour_path),
         **relaxed_summary,
         **contour_symmetry,
@@ -644,19 +791,48 @@ def run_contour(job, beta, config, args):
     }
 
 
-def append_summary(dtype_str, calculator, rows):
-    summary_path = (
-        output_root()
-        / f"outputs_{dtype_str}"
-        / calculator
-        / "contour"
-        / "summary.csv"
+def append_summary(
+    dtype_str,
+    model_id,
+    rows,
+):
+    summary_override = os.environ.get(
+        "CONTOUR_SUMMARY_FILE"
     )
-    summary_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if summary_override:
+        summary_path = Path(summary_override)
+    else:
+        summary_path = (
+            output_root()
+            / f"outputs_{dtype_str}"
+            / model_id
+            / "contour"
+            / "summary.csv"
+        )
+
+    summary_path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
     incoming = pd.DataFrame(rows)
     incoming["dtype_str"] = dtype_str
-    incoming["calculator"] = calculator
+    incoming["calculator"] = model_id
+    incoming["model_id"] = model_id
+
+    if "calculator_backend" not in incoming.columns:
+        incoming["calculator_backend"] = (
+            incoming["model_id"].map(
+                {
+                    "mace_mh": "mace",
+                    "uma": "uma",
+                    "mtp": "mtp",
+                    "chgnet": "chgnet",
+                    "mace_model": "mace",
+                }
+            )
+        )
 
     existing = (
         pd.read_csv(summary_path)
@@ -664,32 +840,48 @@ def append_summary(dtype_str, calculator, rows):
         else pd.DataFrame()
     )
 
-    if "dtype_str" not in existing.columns:
-        existing["dtype_str"] = dtype_str
-    else:
-        existing["dtype_str"] = existing["dtype_str"].fillna(dtype_str)
-
-    if "calculator" not in existing.columns:
-        existing["calculator"] = calculator
-    else:
-        existing["calculator"] = existing["calculator"].fillna(calculator)
-
     combined = pd.concat(
         [existing, incoming],
         ignore_index=True,
     )
+
     combined = combined.drop_duplicates(
-        ["dtype_str", "calculator", "material_slug", "beta"],
+        [
+            "dtype_str",
+            "model_id",
+            "material_slug",
+            "beta",
+        ],
         keep="last",
     )
-    combined.to_csv(summary_path, index=False)
+
+    combined.to_csv(
+        summary_path,
+        index=False,
+    )
+
+    print(
+        f"Wrote {len(combined)} contour summary rows "
+        f"to {summary_path}",
+        flush=True,
+    )
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--tests", default="generated_material_tests.csv")
-    parser.add_argument("--config", default="datasets/tests_comprehensive.json")
-    parser.add_argument("--calculator", choices=["mace", "uma", "chgnet"])
+    parser.add_argument("--config", default="datasets/2d_structures/tests_comprehensive.json")
+    parser.add_argument(
+        "--calculator",
+        choices=[
+            "mace_mh",
+            "uma",
+            "mtp",
+            "chgnet",
+            "mace_model",
+        ],
+        help="Unique model identity, not calculator backend.",
+    )
     parser.add_argument(
         "--dtype-str",
         choices=["float32", "float64"],
@@ -721,7 +913,13 @@ def main():
                 print(f"DRY RUN: {job['calculator']} {job['material_slug']} beta={beta:g}")
         return
 
-    summaries_by_calculator = {"mace": [], "uma": [], "chgnet": []}
+    summaries_by_calculator = {
+        "mace_mh": [],
+        "uma": [],
+        "mtp": [],
+        "chgnet": [],
+        "mace_model": [],
+    }
 
     for job in jobs:
         for beta in betas:
@@ -731,7 +929,11 @@ def main():
             except Exception as exc:
                 summary = {
                     "status": "failed",
-                    "calculator": job["calculator"],
+                    "calculator": job["model_id"],
+                    "model_id": job["model_id"],
+                    "calculator_backend": job[
+                        "calculator_backend"
+                    ],
                     "dtype_str": args.dtype_str,
                     "material_label": job["material_label"],
                     "material_slug": job["material_slug"],

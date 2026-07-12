@@ -80,7 +80,7 @@ def load_structures(materials, structures_dir):
             "ERROR: missing MP structure CIF files:\n"
             f"{lines}\n\n"
             "Download them first with:\n"
-            "  python pipeline/run_material_mpids.py --download-only"
+            "  python pipeline/setup_mpids.py --download-only"
         )
 
     return loaded
@@ -587,7 +587,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Plot only the 20 initial MP structures before attack and before relaxation."
     )
-    parser.add_argument("--materials", default="datasets/tests_materials.csv")
+    parser.add_argument("--materials", default="datasets/2d_structures/tests_materials.csv")
     parser.add_argument("--structures-dir", default="mp_structures")
     parser.add_argument("--output-dir", default="outputs_visuals")
     parser.add_argument("--dpi", type=int, default=600)

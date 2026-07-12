@@ -12,26 +12,8 @@ from ase.io import read, write
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 MATERIALS = [
-    "beta_cristobalite_sio2",
-    "beta_quartz_sio2",
-    "berlinite_alpo4",
-    "zn_cn2",
-    "scf3",
-    "reo3",
-    "graphite",
-    "h_bn",
-    "mos2_2h",
-    "ws2_2h",
-    "mose2_2h",
-    "wse2_2h",
-    "sns2",
-    "zrs2",
-    "srtio3",
-    "ktao3",
-    "bazro3",
-    "bahfo3",
-    "cspbbr3",
-    "cspbi3",
+    f"licohpf_{index:03d}"
+    for index in range(1, 21)
 ]
 
 REPEAT_TUPLES = [
@@ -45,7 +27,23 @@ REPEAT_TUPLES = [
     (2, 2, 2),
 ]
 
-CALCULATORS = ["mace", "uma", "chgnet"]
+MODEL_ORDER = [
+    "mace_mh",
+    "uma",
+    "mtp",
+    "chgnet",
+    "mace_model",
+]
+
+MODEL_BACKENDS = {
+    "mace_mh": "mace",
+    "uma": "uma",
+    "mtp": "mtp",
+    "chgnet": "chgnet",
+    "mace_model": "mace",
+}
+
+CALCULATORS = MODEL_ORDER
 EPSILON = 0.01
 DTYPE = "float64"
 SEED = 42
@@ -81,7 +79,10 @@ BASE_COLUMNS = [
 ]
 
 EXTRA_COLUMNS = [
+    "model_id",
+    "display_name",
     "calculator",
+    "calculator_backend",
     "dtype_str",
     "seed",
     "base_material_slug",
@@ -144,10 +145,34 @@ def load_config(path):
         return json.load(handle)
 
 
-def structure_path(material, structures_dir):
-    return (
-        Path(structures_dir)
-        / f"{material['mpid']}_{slug(material['material_label'])}.cif"
+def structure_path(
+    material,
+    structures_dir,
+):
+    input_path = str(
+        material.get("input_path", "")
+    ).strip()
+
+    if input_path:
+        path = Path(input_path)
+
+        if not path.is_absolute():
+            path = BASE_DIR / path
+
+        return path
+
+    material_slug = str(
+        material.get("material_slug", "")
+    ).strip()
+
+    if material_slug:
+        return (
+            Path(structures_dir)
+            / f"{material_slug}.xyz"
+        )
+
+    raise RuntimeError(
+        f"Cannot determine structure path for {material}"
     )
 
 
@@ -164,7 +189,42 @@ def make_run_row(
     model,
     attack,
 ):
-    calculator = str(model["calculator"]).lower()
+    model_id = str(
+        model["model_id"]
+    ).strip().lower()
+
+    calculator_backend = str(
+        model.get(
+            "calculator_backend",
+            model["calculator"],
+        )
+    ).strip().lower()
+
+    if model_id not in MODEL_BACKENDS:
+        raise RuntimeError(
+            f"Unknown model_id: {model_id}"
+        )
+
+    if (
+        calculator_backend
+        != MODEL_BACKENDS[model_id]
+    ):
+        raise RuntimeError(
+            f"{model_id} requires backend "
+            f"{MODEL_BACKENDS[model_id]}, "
+            f"not {calculator_backend}"
+        )
+
+    supported_dtypes = {
+        str(value).strip().lower()
+        for value in model.get("dtypes", [])
+    }
+
+    if DTYPE not in supported_dtypes:
+        raise RuntimeError(
+            f"{model_id} does not support {DTYPE}"
+        )
+
     attack_name = str(attack["name"]).lower()
     attack_steps = int(attack["n_steps"])
 
@@ -188,7 +248,7 @@ def make_run_row(
     row.update({
         "run_id": (
             f"{supercell['material_slug']}_"
-            f"{calculator}_{run_folder}"
+            f"{model_id}_{run_folder}"
         ),
         "material_label": supercell["material_label"],
         "material_slug": supercell["material_slug"],
@@ -208,12 +268,18 @@ def make_run_row(
             if attack.get("clip") is None
             else attack["clip"]
         ),
-        "device": context["device"],
+        "device": model["device"],
         "output_dir": "outputs",
         "relax_fmax": context["relax_fmax"],
         "relax_max_steps": context["relax_max_steps"],
         "relax_optimizer": context["relax_optimizer"],
-        "calculator": calculator,
+        "model_id": model_id,
+        "display_name": model.get(
+            "display_name",
+            model_id,
+        ),
+        "calculator": calculator_backend,
+        "calculator_backend": calculator_backend,
         "dtype_str": DTYPE,
         "seed": SEED,
         "base_material_slug": (
@@ -239,13 +305,13 @@ def make_run_row(
         ),
     })
 
-    if calculator == "mace":
+    if calculator_backend == "mace":
         row["mace_head"] = model.get(
             "mace_head",
             "",
         )
 
-    elif calculator == "uma":
+    elif calculator_backend == "uma":
         row["uma_task"] = model.get(
             "uma_task",
             "",
@@ -263,10 +329,18 @@ def make_run_row(
 
 
 def selected_materials(material_rows):
-    by_slug = {
-        slug(row["material_label"]): row
-        for row in material_rows
-    }
+    by_slug = {}
+
+    for row in material_rows:
+        material_slug = str(
+            row.get("material_slug", "")
+        ).strip()
+
+        if not material_slug:
+            continue
+
+        if material_slug not in by_slug:
+            by_slug[material_slug] = row
 
     missing = [
         material
@@ -276,7 +350,7 @@ def selected_materials(material_rows):
 
     if missing:
         raise SystemExit(
-            "Missing requested materials: "
+            "Missing requested LiCOHPF structures: "
             + ", ".join(missing)
         )
 
@@ -312,7 +386,9 @@ def generate(args):
     )
 
     for material in materials:
-        base_slug = slug(material["material_label"])
+        base_slug = str(
+            material["material_slug"]
+        ).strip()
         base_path = structure_path(
             material,
             structures_dir,
@@ -320,7 +396,7 @@ def generate(args):
 
         if not base_path.exists():
             raise SystemExit(
-                f"Missing base CIF: {base_path}"
+                f"Missing base structure: {base_path}"
             )
 
         atoms = read(base_path)
@@ -329,13 +405,12 @@ def generate(args):
         context = {
             "base_material_slug": base_slug,
             "base_material_label": (
-                material["material_label"]
+                material.get(
+                    "material_label",
+                    base_slug,
+                )
             ),
             "base_input_path": str(base_path),
-            "device": config.get(
-                "device",
-                "cpu",
-            ),
             "relax_fmax": config.get(
                 "relax_fmax",
                 0.01,
@@ -408,7 +483,10 @@ def generate(args):
             metadata.append({
                 "base_material_slug": base_slug,
                 "base_material_label": (
-                    material["material_label"]
+                    material.get(
+                        "material_label",
+                        base_slug,
+                    )
                 ),
                 "supercell_material_slug": (
                     supercell_slug
@@ -426,6 +504,17 @@ def generate(args):
             })
 
             for model in config["models"]:
+                supported_dtypes = {
+                    str(value).strip().lower()
+                    for value in model.get(
+                        "dtypes",
+                        [],
+                    )
+                }
+
+                if DTYPE not in supported_dtypes:
+                    continue
+
                 for attack in config["attacks"]:
                     tests.append(
                         make_run_row(
@@ -487,13 +576,17 @@ def generate(args):
 
 def task_list():
     return [
-        (material, repeat_label, calculator)
+        (
+            material,
+            repeat_label,
+            model_id,
+        )
         for material in MATERIALS
         for repeat_label in [
             f"{x}x{y}x{z}"
             for x, y, z in REPEAT_TUPLES
         ]
-        for calculator in CALCULATORS
+        for model_id in MODEL_ORDER
     ]
 
 
@@ -507,7 +600,7 @@ def task_info(args):
             f"got {task_id}"
         )
 
-    material, repeat_label, calculator = (
+    material, repeat_label, model_id = (
         tasks[task_id - 1]
     )
 
@@ -524,14 +617,14 @@ def task_info(args):
             row["base_material_slug"] == material
             and row["supercell_repeat_tuple"]
             == repeat_label
-            and row["calculator"] == calculator
+            and row["model_id"] == model_id
         )
     ]
 
     if not selected:
         raise SystemExit(
             f"No rows for {material} "
-            f"{repeat_label} {calculator}"
+            f"{repeat_label} {model_id}"
         )
 
     selected_path = (
@@ -539,7 +632,7 @@ def task_info(args):
         / "material_tests"
         / DTYPE
         / (
-            f"{calculator}_{material}_"
+            f"{model_id}_{material}_"
             f"r{repeat_label}.csv"
         )
     )
@@ -554,7 +647,7 @@ def task_info(args):
         output_root
         / "array_summaries"
         / (
-            f"{DTYPE}_{calculator}_{material}_"
+            f"{DTYPE}_{model_id}_{material}_"
             f"r{repeat_label}_summary.csv"
         )
     )
@@ -565,25 +658,40 @@ def task_info(args):
 
     print(f"MATERIAL={material}")
     print(f"REPEAT={repeat_label}")
-    print(f"CALCULATOR={calculator}")
+    print(f"MODEL_ID={model_id}")
+    print(
+        "CALCULATOR_BACKEND="
+        f"{MODEL_BACKENDS[model_id]}"
+    )
+    print(
+        "DEVICE="
+        f"{selected[0]['device']}"
+    )
     print(f"TEST_CSV={selected_path}")
     print(f"SUMMARY_FILE={summary_path}")
 
 
 def combine(args):
-    output_root = Path(args.output_root).resolve()
-    summary_dir = output_root / "array_summaries"
+    output_root = Path(
+        args.output_root
+    ).resolve()
 
-    for calculator in CALCULATORS:
+    summary_dir = (
+        output_root
+        / "array_summaries"
+    )
+
+    for model_id in MODEL_ORDER:
         summary_paths = sorted(
             summary_dir.glob(
-                f"{DTYPE}_{calculator}_*_summary.csv"
+                f"{DTYPE}_{model_id}_"
+                "*_summary.csv"
             )
         )
 
         if not summary_paths:
             raise SystemExit(
-                f"No {calculator} summaries found in "
+                f"No {model_id} summaries found in "
                 f"{summary_dir}"
             )
 
@@ -598,12 +706,14 @@ def combine(args):
                     if column not in columns:
                         columns.append(column)
 
+                row["calculator"] = model_id
+                row["model_id"] = model_id
                 combined_rows.append(row)
 
         output_path = (
             output_root
             / f"outputs_{DTYPE}"
-            / calculator
+            / model_id
             / "summary.csv"
         )
 
@@ -633,15 +743,15 @@ def main():
     )
     generate_parser.add_argument(
         "--materials",
-        default="datasets/tests_materials.csv",
+        default="generated_licohpf_tests.csv",
     )
     generate_parser.add_argument(
         "--config",
-        default="datasets/tests_comprehensive.json",
+        default="datasets/licohpf_database/tests_comprehensive.json",
     )
     generate_parser.add_argument(
         "--structures-dir",
-        default="mp_structures",
+        default="datasets/licohpf_database/structures",
     )
     generate_parser.add_argument(
         "--force",

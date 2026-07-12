@@ -1,0 +1,149 @@
+{
+  "dataset_name": "licohpf_database",
+  "input_xyz": "20_licohpf.xyz",
+  "expected_structures": 20,
+
+  "trials": [
+    { "name": "trial1_seed42", "seed": 42 },
+    { "name": "trial2_seed43", "seed": 43 },
+    { "name": "trial3_seed44", "seed": 44 },
+    { "name": "trial4_seed45", "seed": 45 },
+    { "name": "trial5_seed46", "seed": 46 }
+  ],
+
+  "dtypes": ["float32", "float64"],
+
+  "relax_fmax": 0.01,
+  "relax_max_steps": 300,
+  "relax_optimizer": "LBFGS",
+
+  "epsilons": [
+    0.001, 0.002, 0.003, 0.004, 0.005,
+    0.01,  0.02,  0.03,  0.04,  0.05,
+    0.1,   0.2,   0.3,   0.4,   0.5,
+    1,     2,     3,     4,     5,
+    10
+  ],
+
+  "models": [
+    {
+      "model_id": "mace_mh",
+      "display_name": "MACE-MH-1",
+      "calculator": "mace",
+      "calculator_backend": "mace",
+      "model_path": "mace-mh-1.model",
+      "device": "cpu",
+      "dtypes": ["float32", "float64"],
+      "mace_head": "omat_pbe",
+      "color": "#0072B2"
+    },
+    {
+      "model_id": "uma",
+      "display_name": "UMA-S-1p1",
+      "calculator": "uma",
+      "calculator_backend": "uma",
+      "model_path": "uma-s-1p1.pt",
+      "device": "cpu",
+      "dtypes": ["float32", "float64"],
+      "uma_task": "omat",
+      "uma_charge": 0,
+      "uma_spin": 1,
+      "color": "#D55E00"
+    },
+    {
+      "model_id": "mtp",
+      "display_name": "MTP",
+      "calculator": "mtp",
+      "calculator_backend": "mtp",
+      "model_path": "pot.almtp",
+      "elements_path": "pot.almtp.elements",
+      "device": "cpu",
+      "dtypes": ["float64"],
+      "color": "#CC79A7"
+    },
+    {
+      "model_id": "chgnet",
+      "display_name": "CHGNet",
+      "calculator": "chgnet",
+      "calculator_backend": "chgnet",
+      "model_path": "chgnet-0.3.0",
+      "device": "cpu",
+      "dtypes": ["float32", "float64"],
+      "color": "#009E73"
+    },
+    {
+      "model_id": "mace_model",
+      "display_name": "MACE Model",
+      "calculator": "mace",
+      "calculator_backend": "mace",
+      "model_path": "MACE_model.model",
+      "device": "cuda",
+      "dtypes": ["float32", "float64"],
+      "mace_head": null,
+      "color": "#E69F00"
+    }
+  ],
+
+  "attacks": [
+    {
+      "name": "fgsm",
+      "attack_type": "fgsm",
+      "n_steps": 1,
+      "alpha": null,
+      "clip": null
+    },
+    {
+      "name": "ifgsm",
+      "attack_type": "fgsm",
+      "n_steps": 10,
+      "alpha": null,
+      "clip": null
+    },
+    {
+      "name": "pgd",
+      "attack_type": "pgd",
+      "n_steps": 10,
+      "alpha_ratio": 0.1,
+      "clip": null
+    }
+  ],
+
+  "n_step_sweeps": [
+    {
+      "epsilon": 0.1,
+      "n_steps": [
+        1, 2, 3, 4, 5,
+        10, 20, 30, 40, 50,
+        100
+      ],
+      "attacks": [
+        {
+          "name": "ifgsm",
+          "attack_type": "fgsm",
+          "alpha": null,
+          "clip": null
+        },
+        {
+          "name": "pgd",
+          "attack_type": "pgd",
+          "alpha_ratio": 0.1,
+          "clip": null
+        }
+      ]
+    }
+  ],
+
+  "contour_pre_relax_fmax": 0.01,
+  "contour_pre_relax_max_steps": 300,
+  "contour_post_relax_fmax": 0.01,
+  "contour_post_relax_max_steps": 300,
+
+  "contour_betas": [0.1, 0.05, 0.0],
+
+  "contour_steps": 500,
+  "contour_maxstep": 0.01,
+  "contour_parallel_drift": false,
+  "contour_angle_limit": 20,
+  "contour_seed": 12345,
+  "contour_energy_target": null
+}
