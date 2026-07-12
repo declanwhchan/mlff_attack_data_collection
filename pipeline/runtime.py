@@ -15,11 +15,36 @@ import numpy as np
 import pandas as pd
 
 
-COLORS = {
-    "mace": "#0072B2",
-    "uma": "#D55E00",
-    "chgnet": "#009E73",
+MODEL_ORDER = [
+    "mace_mh",
+    "uma",
+    "mtp",
+    "chgnet",
+    "mace_model",
+]
+
+MODEL_LABELS = {
+    "mace_mh": "MACE-MH-1",
+    "uma": "UMA-S-1p1",
+    "mtp": "MTP",
+    "chgnet": "CHGNet",
+    "mace_model": "MACE Model",
 }
+
+COLORS = {
+    "mace_mh": "#0072B2",
+    "uma": "#D55E00",
+    "mtp": "#CC79A7",
+    "chgnet": "#009E73",
+    "mace_model": "#E69F00",
+}
+
+
+def model_label(model_id):
+    return MODEL_LABELS.get(
+        str(model_id),
+        str(model_id),
+    )
 
 LINESTYLES = {
     "FGSM": "-",
@@ -153,14 +178,16 @@ def run_command(args):
 
     print(f"Reading supercell tests from {args.tests}")
     print(f"Active environment: {active_environment}")
-    print("Supercell runtime device: CPU")
 
     for index, original_row in experiments.iterrows():
         row = original_row.copy()
-        row["device"] = "cpu"
 
         run_id = str(row["run_id"])
-        calculator = run_tests.infer_calculator(row["model_path"])
+        model_id = run_tests.infer_model_id(row)
+        calculator_backend = (
+            run_tests.calculator_backend_for_row(row)
+        )
+        device = str(row["device"]).strip().lower()
         atom_count = as_int(row.get("supercell_atoms"))
         metadata = metadata_from_row(row)
 
@@ -169,15 +196,16 @@ def run_command(args):
         )
 
         if (
-            active_environment in {"mace", "uma", "chgnet"}
-            and calculator != active_environment
+            active_environment
+            in {"mace", "uma", "mtp", "chgnet"}
+            and calculator_backend != active_environment
         ):
             summary = {
                 "run_id": run_id,
                 "status": "skipped",
                 "reason": (
                     f"Active environment is {active_environment}, "
-                    f"row calculator is {calculator}"
+                    f"row backend is {calculator_backend}"
                 ),
             }
             summary.update(metadata)
@@ -196,10 +224,19 @@ def run_command(args):
                 "run_id": run_id,
                 "status": "failed",
                 "error": str(error),
-                "calculator": calculator,
-                "device": "cpu",
+                "calculator": model_id,
+                "model_id": model_id,
+                "calculator_backend": calculator_backend,
+                "device": device,
             }
             print(f"Failed {run_id}: {error}")
+
+        summary["calculator"] = model_id
+        summary["model_id"] = model_id
+        summary["calculator_backend"] = (
+            calculator_backend
+        )
+        summary["device"] = device
 
         runtime_seconds = time.perf_counter() - start_time
         peak_rss_mib = sampler.stop()
@@ -404,26 +441,65 @@ def relaxation_converged(row):
     return float(final_force <= relax_fmax)
 
 
-def load_summaries(mace_summary, uma_summary, chgnet_summary):
+def load_summaries(summary_paths):
     frames = []
+    missing = []
 
-    for calculator, path in [
-        ("mace", Path(mace_summary)),
-        ("uma", Path(uma_summary)),
-        ("chgnet", Path(chgnet_summary)),
-    ]:
+    for model_id in MODEL_ORDER:
+        path = Path(summary_paths[model_id])
+
         if not path.exists():
-            print(f"Warning: missing {path}")
+            missing.append(model_id)
+            print(
+                f"Warning: missing {model_id} summary: "
+                f"{path}"
+            )
             continue
 
         frame = pd.read_csv(path)
-        frame["calculator"] = calculator
+
+        if frame.empty:
+            missing.append(model_id)
+            print(
+                f"Warning: empty {model_id} summary: "
+                f"{path}"
+            )
+            continue
+
+        frame = frame.copy()
+        frame["calculator"] = model_id
+        frame["model_id"] = model_id
         frames.append(frame)
 
-    if not frames:
-        raise SystemExit("No MACE, UMA, CHGNet summaries were found.")
+    if missing:
+        raise SystemExit(
+            "ERROR: missing runtime summaries for: "
+            f"{sorted(missing)}"
+        )
 
-    return pd.concat(frames, ignore_index=True, sort=False)
+    if not frames:
+        raise SystemExit(
+            "ERROR: no runtime summaries were found"
+        )
+
+    records = pd.concat(
+        frames,
+        ignore_index=True,
+        sort=False,
+    )
+
+    present_models = set(
+        records["calculator"].dropna()
+    )
+
+    if present_models != set(MODEL_ORDER):
+        raise SystemExit(
+            "ERROR: runtime model set is incorrect. "
+            f"Expected {sorted(MODEL_ORDER)}, "
+            f"got {sorted(present_models)}"
+        )
+
+    return records
 
 
 def prepare_metrics(records):
@@ -528,7 +604,7 @@ def plot_attack_panels(data, metric, ylabel, output_path):
     for axis, attack in zip(axes, ATTACKS):
         attack_data = data[data["attack_label"] == attack]
 
-        for calculator in ["mace", "uma", "chgnet"]:
+        for calculator in MODEL_ORDER:
             selected = attack_data[
                 attack_data["calculator"] == calculator
             ].dropna(subset=["supercell_atoms", metric])
@@ -555,7 +631,7 @@ def plot_attack_panels(data, metric, ylabel, output_path):
                 marker="o",
                 linewidth=1.8,
                 color=COLORS[calculator],
-                label=calculator.upper(),
+                label=model_label(calculator),
             )
             axis.fill_between(
                 x,
@@ -580,7 +656,7 @@ def plot_attack_panels(data, metric, ylabel, output_path):
 def plot_convergence(data, output_path):
     fig, axis = plt.subplots(figsize=(7.5, 4.5))
 
-    for calculator in ["mace", "uma", "chgnet"]:
+    for calculator in MODEL_ORDER:
         for attack in ATTACKS:
             selected = data[
                 (data["calculator"] == calculator)
@@ -607,7 +683,7 @@ def plot_convergence(data, output_path):
                 color=COLORS[calculator],
                 linestyle=LINESTYLES[attack],
                 marker="o",
-                label=f"{calculator.upper()} {attack}",
+                label=f"{model_label(calculator)} {attack}",
             )
 
     axis.set_xlabel("Supercell atoms")
@@ -687,7 +763,7 @@ def plot_metric_by_atoms(
     for axis, attack in zip(axes, ATTACKS):
         attack_data = data[data["attack_label"] == attack]
 
-        for calculator in ["mace", "uma", "chgnet"]:
+        for calculator in MODEL_ORDER:
             selected = attack_data[
                 attack_data["calculator"] == calculator
             ].dropna(subset=["supercell_atoms", metric])
@@ -714,7 +790,7 @@ def plot_metric_by_atoms(
                 color=COLORS[calculator],
                 marker="o",
                 linewidth=1.8,
-                label=calculator.upper(),
+                label=model_label(calculator),
             )
             axis.fill_between(
                 atoms,
@@ -761,7 +837,7 @@ def plot_relation_by_atoms(
     for axis, attack in zip(axes, ATTACKS):
         attack_data = data[data["attack_label"] == attack]
 
-        for calculator in ["mace", "uma", "chgnet"]:
+        for calculator in MODEL_ORDER:
             selected = attack_data[
                 attack_data["calculator"] == calculator
             ].dropna(
@@ -791,7 +867,7 @@ def plot_relation_by_atoms(
                 alpha=0.7,
                 edgecolor="white",
                 linewidth=0.7,
-                label=calculator.upper(),
+                label=model_label(calculator),
             )
 
         axis.set_title(attack)
@@ -1255,9 +1331,13 @@ def plot_command(args):
             path.unlink()
 
     records = load_summaries(
-        args.mace_summary,
-        args.uma_summary,
-        args.chgnet_summary,
+        {
+            "mace_mh": args.mace_mh_summary,
+            "uma": args.uma_summary,
+            "mtp": args.mtp_summary,
+            "chgnet": args.chgnet_summary,
+            "mace_model": args.mace_model_summary,
+        }
     )
     metrics = prepare_metrics(records)
 
@@ -1409,7 +1489,7 @@ def main():
 
     plot_parser = subparsers.add_parser("plot")
     plot_parser.add_argument(
-        "--mace-summary",
+        "--mace-mh-summary",
         required=True,
         type=Path,
     )
@@ -1419,7 +1499,17 @@ def main():
         type=Path,
     )
     plot_parser.add_argument(
+        "--mtp-summary",
+        required=True,
+        type=Path,
+    )
+    plot_parser.add_argument(
         "--chgnet-summary",
+        required=True,
+        type=Path,
+    )
+    plot_parser.add_argument(
+        "--mace-model-summary",
         required=True,
         type=Path,
     )

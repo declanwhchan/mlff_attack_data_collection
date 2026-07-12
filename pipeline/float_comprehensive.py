@@ -8,6 +8,80 @@ import numpy as np
 import pandas as pd
 
 
+FLOAT32_MODEL_ORDER = [
+    "mace_mh",
+    "uma",
+    "chgnet",
+    "mace_model",
+]
+
+FLOAT64_MODEL_ORDER = [
+    "mace_mh",
+    "uma",
+    "mtp",
+    "chgnet",
+    "mace_model",
+]
+
+MODEL_LABELS = {
+    "mace_mh": "MACE-MH-1",
+    "uma": "UMA-S-1p1",
+    "mtp": "MTP",
+    "chgnet": "CHGNet",
+    "mace_model": "MACE Model",
+}
+
+MODEL_COLORS = {
+    "mace_mh": "#0072B2",
+    "uma": "#D55E00",
+    "mtp": "#CC79A7",
+    "chgnet": "#009E73",
+    "mace_model": "#E69F00",
+}
+
+
+def model_label(model_id):
+    return MODEL_LABELS.get(
+        str(model_id),
+        str(model_id),
+    )
+
+
+def validate_model_sets(float32, float64):
+    if "calculator" not in float32.columns:
+        raise SystemExit(
+            "ERROR: float32 dataset is missing calculator"
+        )
+
+    if "calculator" not in float64.columns:
+        raise SystemExit(
+            "ERROR: float64 dataset is missing calculator"
+        )
+
+    float32_models = set(
+        float32["calculator"].dropna()
+    )
+    float64_models = set(
+        float64["calculator"].dropna()
+    )
+
+    expected_float32 = set(FLOAT32_MODEL_ORDER)
+    expected_float64 = set(FLOAT64_MODEL_ORDER)
+
+    if float32_models != expected_float32:
+        raise SystemExit(
+            "ERROR: float32 models are incorrect. "
+            f"Expected {sorted(expected_float32)}, "
+            f"got {sorted(float32_models)}"
+        )
+
+    if float64_models != expected_float64:
+        raise SystemExit(
+            "ERROR: float64 models are incorrect. "
+            f"Expected {sorted(expected_float64)}, "
+            f"got {sorted(float64_models)}"
+        )
+
 KEY_COLUMNS = [
     "material_slug",
     "calculator",
@@ -140,7 +214,10 @@ def save_metric_plot(data, metric, output_dir):
     ax = fig.add_subplot(grid[1, 0], sharex=ax_hist_x)
     ax_hist_y = fig.add_subplot(grid[1, 1], sharey=ax)
 
-    colors = {"mace": "#0072B2", "uma": "#D55E00", "chgnet": "#009E73"}
+    colors = {
+        model_id: MODEL_COLORS[model_id]
+        for model_id in FLOAT32_MODEL_ORDER
+    }
 
     for calculator, color in colors.items():
         subset = plot_data[plot_data["calculator"] == calculator]
@@ -159,7 +236,7 @@ def save_metric_plot(data, metric, output_dir):
             color=color,
             edgecolor="white",
             linewidth=0.4,
-            label=calculator.upper(),
+            label=model_label(calculator),
         )
 
     lower = float(min(x.min(), y.min()))
@@ -251,6 +328,8 @@ def main():
     float32 = read_dataset(args.float32_dir)
     float64 = read_dataset(args.float64_dir)
 
+    validate_model_sets(float32, float64)
+
     keys = available_keys(float32, float64)
     metrics = available_metrics(float32, float64)
 
@@ -268,6 +347,27 @@ def main():
 
     if merged.empty:
         raise SystemExit("ERROR: float32 and float64 datasets had no matching rows")
+
+    if "mtp" in set(merged["calculator"].dropna()):
+        raise SystemExit(
+            "ERROR: MTP must not appear in the "
+            "float32-vs-float64 merged dataset"
+        )
+
+    merged_models = set(
+        merged["calculator"].dropna()
+    )
+
+    expected_merged_models = set(
+        FLOAT32_MODEL_ORDER
+    )
+
+    if merged_models != expected_merged_models:
+        raise SystemExit(
+            "ERROR: float comparison is missing models. "
+            f"Expected {sorted(expected_merged_models)}, "
+            f"got {sorted(merged_models)}"
+        )
 
     for metric in metrics:
         a = clean_numeric(merged[f"{metric}_float32"])

@@ -497,7 +497,11 @@ def relax_contour_endpoint(
     optimizer = LBFGS(
         relaxed,
         logfile=None,
-        trajectory=str(trajectory_path),
+        trajectory=(
+            None
+            if trajectory_path is None
+            else str(trajectory_path)
+        ),
     )
 
     optimizer.run(
@@ -574,7 +578,6 @@ def run_contour(job, beta, config, args):
     pairs = neighbor_pairs(atoms)
 
     traj_path = outdir / "contour.traj"
-    log_path = outdir / "contour.log"
 
     dyn = ContourExploration(
         atoms,
@@ -584,7 +587,7 @@ def run_contour(job, beta, config, args):
         angle_limit=as_float(args.angle_limit, as_float(config.get("contour_angle_limit"), 20.0)),
         rng=np.random.default_rng(seed + int(round(beta * 1000))),
         trajectory=str(traj_path),
-        logfile=str(log_path),
+        logfile=None,
         loginterval=1,
     )
 
@@ -655,9 +658,6 @@ def run_contour(job, beta, config, args):
         as_int(config.get("relax_max_steps"), 300),
     )
 
-    relaxed_trajectory_path = (
-        outdir / "contour_endpoint_relaxation.traj"
-    )
     relaxed_cif_path = (
         outdir / "final_contour_relaxed.cif"
     )
@@ -666,7 +666,6 @@ def run_contour(job, beta, config, args):
         "contour_endpoint_relaxation_status": "failed",
         "contour_endpoint_relaxation_error": "",
         "final_contour_relaxed_cif": "",
-        "contour_endpoint_relaxation_traj": "",
         "contour_endpoint_relaxation_steps": np.nan,
         "contour_endpoint_relaxation_converged": False,
         "contour_endpoint_relaxation_max_force_ev_a": np.nan,
@@ -688,7 +687,7 @@ def run_contour(job, beta, config, args):
             relaxed_max_force,
         ) = relax_contour_endpoint(
             atoms,
-            relaxed_trajectory_path,
+            None,
             post_relax_fmax,
             post_relax_steps,
         )
@@ -717,9 +716,6 @@ def run_contour(job, beta, config, args):
             ),
             "final_contour_relaxed_cif": str(
                 relaxed_cif_path
-            ),
-            "contour_endpoint_relaxation_traj": str(
-                relaxed_trajectory_path
             ),
             "contour_endpoint_relaxation_steps": (
                 relaxed_steps
@@ -781,7 +777,6 @@ def run_contour(job, beta, config, args):
         "output_dir": str(outdir),
         "metrics_csv": str(outdir / "contour_metrics.csv"),
         "traj": str(traj_path),
-        "log": str(log_path),
         "final_contour_cif": str(final_contour_path),
         **relaxed_summary,
         **contour_symmetry,

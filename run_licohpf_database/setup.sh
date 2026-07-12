@@ -160,6 +160,49 @@ print("Float32 models: mace_mh, uma, chgnet, mace_model")
 print("Float64 models: mace_mh, uma, mtp, chgnet, mace_model")
 PY
 
+SUPERCELL_ROOT="${SUPERCELL_OUTPUT_ROOT:-/scratch/$USER/mlff_attack_data_collection/licohpf_database/supercell}"
+
+echo "Generating LiCOHPF supercell database in:"
+echo "$SUPERCELL_ROOT"
+
+python pipeline/supercell.py generate \
+    --output-root "$SUPERCELL_ROOT"
+
+python - <<PY
+from pathlib import Path
+import csv
+
+root = Path("$SUPERCELL_ROOT")
+
+expected = {
+    "generated_supercell_tests.csv": 2400,
+    "supercell_metadata.csv": 160,
+}
+
+for filename, expected_rows in expected.items():
+    path = root / filename
+
+    if not path.is_file():
+        raise SystemExit(
+            f"ERROR: missing {path}"
+        )
+
+    with path.open(
+        "r",
+        encoding="utf-8-sig",
+        newline="",
+    ) as handle:
+        rows = list(csv.DictReader(handle))
+
+    if len(rows) != expected_rows:
+        raise SystemExit(
+            f"ERROR: {filename} has {len(rows)} rows; "
+            f"expected {expected_rows}"
+        )
+
+print("SUPERCELL SETUP VALIDATION PASSED")
+PY
+
 if command -v deactivate >/dev/null 2>&1; then
     deactivate
 fi

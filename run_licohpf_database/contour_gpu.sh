@@ -1,9 +1,9 @@
 #!/bin/bash
-#SBATCH --account=rrg-j3goals
+#SBATCH --account=def-j3goals
 #SBATCH --time=7-00:00:00
 #SBATCH --mem=32G
 #SBATCH --cpus-per-task=8
-#SBATCH --gpus-per-node=a100:1
+#SBATCH --gpus-per-node=h100:1
 #SBATCH --array=1-200%40
 #SBATCH --output=contour-gpu-%A_%a.out
 

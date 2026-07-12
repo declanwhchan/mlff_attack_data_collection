@@ -671,11 +671,9 @@ def run_one(row):
     output_dir.mkdir(parents=True, exist_ok=True)
 
     logging.basicConfig(
-        filename=output_dir / "run.log",
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         force=True,
-        encoding="utf-8",
     )
 
     atoms = load_structure(BASE_DIR / str(row["input_path"]))
