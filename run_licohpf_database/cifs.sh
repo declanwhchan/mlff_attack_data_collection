@@ -139,5 +139,4 @@ python -u pipeline/cifs.py \
     --material-slug "$MATERIAL_SLUG" \
     --output-root "$OUTPUT_ROOT"
 
-deactivate
 echo "Finished relax-then-perturb task successfully."

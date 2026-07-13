@@ -63,6 +63,22 @@ def safe_name(value):
     )
 
 
+def epsilon_token(value):
+    text = f"{float(value):.10f}".rstrip("0").rstrip(".")
+
+    if "." in text:
+        whole, fraction = text.split(".", 1)
+        digits = f"{whole}{fraction}"
+    else:
+        digits = text
+
+    return digits.replace("-", "m")
+
+
+def attack_token(value):
+    return safe_name(str(value).strip().lower()).replace(".", "p")
+
+
 def run(args):
     rows = pd.read_csv(Path(args.tests).resolve(), keep_default_na=False)
     rows = rows[
@@ -112,41 +128,43 @@ def run(args):
     structures_perturbed = root / "structures_perturbed"
 
     for _, row in rows.iterrows():
-        case_name = safe_name(
-            optional(
-                row,
-                "run_folder",
-                row["run_id"],
-            )
-        )
+        model_directory = structures / safe_name(args.model_id)
+        perturbed_model_directory = structures_perturbed / safe_name(args.model_id)
 
-        relaxed_case_directory = (
-            structures / case_name
-        )
-        perturbed_case_directory = (
-            structures_perturbed / case_name
-        )
-
-        relaxed_case_directory.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
-        perturbed_case_directory.mkdir(
+        model_directory.mkdir(
             parents=True,
             exist_ok=True,
         )
 
-        filename = (
-            f"{args.model_id}__"
-            f"{args.material_slug}.cif"
+        perturbed_model_directory.mkdir(
+            parents=True,
+            exist_ok=True,
         )
 
-        relaxed_output = (
-            relaxed_case_directory / filename
+        attack_name = attack_token(row["attack_type"])
+        epsilon_name = epsilon_token(row["epsilon"])
+        n_steps = int(row["n_steps"])
+
+        alpha_value = optional_float(row, "alpha")
+        alpha_suffix = ""
+
+        if alpha_value is not None:
+            alpha_suffix = f"_alpha{epsilon_token(alpha_value)}"
+
+        relaxed_filename = (
+            f"{args.model_id}_{args.material_slug}.cif"
         )
-        perturbed_output = (
-            perturbed_case_directory / filename
+
+        perturbed_filename = (
+            f"{args.model_id}_{args.material_slug}"
+            f"_perturbed_{attack_name}"
+            f"_eps{epsilon_name}"
+            f"_steps{n_steps:03d}"
+            f"{alpha_suffix}.cif"
         )
+
+        relaxed_output = model_directory / relaxed_filename
+        perturbed_output = perturbed_model_directory / perturbed_filename
 
         write(
             relaxed_output,
@@ -160,42 +178,18 @@ def run(args):
             dtype_str="float64",
             seed=seed,
             output_cif=perturbed_output,
-            attack_type=str(
-                row["attack_type"]
-            ).lower(),
+            attack_type=str(row["attack_type"]).lower(),
             epsilon=float(row["epsilon"]),
-            alpha=optional_float(
-                row,
-                "alpha",
-            ),
-            n_steps=int(row["n_steps"]),
-            target_energy=optional_float(
-                row,
-                "target_energy",
-            ),
-            clip=optional_bool(
-                row,
-                "clip",
-            ),
+            alpha=alpha_value,
+            n_steps=n_steps,
+            target_energy=optional_float(row, "target_energy"),
+            clip=optional_bool(row, "clip"),
             verbose=False,
             calculator=backend,
-            mace_head=optional(
-                row,
-                "mace_head",
-            ),
-            uma_task=optional(
-                row,
-                "uma_task",
-                "omat",
-            ),
-            uma_charge=optional_int(
-                row,
-                "uma_charge",
-            ),
-            uma_spin=optional_int(
-                row,
-                "uma_spin",
-            ),
+            mace_head=optional(row, "mace_head"),
+            uma_task=optional(row, "uma_task", "omat"),
+            uma_charge=optional_int(row, "uma_charge"),
+            uma_spin=optional_int(row, "uma_spin"),
         )
 
     print(
