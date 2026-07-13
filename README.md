@@ -78,8 +78,8 @@ All steps are to be executed in SSH.
 ```bash
 bash run_<dataset>/setup.sh
 
-# Or:
-sbatch run_<dataset>/setup.sh
+# Generate initial and perturbed cif structures (OPTIONAL)
+bash run_<dataset>/cifs.sh
 ```
 
 ### Step 2 — Run Main Jobs

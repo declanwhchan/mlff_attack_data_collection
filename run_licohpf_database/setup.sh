@@ -17,6 +17,7 @@ required_files=(
     "datasets/licohpf_database/tests_comprehensive.json"
     "pipeline/run_tests.py"
     "pipeline/setup_licohpf.py"
+    "pipeline/cifs.py"
 )
 
 for path in "${required_files[@]}"; do
@@ -32,7 +33,8 @@ fi
 
 python -m py_compile \
     pipeline/run_tests.py \
-    pipeline/setup_licohpf.py
+    pipeline/setup_licohpf.py \
+    pipeline/cifs.py
 
 python -m json.tool \
     datasets/licohpf_database/tests_comprehensive.json \
