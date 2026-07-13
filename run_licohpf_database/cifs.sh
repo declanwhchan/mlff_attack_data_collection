@@ -23,7 +23,7 @@ if [ "${1:-}" != "worker" ]; then
 
     CPU_JOB=$(sbatch --parsable \
         --account=rrg-j3goals \
-        --time=5:00:00 \
+        --time=8:00:00 \
         --mem=16G \
         --cpus-per-task=8 \
         --array=1-80%40 \
@@ -32,7 +32,7 @@ if [ "${1:-}" != "worker" ]; then
 
     GPU_JOB=$(sbatch --parsable \
         --account=def-j3goals \
-        --time=5:00:00 \
+        --time=4:00:00 \
         --mem=32G \
         --cpus-per-task=8 \
         --gpus-per-node=h100:1 \
@@ -115,7 +115,9 @@ if [ ! -f "$ENVIRONMENT/bin/activate" ]; then
     exit 1
 fi
 
+set +u
 source "$ENVIRONMENT/bin/activate"
+set -u
 
 if [ "$WORKER_KIND" = "gpu" ]; then
     python - <<'PY'

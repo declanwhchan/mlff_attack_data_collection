@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --account=rrg-j3goals
-#SBATCH --time=7-00:00:00
+#SBATCH --time=2-00:00:00
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=8
 #SBATCH --array=1-700%150
@@ -151,7 +151,9 @@ if [ ! -f "$ENVIRONMENT/bin/activate" ]; then
     exit 1
 fi
 
+set +u
 source "$ENVIRONMENT/bin/activate"
+set -u
 
 echo "Python: $(which python)"
 

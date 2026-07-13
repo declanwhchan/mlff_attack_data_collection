@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --account=def-j3goals
-#SBATCH --time=7-00:00:00
+#SBATCH --time=12:00:00
 #SBATCH --mem=32G
 #SBATCH --cpus-per-task=8
 #SBATCH --gpus-per-node=h100:1

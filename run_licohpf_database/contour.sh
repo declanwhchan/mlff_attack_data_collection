@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --account=rrg-j3goals
-#SBATCH --time=7-00:00:00
+#SBATCH --time=2-00:00:00
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=8
 #SBATCH --array=1-700%150
@@ -102,6 +102,8 @@ PY
 read -r TRIAL_NAME MLFF_SEED MODEL_ID MLFF_DTYPE MATERIAL_SLUG \
     <<< "$TASK_INFO"
 
+export MODEL_ID
+export MATERIAL_SLUG
 export MLFF_SEED
 export MLFF_DTYPE
 
@@ -157,7 +159,9 @@ if [ ! -f "$ENVIRONMENT/bin/activate" ]; then
     exit 1
 fi
 
+set +u
 source "$ENVIRONMENT/bin/activate"
+set -u
 
 echo "Python: $(which python)"
 
