@@ -275,6 +275,4 @@ if not failed.empty:
 print(f"All {len(rows)} configured CPU runs succeeded")
 PY
 
-deactivate
-
 echo "Finished CPU task successfully."

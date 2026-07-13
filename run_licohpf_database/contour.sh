@@ -232,6 +232,4 @@ if actual_betas != expected_betas:
 print("All three CPU contour calculations succeeded")
 PY
 
-deactivate
-
 echo "Finished CPU contour task successfully."

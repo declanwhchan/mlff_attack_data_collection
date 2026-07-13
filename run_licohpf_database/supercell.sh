@@ -161,6 +161,4 @@ PY
 
 rm -f "$TEST_CSV"
 
-deactivate
-
 echo "Finished CPU supercell task."
