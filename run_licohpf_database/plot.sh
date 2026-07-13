@@ -8,7 +8,7 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="${SLURM_SUBMIT_DIR:-$(pwd)}"
 cd "$REPO_ROOT"
 
 export PYTHONUNBUFFERED=1
@@ -91,6 +91,28 @@ contour_summary_dir = (
     / "contour_array_summaries"
 )
 
+configured_tests = pd.read_csv(
+    "generated_licohpf_tests.csv"
+)
+
+if configured_tests.empty:
+    raise SystemExit(
+        "ERROR: generated_licohpf_tests.csv is empty"
+    )
+
+configured_materials = sorted(
+    configured_tests["material_slug"]
+    .dropna()
+    .unique()
+)
+
+expected_structures = len(configured_materials)
+
+if expected_structures == 0:
+    raise SystemExit(
+        "ERROR: no configured structures were found"
+    )
+
 models_by_dtype = {
     "float32": [
         "mace_mh",
@@ -106,10 +128,6 @@ models_by_dtype = {
         "mace_model",
     ],
 }
-
-expected_main_rows_per_structure = 85
-expected_structures = 20
-expected_contour_rows_per_structure = 3
 
 for dtype_str, models in models_by_dtype.items():
     dtype_output = (
@@ -147,10 +165,26 @@ for dtype_str, models in models_by_dtype.items():
             sort=False,
         )
 
-        expected_main_rows = (
-            expected_main_rows_per_structure
-            * expected_structures
+        configured_subset = configured_tests[
+            (
+                configured_tests["dtype_str"]
+                == dtype_str
+            )
+            & (
+                configured_tests["model_id"]
+                == model_id
+            )
+        ]
+
+        expected_main_rows = len(
+            configured_subset
         )
+
+        if expected_main_rows == 0:
+            raise SystemExit(
+                f"ERROR: no configured rows for "
+                f"{dtype_str} {model_id}"
+            )
 
         if len(main) != expected_main_rows:
             raise SystemExit(
@@ -210,8 +244,13 @@ for dtype_str, models in models_by_dtype.items():
             sort=False,
         )
 
+        contour_betas = {
+            round(float(value), 12)
+            for value in contour["beta"]
+        }
+
         expected_contour_rows = (
-            expected_contour_rows_per_structure
+            len(contour_betas)
             * expected_structures
         )
 
