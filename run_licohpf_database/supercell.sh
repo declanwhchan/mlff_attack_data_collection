@@ -52,7 +52,7 @@ CPU_MODEL_INDEX=$((TASK_ZERO % 4))
 FULL_TASK_ID=$((CELL_INDEX * 5 + CPU_MODEL_INDEX + 1))
 
 TASK_INFO="$(
-python pipeline/supercell.py task-info \
+"$HOME/project/.venv-mace/bin/python" pipeline/supercell.py task-info \
     --output-root "$SUPERCELL_ROOT" \
     --task-id "$FULL_TASK_ID"
 )"

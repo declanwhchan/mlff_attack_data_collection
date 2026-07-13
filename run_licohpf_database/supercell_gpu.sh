@@ -39,7 +39,7 @@ fi
 FULL_TASK_ID=$((GPU_TASK_ID * 5))
 
 TASK_INFO="$(
-python pipeline/supercell.py task-info \
+"$HOME/project/.venv-mace/bin/python" pipeline/supercell.py task-info \
     --output-root "$SUPERCELL_ROOT" \
     --task-id "$FULL_TASK_ID"
 )"
