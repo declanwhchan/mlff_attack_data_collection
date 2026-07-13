@@ -76,6 +76,9 @@ All steps are to be executed in SSH.
 ### Step 1 — Run Setup
 
 ```bash
+bash run_<dataset>/setup.sh
+
+# Or:
 sbatch run_<dataset>/setup.sh
 ```
 

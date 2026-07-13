@@ -9,7 +9,7 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="${SLURM_SUBMIT_DIR:-$(pwd)}"
 cd "$REPO_ROOT"
 
 export PYTHONUNBUFFERED=1
@@ -39,7 +39,7 @@ fi
 FULL_TASK_ID=$((GPU_TASK_ID * 5))
 
 TASK_INFO="$(
-python pipeline/supercell.py task-info \
+"$HOME/project/.venv-mace/bin/python" pipeline/supercell.py task-info \
     --output-root "$SUPERCELL_ROOT" \
     --task-id "$FULL_TASK_ID"
 )"

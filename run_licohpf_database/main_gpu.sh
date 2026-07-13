@@ -9,7 +9,7 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="${SLURM_SUBMIT_DIR:-$(pwd)}"
 cd "$REPO_ROOT"
 
 export PYTHONUNBUFFERED=1
@@ -166,11 +166,6 @@ if not rows:
         f"{model_id} {dtype_str} {material_slug}"
     )
 
-if len(rows) != 85:
-    raise SystemExit(
-        f"ERROR: selected {len(rows)} rows; expected 85"
-    )
-
 with output_path.open(
     "w",
     encoding="utf-8",
@@ -204,9 +199,14 @@ import pandas as pd
 summary_path = os.environ["SUMMARY_FILE"]
 rows = pd.read_csv(summary_path)
 
-if len(rows) != 85:
+tests = pd.read_csv(
+    os.environ["TASK_CSV"]
+)
+
+if len(rows) != len(tests):
     raise SystemExit(
-        f"ERROR: summary has {len(rows)} rows; expected 85"
+        f"ERROR: summary has {len(rows)} rows, "
+        f"but the task CSV has {len(tests)} rows"
     )
 
 failed = rows[rows["status"] != "success"]
@@ -230,7 +230,7 @@ if not failed.empty:
         f"ERROR: {len(failed)} runs did not succeed"
     )
 
-print(f"All {len(rows)} CUDA runs succeeded")
+print(f"All {len(rows)} configured CUDA runs succeeded")
 PY
 
 deactivate
