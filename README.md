@@ -13,7 +13,7 @@ This repo has two dataset workflows:
 
 # Setup for HPC
 
-This repo expects three separate Python environments because MACE, UMA, and CHGNet have different dependency stacks.
+This repo expects three separate Python environments because each MLFF have different dependency stacks.
 
 ## Expected Folder Layout
 
@@ -102,7 +102,7 @@ sbatch run_<dataset>/visualize.sh
 
 ### Optional — Run Supercell Stress Test
 
-This submits a controller job that generates supercell CIFs, launches the full MACE/UMA/CHGNet attack array, and then runs a dependent plotting job.
+This submits a controller job that generates supercell CIFs, launches the full MLFF attack array, and then runs a dependent plotting job.
 
 ```bash
 sbatch run_<dataset>/supercell.sh
