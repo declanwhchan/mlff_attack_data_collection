@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --account=rrg-j3goals
 #SBATCH --time=2-00:00:00
-#SBATCH --mem=24G
+#SBATCH --mem=16G
 #SBATCH --cpus-per-task=8
 #SBATCH --array=1-640%150
 #SBATCH --output=supercell-cpu-%A_%a.out
@@ -160,7 +160,5 @@ print("All three CPU supercell attacks succeeded")
 PY
 
 rm -f "$TEST_CSV"
-
-deactivate
 
 echo "Finished CPU supercell task."

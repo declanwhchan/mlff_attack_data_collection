@@ -32,11 +32,11 @@ if [ "${1:-}" != "worker" ]; then
 
     GPU_JOB=$(sbatch --parsable \
         --account=def-j3goals \
-        --time=4:00:00 \
+        --time=1:00:00 \
         --mem=32G \
-        --cpus-per-task=8 \
-        --gpus-per-node=h100:1 \
-        --array=1-20%20 \
+        --cpus-per-task=4 \
+        --gpus-per-node=nvidia_h100_80gb_hbm3_1g.10gb:1 \
+        --array=1-20%1 \
         --output=cifs-gpu-%A_%a.out \
         run_licohpf_database/cifs.sh worker gpu)
 
@@ -139,5 +139,4 @@ python -u pipeline/cifs.py \
     --material-slug "$MATERIAL_SLUG" \
     --output-root "$OUTPUT_ROOT"
 
-deactivate
 echo "Finished relax-then-perturb task successfully."

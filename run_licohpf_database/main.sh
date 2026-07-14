@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --account=rrg-j3goals
-#SBATCH --time=2-00:00:00
+#SBATCH --time=7-00:00:00
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=8
 #SBATCH --array=1-700%150
@@ -274,7 +274,5 @@ if not failed.empty:
 
 print(f"All {len(rows)} configured CPU runs succeeded")
 PY
-
-deactivate
 
 echo "Finished CPU task successfully."
