@@ -13,6 +13,7 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
+from matplotlib.patches import FancyBboxPatch
 
 from ase.data import atomic_numbers, covalent_radii
 from ase.data.colors import jmol_colors
@@ -53,12 +54,94 @@ def apply_plot_style():
     plt.rcParams.update({
         "figure.facecolor": "white",
         "axes.facecolor": "white",
+        "savefig.facecolor": "white",
         "font.family": "DejaVu Sans",
-        "font.size": 13,
-        "axes.titlesize": 13,
-        "legend.fontsize": 13,
-        "legend.title_fontsize": 14,
+        "font.size": 12,
+        "axes.titlesize": 12,
+        "legend.fontsize": 11,
+        "legend.title_fontsize": 12,
+        "savefig.dpi": 300,
+        "figure.dpi": 100,
     })
+
+
+def nice_scale_bar_length(span_angstrom):
+    """Pick a round, human-readable scale-bar length (in A) that comfortably
+    fits within the visible span of a panel. Prefers a 1/2/5 x 10^n step
+    sequence (1, 2, 5, 10, 20, 50, ...), which is the convention used for
+    scale bars in microscopy/crystallography figures."""
+    target = span_angstrom * 0.30
+    if target <= 0 or not math.isfinite(target):
+        return 1.0
+
+    exponent = math.floor(math.log10(target))
+    for step in (1, 2, 5, 10):
+        candidate = step * (10 ** exponent)
+        if candidate >= target:
+            return float(candidate)
+    return float(10 * (10 ** exponent))
+
+
+def add_scale_bar(ax, color="#111111"):
+    """Draw a scale bar in the lower-left of the panel using the axes' data
+    coordinates, which ase.visualize.plot.plot_atoms draws in real
+    Angstrom units regardless of each panel's auto-fit zoom level. This is
+    necessary because plot_atoms auto-scales every panel to fill the same
+    on-screen area (show_unit_cell=2), so panels cannot be visually compared
+    for true relative size without an explicit, per-panel length reference."""
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
+    x_span = xlim[1] - xlim[0]
+    y_span = ylim[1] - ylim[0]
+
+    if not (math.isfinite(x_span) and x_span > 0):
+        return
+
+    bar_length = nice_scale_bar_length(x_span)
+
+    margin_x = 0.06 * x_span
+    margin_y = 0.06 * y_span
+    x0 = xlim[0] + margin_x
+    x1 = x0 + bar_length
+    y0 = ylim[0] + margin_y
+
+    label = f"{bar_length:g} \u00c5"
+
+    # A semi-transparent backing patch keeps the bar and label legible even
+    # when an atom (e.g. a corner-adjacent periodic image) happens to sit
+    # right where the scale bar is drawn — seen in testing with structures
+    # that have atoms scattered near cell corners.
+    pad_x = 0.04 * x_span
+    pad_y_bottom = 0.03 * y_span
+    pad_y_top = 0.095 * y_span
+    backing = FancyBboxPatch(
+        (x0 - pad_x, y0 - pad_y_bottom),
+        (x1 - x0) + 2 * pad_x,
+        pad_y_bottom + pad_y_top,
+        boxstyle="round,pad=0,rounding_size=0.02",
+        linewidth=0,
+        facecolor="white",
+        alpha=0.72,
+        zorder=9,
+    )
+    ax.add_patch(backing)
+
+    ax.plot([x0, x1], [y0, y0], color=color, linewidth=2.2, solid_capstyle="butt", zorder=10)
+    # small end caps so the bar reads clearly against busy backgrounds
+    cap_height = 0.015 * y_span
+    for x in (x0, x1):
+        ax.plot([x, x], [y0 - cap_height, y0 + cap_height], color=color, linewidth=2.2, zorder=10)
+
+    ax.text(
+        (x0 + x1) / 2,
+        y0 + 0.035 * y_span,
+        label,
+        ha="center",
+        va="bottom",
+        fontsize=9.5,
+        color=color,
+        zorder=10,
+    )
 
 
 def load_structures(materials, structures_dir):
@@ -269,6 +352,17 @@ def diagnose_structure(row, atoms, calc_rows_by_material, boundary_tol=0.03):
         axis=1,
     )
     boundary_atom_count = int(np.count_nonzero(near_boundary))
+    # Conventional-cell corner/face/edge atoms legitimately sit at fractional
+    # coordinate 0.0 (e.g. the (0,0,0) corner of an FCC cell), so a handful of
+    # boundary-adjacent atoms is normal crystallography, not a rendering
+    # artifact. Only treat this as a caution-worthy note when boundary
+    # proximity is pervasive enough that periodic-image overlap is likely to
+    # visually dominate the panel.
+    n_atoms_for_fraction = len(atoms)
+    boundary_atom_fraction = (
+        boundary_atom_count / n_atoms_for_fraction if n_atoms_for_fraction else 0.0
+    )
+    boundary_flag = boundary_atom_count >= 3 and boundary_atom_fraction >= 0.5
 
     expected_atoms = optional_float(row.get("prompt_atoms_cell"))
     expected_atoms = int(expected_atoms) if expected_atoms is not None else None
@@ -306,9 +400,10 @@ def diagnose_structure(row, atoms, calc_rows_by_material, boundary_tol=0.03):
     if skewed_angles:
         issues.append("skewed cell angles may make the rendered unit cell look distorted")
 
-    if boundary_atom_count:
+    if boundary_flag:
         issues.append(
-            f"{boundary_atom_count} atoms lie near periodic cell boundaries; apparent edge overlaps may be periodic images"
+            f"{boundary_atom_count}/{n_atoms} atoms ({boundary_atom_fraction:.0%}) lie near periodic "
+            "cell boundaries; apparent edge overlaps in the panel are likely periodic images, not overlaps"
         )
 
     if not atom_count_match:
@@ -329,7 +424,7 @@ def diagnose_structure(row, atoms, calc_rows_by_material, boundary_tol=0.03):
         issues.append(f"calculation context: {calc_context}")
 
     severe = contact["overlap_flag"] or not atom_count_match
-    caution = contact["close_contact_flag"] or anisotropy > 3.0 or boundary_atom_count > 0
+    caution = contact["close_contact_flag"] or anisotropy > 3.0 or boundary_flag
 
     if severe:
         verdict = "inspect carefully; visual may be inaccurate or structurally problematic"
@@ -361,6 +456,8 @@ def diagnose_structure(row, atoms, calc_rows_by_material, boundary_tol=0.03):
         "overlap_flag": contact["overlap_flag"],
         "close_contact_flag": contact["close_contact_flag"],
         "boundary_atom_count": boundary_atom_count,
+        "boundary_atom_fraction": boundary_atom_fraction,
+        "boundary_flag": boundary_flag,
         "symmetry_status": symmetry_status,
         "spacegroup": spacegroup,
         "calc_context": calc_context,
@@ -400,6 +497,8 @@ def write_structure_diagnostics(loaded, output_dir):
         "overlap_flag",
         "close_contact_flag",
         "boundary_atom_count",
+        "boundary_atom_fraction",
+        "boundary_flag",
         "symmetry_status",
         "spacegroup",
         "calc_context",
@@ -443,7 +542,9 @@ def write_structure_diagnostics(loaded, output_dir):
     print(f"Wrote {md_path}")
 
 
-def make_element_legend(fig, all_symbols):
+def make_element_legend(fig, all_symbols, bbox_to_anchor=(0.99, 0.5)):
+    symbols_sorted = sorted(all_symbols, key=lambda symbol: atomic_numbers[symbol])
+
     handles = [
         Line2D(
             [0],
@@ -452,28 +553,57 @@ def make_element_legend(fig, all_symbols):
             color="none",
             markerfacecolor=element_color(symbol),
             markeredgecolor="#222222",
-            markeredgewidth=0.5,
-            markersize=10,
+            markeredgewidth=0.6,
+            markersize=11,
             label=symbol,
         )
-        for symbol in sorted(all_symbols, key=lambda symbol: atomic_numbers[symbol])
+        for symbol in symbols_sorted
     ]
 
-    fig.legend(
+    # A 1-3 element legend (typical for a single-material panel) looks lost
+    # and wastes horizontal space in a 2-column layout; only go to 2 columns
+    # once there are enough entries to justify it.
+    ncol = 2 if len(symbols_sorted) > 4 else 1
+
+    return fig.legend(
         handles=handles,
         title="Elements",
         loc="center right",
-        bbox_to_anchor=(0.99, 0.5),
+        bbox_to_anchor=bbox_to_anchor,
         frameon=True,
-        borderpad=0.8,
-        labelspacing=0.6,
+        edgecolor="#cccccc",
+        borderpad=0.9,
+        labelspacing=0.7,
         handletextpad=0.7,
-        columnspacing=1.0,
-        ncol=2,
+        columnspacing=1.2,
+        ncol=ncol,
     )
 
 
-def draw_structure(ax, row, atoms, rotation, scale, radii_scale):
+def formula_mathtext(formula):
+    """Render a plain chemical formula (e.g. 'MoS2') with the numeric
+    stoichiometry subscripted, as is standard typesetting in a manuscript
+    figure, using matplotlib mathtext."""
+    if not formula:
+        return formula
+
+    def subscript_numbers(match):
+        return f"$_{{{match.group(0)}}}$"
+
+    return re.sub(r"\d+", subscript_numbers, formula)
+
+
+def draw_structure(
+    ax,
+    row,
+    atoms,
+    rotation,
+    scale,
+    radii_scale,
+    show_mpid=False,
+    show_scale_bar=True,
+    title_fontsize=12,
+):
     symbols = atoms.get_chemical_symbols()
     colors = [element_color(symbol) for symbol in symbols]
 
@@ -486,16 +616,36 @@ def draw_structure(ax, row, atoms, rotation, scale, radii_scale):
         radii=radii_scale,
         scale=scale,
     )
+    ax.set_axis_off()
+
+    if show_scale_bar:
+        add_scale_bar(ax)
 
     formula = row.get("formula", "").strip()
     mpid = row.get("mpid", "").strip()
-    ax.set_title(f"{formula}\n{mpid}", pad=4, fontsize=13)
+    # mpid is an internal Materials Project database identifier, not
+    # publication nomenclature; it is kept out of the visible title by
+    # default (available via show_mpid=True for internal/SI tracking
+    # figures) so the figure reads as a manuscript-ready panel.
+    title = formula_mathtext(formula)
+    if show_mpid and mpid:
+        title = f"{title}\n{mpid}"
+    ax.set_title(title, pad=4, fontsize=title_fontsize)
 
 
-def plot_5x4_structures(loaded, output_path, dpi, rotation, scale, radii_scale):
+def plot_5x4_structures(
+    loaded,
+    output_path,
+    dpi,
+    rotation,
+    scale,
+    radii_scale,
+    show_mpid=False,
+    suptitle="Initial Structures",
+):
     apply_plot_style()
 
-    fig, axes = plt.subplots(4, 5, figsize=(16, 11))
+    fig, axes = plt.subplots(4, 5, figsize=(16, 12.2))
     axes = axes.ravel()
 
     all_symbols = set()
@@ -511,52 +661,60 @@ def plot_5x4_structures(loaded, output_path, dpi, rotation, scale, radii_scale):
             rotation=rotation,
             scale=scale,
             radii_scale=radii_scale,
+            show_mpid=show_mpid,
+            show_scale_bar=True,
+            title_fontsize=12,
         )
 
         panel = string.ascii_uppercase[index]
         ax.text(
             0.0,
-            1.13,
+            1.1,
             panel,
             transform=ax.transAxes,
             ha="left",
             va="bottom",
-            fontsize=18,
+            fontsize=16,
             fontweight="bold",
         )
 
     for ax in axes[len(loaded):]:
         ax.set_axis_off()
 
-    make_element_legend(fig, all_symbols)
+    make_element_legend(fig, all_symbols, bbox_to_anchor=(0.995, 0.5))
 
-    fig.suptitle(
-        "Initial MP Structures Before Attack and Before Relaxation",
-        y=0.985,
-        fontsize=22,
-        fontweight="bold",
-    )
+    if suptitle:
+        fig.suptitle(suptitle, y=0.99, fontsize=20, fontweight="bold")
 
     fig.subplots_adjust(
-        left=0.025,
-        right=0.84,
-        top=0.88,
-        bottom=0.035,
-        wspace=0.04,
-        hspace=0.42,
+        left=0.02,
+        right=0.86,
+        top=0.90 if suptitle else 0.96,
+        bottom=0.02,
+        wspace=0.05,
+        hspace=0.35,
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
+    fig.savefig(output_path, dpi=dpi)
     plt.close(fig)
 
     print(f"Wrote {output_path}")
 
 
-def plot_single_structure(row, atoms, output_path, dpi, rotation, scale, radii_scale):
+def plot_single_structure(
+    row,
+    atoms,
+    output_path,
+    dpi,
+    rotation,
+    scale,
+    radii_scale,
+    show_mpid=False,
+):
     apply_plot_style()
 
-    fig, ax = plt.subplots(1, 1, figsize=(6.8, 5.5))
+    fig, ax = plt.subplots(1, 1, figsize=(6.4, 5.2))
 
     draw_structure(
         ax=ax,
@@ -565,19 +723,27 @@ def plot_single_structure(row, atoms, output_path, dpi, rotation, scale, radii_s
         rotation=rotation,
         scale=scale,
         radii_scale=radii_scale,
+        show_mpid=show_mpid,
+        show_scale_bar=True,
+        title_fontsize=14,
     )
 
-    make_element_legend(fig, set(atoms.get_chemical_symbols()))
+    symbols = set(atoms.get_chemical_symbols())
+    # A 1-3 element legend needs much less reserved width than a busy,
+    # many-element one; scale the right margin to the actual content so a
+    # single-material panel isn't left with a large empty strip.
+    right_margin = 0.80 if len(symbols) <= 3 else 0.72
+    make_element_legend(fig, symbols, bbox_to_anchor=(0.995, 0.5))
 
     fig.subplots_adjust(
         left=0.03,
-        right=0.72,
-        top=0.88,
-        bottom=0.04,
+        right=right_margin,
+        top=0.90,
+        bottom=0.03,
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
+    fig.savefig(output_path, dpi=dpi)
     plt.close(fig)
 
     print(f"Wrote {output_path}")
@@ -585,15 +751,44 @@ def plot_single_structure(row, atoms, output_path, dpi, rotation, scale, radii_s
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Plot only the 20 initial MP structures before attack and before relaxation."
+        description="Plot the 20 initial MP structures before attack and before relaxation."
     )
     parser.add_argument("--materials", default="datasets/2d_structures/tests_materials.csv")
     parser.add_argument("--structures-dir", default="mp_structures")
     parser.add_argument("--output-dir", default="outputs_visuals")
-    parser.add_argument("--dpi", type=int, default=600)
+    parser.add_argument(
+        "--dpi",
+        type=int,
+        default=300,
+        help="300 is print-quality for a raster figure at typical journal "
+        "column widths and keeps file sizes reasonable; raise for a "
+        "large-format poster print.",
+    )
     parser.add_argument("--rotation", default="10x,-20y,0z")
     parser.add_argument("--scale", type=float, default=0.85)
-    parser.add_argument("--radii-scale", type=float, default=0.7)
+    parser.add_argument(
+        "--radii-scale",
+        type=float,
+        default=0.85,
+        help="Fraction of covalent radius used for rendered atom size. "
+        "Raised from the previous 0.7 default so atoms render as solid, "
+        "clearly-touching spheres rather than small separated dots.",
+    )
+    parser.add_argument(
+        "--show-mpid",
+        action="store_true",
+        help="Include the Materials Project ID under the formula in panel "
+        "titles. Off by default since mpid is a database identifier rather "
+        "than publication nomenclature; useful for internal/SI tracking "
+        "figures.",
+    )
+    parser.add_argument(
+        "--suptitle",
+        default="Initial Structures",
+        help="Title for the composite grid figure. Pass an empty string "
+        "to omit it entirely (e.g. if the caption will be set in LaTeX/Word "
+        "instead).",
+    )
     args = parser.parse_args()
 
     materials_path = BASE_DIR / args.materials
@@ -612,6 +807,8 @@ def main():
         rotation=args.rotation,
         scale=args.scale,
         radii_scale=args.radii_scale,
+        show_mpid=args.show_mpid,
+        suptitle=args.suptitle,
     )
 
     for row, atoms, _ in loaded:
@@ -624,6 +821,7 @@ def main():
             rotation=args.rotation,
             scale=args.scale,
             radii_scale=args.radii_scale,
+            show_mpid=args.show_mpid,
         )
 
 
