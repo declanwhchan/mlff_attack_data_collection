@@ -23,7 +23,7 @@ if [ "${1:-}" != "worker" ]; then
 
     CPU_JOB=$(sbatch --parsable \
         --account=rrg-j3goals \
-        --time=8:00:00 \
+        --time=2-00:00:00 \
         --mem=16G \
         --cpus-per-task=8 \
         --array=1-80%40 \
