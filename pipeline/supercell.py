@@ -5,16 +5,12 @@ import argparse
 import csv
 import json
 import re
+import shlex
 
 from ase.io import read, write
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-
-MATERIALS = [
-    f"licohpf_{index:03d}"
-    for index in range(1, 21)
-]
 
 REPEAT_TUPLES = [
     (1, 1, 1),
@@ -43,7 +39,6 @@ MODEL_BACKENDS = {
     "mace_model": "mace",
 }
 
-CALCULATORS = MODEL_ORDER
 EPSILON = 0.01
 DTYPE = "float64"
 SEED = 42
@@ -55,6 +50,7 @@ BASE_COLUMNS = [
     "run_folder",
     "input_path",
     "model_path",
+    "elements_path",
     "attack_type",
     "epsilon",
     "n_steps",
@@ -98,20 +94,69 @@ EXTRA_COLUMNS = [
 
 COLUMNS = BASE_COLUMNS + EXTRA_COLUMNS
 
+METADATA_COLUMNS = [
+    "base_material_slug",
+    "base_material_label",
+    "supercell_material_slug",
+    "base_input_path",
+    "supercell_input_path",
+    "repeat_x",
+    "repeat_y",
+    "repeat_z",
+    "repeat_tuple",
+    "unit_cell_atoms",
+    "supercell_atoms",
+]
 
-def slug(text):
-    text = str(text).strip().lower()
-    text = re.sub(r"[^a-z0-9]+", "_", text)
-    return text.strip("_")
+
+def require(condition, message):
+    if not condition:
+        raise SystemExit(f"ERROR: {message}")
+
+
+def clean(value):
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def slug(value):
+    value = clean(value).lower()
+    value = re.sub(r"[^a-z0-9]+", "_", value)
+    return value.strip("_")
 
 
 def epsilon_tag(epsilon):
     text = f"{float(epsilon):g}"
+
+    if "e" in text.lower():
+        text = (
+            f"{float(epsilon):.10f}"
+            .rstrip("0")
+            .rstrip(".")
+        )
+
     return "eps" + text.replace(".", "")
 
 
+def resolve_from_base(path):
+    path = Path(path)
+
+    if path.is_absolute():
+        return path.resolve()
+
+    return (BASE_DIR / path).resolve()
+
+
 def read_csv_rows(path):
-    with Path(path).open(
+    path = Path(path)
+
+    require(
+        path.is_file(),
+        f"Missing CSV file: {path}",
+    )
+
+    with path.open(
         "r",
         encoding="utf-8-sig",
         newline="",
@@ -121,7 +166,10 @@ def read_csv_rows(path):
 
 def write_csv_rows(path, rows, columns):
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
     with path.open(
         "w",
@@ -138,42 +186,18 @@ def write_csv_rows(path, rows, columns):
 
 
 def load_config(path):
-    with Path(path).open(
+    path = Path(path)
+
+    require(
+        path.is_file(),
+        f"Missing configuration file: {path}",
+    )
+
+    with path.open(
         "r",
         encoding="utf-8",
     ) as handle:
         return json.load(handle)
-
-
-def structure_path(
-    material,
-    structures_dir,
-):
-    input_path = str(
-        material.get("input_path", "")
-    ).strip()
-
-    if input_path:
-        path = Path(input_path)
-
-        if not path.is_absolute():
-            path = BASE_DIR / path
-
-        return path
-
-    material_slug = str(
-        material.get("material_slug", "")
-    ).strip()
-
-    if material_slug:
-        return (
-            Path(structures_dir)
-            / f"{material_slug}.xyz"
-        )
-
-    raise RuntimeError(
-        f"Cannot determine structure path for {material}"
-    )
 
 
 def blank_row():
@@ -183,61 +207,181 @@ def blank_row():
     }
 
 
+def discover_materials(material_rows):
+    materials = []
+    seen = set()
+
+    for row in material_rows:
+        material_slug = clean(
+            row.get("material_slug")
+        )
+
+        if not material_slug:
+            input_path = clean(
+                row.get("input_path")
+            )
+            material_slug = slug(
+                Path(input_path).stem
+            )
+
+        require(
+            material_slug,
+            f"Cannot determine material slug from {row}",
+        )
+
+        if material_slug in seen:
+            continue
+
+        input_path = clean(
+            row.get("input_path")
+        )
+
+        require(
+            input_path,
+            f"{material_slug} is missing input_path",
+        )
+
+        materials.append({
+            "material_slug": material_slug,
+            "material_label": clean(
+                row.get(
+                    "material_label",
+                    material_slug,
+                )
+            ) or material_slug,
+            "input_path": input_path,
+        })
+
+        seen.add(material_slug)
+
+    require(
+        len(materials) == 20,
+        "Expected exactly 20 unique materials, "
+        f"found {len(materials)}",
+    )
+
+    return materials
+
+
+def structure_path(material, structures_dir):
+    input_path = clean(
+        material.get("input_path")
+    )
+
+    if input_path:
+        return resolve_from_base(input_path)
+
+    material_slug = clean(
+        material.get("material_slug")
+    )
+
+    require(
+        material_slug,
+        f"Cannot determine structure path for {material}",
+    )
+
+    return (
+        Path(structures_dir)
+        / f"{material_slug}.xyz"
+    ).resolve()
+
+
+def model_map(config):
+    models = {}
+
+    for model in config.get("models", []):
+        model_id = clean(
+            model.get("model_id")
+        ).lower()
+
+        require(
+            model_id in MODEL_BACKENDS,
+            f"Unknown model_id: {model_id!r}",
+        )
+        require(
+            model_id not in models,
+            f"Duplicate model_id: {model_id}",
+        )
+
+        backend = clean(
+            model.get(
+                "calculator_backend",
+                model.get("calculator"),
+            )
+        ).lower()
+
+        require(
+            backend == MODEL_BACKENDS[model_id],
+            f"{model_id} requires backend "
+            f"{MODEL_BACKENDS[model_id]!r}, "
+            f"not {backend!r}",
+        )
+
+        supported_dtypes = {
+            clean(value).lower()
+            for value in model.get("dtypes", [])
+        }
+
+        require(
+            DTYPE in supported_dtypes,
+            f"{model_id} does not support {DTYPE}",
+        )
+
+        models[model_id] = model
+
+    require(
+        set(models) == set(MODEL_ORDER),
+        "Configuration must contain exactly: "
+        + ", ".join(MODEL_ORDER),
+    )
+
+    return models
+
+
+def attack_alpha(attack):
+    alpha = attack.get("alpha")
+
+    if alpha is not None:
+        return f"{float(alpha):g}"
+
+    alpha_ratio = attack.get("alpha_ratio")
+
+    if alpha_ratio is not None:
+        return (
+            f"{EPSILON * float(alpha_ratio):g}"
+        )
+
+    return ""
+
+
 def make_run_row(
+    config,
     context,
     supercell,
     model,
     attack,
 ):
-    model_id = str(
+    model_id = clean(
         model["model_id"]
-    ).strip().lower()
+    ).lower()
+    backend = MODEL_BACKENDS[model_id]
 
-    calculator_backend = str(
-        model.get(
-            "calculator_backend",
-            model["calculator"],
-        )
-    ).strip().lower()
+    attack_name = clean(
+        attack["name"]
+    ).lower()
+    attack_type = clean(
+        attack["attack_type"]
+    ).lower()
+    n_steps = int(attack["n_steps"])
 
-    if model_id not in MODEL_BACKENDS:
-        raise RuntimeError(
-            f"Unknown model_id: {model_id}"
-        )
-
-    if (
-        calculator_backend
-        != MODEL_BACKENDS[model_id]
-    ):
-        raise RuntimeError(
-            f"{model_id} requires backend "
-            f"{MODEL_BACKENDS[model_id]}, "
-            f"not {calculator_backend}"
-        )
-
-    supported_dtypes = {
-        str(value).strip().lower()
-        for value in model.get("dtypes", [])
-    }
-
-    if DTYPE not in supported_dtypes:
-        raise RuntimeError(
-            f"{model_id} does not support {DTYPE}"
-        )
-
-    attack_name = str(attack["name"]).lower()
-    attack_steps = int(attack["n_steps"])
-
-    alpha = attack.get("alpha")
-
-    if (
-        alpha is None
-        and attack.get("alpha_ratio") is not None
-    ):
-        alpha = (
-            EPSILON
-            * float(attack["alpha_ratio"])
-        )
+    require(
+        attack_type in {"fgsm", "pgd"},
+        f"Invalid attack type: {attack_type}",
+    )
+    require(
+        n_steps > 0,
+        f"Invalid n_steps for {attack_name}",
+    )
 
     run_folder = (
         f"{attack_name}_{epsilon_tag(EPSILON)}"
@@ -248,40 +392,94 @@ def make_run_row(
     row.update({
         "run_id": (
             f"{supercell['material_slug']}_"
-            f"{model_id}_{run_folder}"
+            f"{model_id}_{DTYPE}_{run_folder}"
         ),
-        "material_label": supercell["material_label"],
-        "material_slug": supercell["material_slug"],
+        "material_label": (
+            supercell["material_label"]
+        ),
+        "material_slug": (
+            supercell["material_slug"]
+        ),
         "run_folder": run_folder,
         "input_path": supercell["input_path"],
-        "model_path": model["model_path"],
-        "attack_type": attack["attack_type"],
-        "epsilon": f"{EPSILON:g}",
-        "n_steps": attack_steps,
-        "alpha": (
-            ""
-            if alpha is None
-            else f"{float(alpha):g}"
+        "model_path": clean(
+            model["model_path"]
         ),
+        "elements_path": clean(
+            model.get("elements_path")
+        ),
+        "attack_type": attack_type,
+        "epsilon": f"{EPSILON:g}",
+        "n_steps": str(n_steps),
+        "alpha": attack_alpha(attack),
         "clip": (
             ""
             if attack.get("clip") is None
-            else attack["clip"]
+            else str(attack["clip"]).lower()
         ),
-        "device": model["device"],
+        "device": clean(
+            model["device"]
+        ).lower(),
         "output_dir": "outputs",
-        "relax_fmax": context["relax_fmax"],
-        "relax_max_steps": context["relax_max_steps"],
-        "relax_optimizer": context["relax_optimizer"],
-        "model_id": model_id,
-        "display_name": model.get(
-            "display_name",
-            model_id,
+        "mace_head": clean(
+            model.get("mace_head")
         ),
-        "calculator": calculator_backend,
-        "calculator_backend": calculator_backend,
+        "uma_task": clean(
+            model.get("uma_task")
+        ),
+        "uma_charge": clean(
+            model.get("uma_charge")
+        ),
+        "uma_spin": clean(
+            model.get("uma_spin")
+        ),
+        "target_energy": clean(
+            config.get("target_energy")
+        ),
+        "relax_fmax": clean(
+            config.get("relax_fmax", 0.01)
+        ),
+        "relax_max_steps": clean(
+            config.get("relax_max_steps", 300)
+        ),
+        "relax_optimizer": clean(
+            config.get(
+                "relax_optimizer",
+                "LBFGS",
+            )
+        ).upper(),
+        "contour_steps": clean(
+            config.get("contour_steps", 500)
+        ),
+        "contour_maxstep": clean(
+            config.get("contour_maxstep", 0.01)
+        ),
+        "contour_parallel_drift": clean(
+            config.get(
+                "contour_parallel_drift",
+                False,
+            )
+        ).lower(),
+        "contour_angle_limit": clean(
+            config.get("contour_angle_limit", 20)
+        ),
+        "contour_seed": clean(
+            config.get("contour_seed", 12345)
+        ),
+        "contour_energy_target": clean(
+            config.get("contour_energy_target")
+        ),
+        "model_id": model_id,
+        "display_name": clean(
+            model.get(
+                "display_name",
+                model_id,
+            )
+        ),
+        "calculator": backend,
+        "calculator_backend": backend,
         "dtype_str": DTYPE,
-        "seed": SEED,
+        "seed": str(SEED),
         "base_material_slug": (
             context["base_material_slug"]
         ),
@@ -291,9 +489,15 @@ def make_run_row(
         "base_input_path": (
             context["base_input_path"]
         ),
-        "supercell_repeat_x": supercell["repeat_x"],
-        "supercell_repeat_y": supercell["repeat_y"],
-        "supercell_repeat_z": supercell["repeat_z"],
+        "supercell_repeat_x": (
+            supercell["repeat_x"]
+        ),
+        "supercell_repeat_y": (
+            supercell["repeat_y"]
+        ),
+        "supercell_repeat_z": (
+            supercell["repeat_z"]
+        ),
         "supercell_repeat_tuple": (
             supercell["repeat_tuple"]
         ),
@@ -305,77 +509,37 @@ def make_run_row(
         ),
     })
 
-    if calculator_backend == "mace":
-        row["mace_head"] = model.get(
-            "mace_head",
-            "",
-        )
-
-    elif calculator_backend == "uma":
-        row["uma_task"] = model.get(
-            "uma_task",
-            "",
-        )
-        row["uma_charge"] = model.get(
-            "uma_charge",
-            "",
-        )
-        row["uma_spin"] = model.get(
-            "uma_spin",
-            "",
-        )
-
     return row
 
 
-def selected_materials(material_rows):
-    by_slug = {}
-
-    for row in material_rows:
-        material_slug = str(
-            row.get("material_slug", "")
-        ).strip()
-
-        if not material_slug:
-            continue
-
-        if material_slug not in by_slug:
-            by_slug[material_slug] = row
-
-    missing = [
-        material
-        for material in MATERIALS
-        if material not in by_slug
-    ]
-
-    if missing:
-        raise SystemExit(
-            "Missing requested LiCOHPF structures: "
-            + ", ".join(missing)
-        )
-
-    return [
-        by_slug[material]
-        for material in MATERIALS
-    ]
-
-
 def generate(args):
-    output_root = Path(args.output_root).resolve()
-    structures_dir = (
-        BASE_DIR / args.structures_dir
+    output_root = Path(
+        args.output_root
     ).resolve()
-
-    config = load_config(
-        BASE_DIR / args.config
+    materials_path = resolve_from_base(
+        args.materials
     )
+    config_path = resolve_from_base(
+        args.config
+    )
+    structures_dir = resolve_from_base(
+        args.structures_dir
+    )
+
+    config = load_config(config_path)
+    models = model_map(config)
+
+    require(
+        config.get("attacks"),
+        "Configuration contains no attacks",
+    )
+
     material_rows = read_csv_rows(
-        BASE_DIR / args.materials
+        materials_path
     )
-    materials = selected_materials(material_rows)
-
-    tests = []
-    metadata = []
+    materials = discover_materials(
+        material_rows
+    )
 
     structures_root = (
         output_root / "supercell_structures"
@@ -385,47 +549,40 @@ def generate(args):
         exist_ok=True,
     )
 
+    tests = []
+    metadata = []
+
     for material in materials:
-        base_slug = str(
-            material["material_slug"]
-        ).strip()
+        base_slug = material["material_slug"]
+        base_label = material["material_label"]
+
         base_path = structure_path(
             material,
             structures_dir,
-        ).resolve()
+        )
 
-        if not base_path.exists():
-            raise SystemExit(
-                f"Missing base structure: {base_path}"
-            )
+        require(
+            base_path.is_file(),
+            f"Missing base structure: {base_path}",
+        )
 
         atoms = read(base_path)
         unit_cell_atoms = len(atoms)
 
+        require(
+            unit_cell_atoms > 0,
+            f"Structure contains no atoms: {base_path}",
+        )
+
         context = {
             "base_material_slug": base_slug,
-            "base_material_label": (
-                material.get(
-                    "material_label",
-                    base_slug,
-                )
-            ),
+            "base_material_label": base_label,
             "base_input_path": str(base_path),
-            "relax_fmax": config.get(
-                "relax_fmax",
-                0.01,
-            ),
-            "relax_max_steps": config.get(
-                "relax_max_steps",
-                300,
-            ),
-            "relax_optimizer": config.get(
-                "relax_optimizer",
-                "LBFGS",
-            ),
         }
 
-        for repeat_x, repeat_y, repeat_z in REPEAT_TUPLES:
+        for repeat_x, repeat_y, repeat_z in (
+            REPEAT_TUPLES
+        ):
             repeat_label = (
                 f"{repeat_x}x"
                 f"{repeat_y}x"
@@ -445,7 +602,7 @@ def generate(args):
                 exist_ok=True,
             )
 
-            if args.force or not cif_path.exists():
+            if args.force or not cif_path.is_file():
                 supercell_atoms_object = atoms.repeat(
                     (
                         repeat_x,
@@ -458,6 +615,11 @@ def generate(args):
                     supercell_atoms_object,
                 )
 
+            require(
+                cif_path.is_file(),
+                f"Failed to create {cif_path}",
+            )
+
             atom_count = (
                 unit_cell_atoms
                 * repeat_x
@@ -467,11 +629,12 @@ def generate(args):
 
             supercell = {
                 "material_label": (
-                    f"{material['material_label']}_"
-                    f"r{repeat_label}"
+                    f"{base_label}_r{repeat_label}"
                 ),
                 "material_slug": supercell_slug,
-                "input_path": str(cif_path.resolve()),
+                "input_path": str(
+                    cif_path.resolve()
+                ),
                 "repeat_x": repeat_x,
                 "repeat_y": repeat_y,
                 "repeat_z": repeat_z,
@@ -482,18 +645,13 @@ def generate(args):
 
             metadata.append({
                 "base_material_slug": base_slug,
-                "base_material_label": (
-                    material.get(
-                        "material_label",
-                        base_slug,
-                    )
-                ),
+                "base_material_label": base_label,
                 "supercell_material_slug": (
                     supercell_slug
                 ),
                 "base_input_path": str(base_path),
-                "supercell_input_path": (
-                    str(cif_path.resolve())
+                "supercell_input_path": str(
+                    cif_path.resolve()
                 ),
                 "repeat_x": repeat_x,
                 "repeat_y": repeat_y,
@@ -503,110 +661,140 @@ def generate(args):
                 "supercell_atoms": atom_count,
             })
 
-            for model in config["models"]:
-                supported_dtypes = {
-                    str(value).strip().lower()
-                    for value in model.get(
-                        "dtypes",
-                        [],
-                    )
-                }
-
-                if DTYPE not in supported_dtypes:
-                    continue
+            for model_id in MODEL_ORDER:
+                model = models[model_id]
 
                 for attack in config["attacks"]:
                     tests.append(
                         make_run_row(
-                            context,
-                            supercell,
-                            model,
-                            attack,
+                            config=config,
+                            context=context,
+                            supercell=supercell,
+                            model=model,
+                            attack=attack,
                         )
                     )
 
-    write_csv_rows(
-        output_root / "generated_supercell_tests.csv",
-        tests,
-        COLUMNS,
-    )
-
-    metadata_columns = [
-        "base_material_slug",
-        "base_material_label",
-        "supercell_material_slug",
-        "base_input_path",
-        "supercell_input_path",
-        "repeat_x",
-        "repeat_y",
-        "repeat_z",
-        "repeat_tuple",
-        "unit_cell_atoms",
-        "supercell_atoms",
-    ]
-
-    write_csv_rows(
-        output_root / "supercell_metadata.csv",
-        metadata,
-        metadata_columns,
-    )
-
-    expected_tests = (
-        len(MATERIALS)
+    expected_metadata = (
+        len(materials)
         * len(REPEAT_TUPLES)
-        * len(config["models"])
+    )
+    expected_tests = (
+        expected_metadata
+        * len(MODEL_ORDER)
         * len(config["attacks"])
     )
 
-    if len(tests) != expected_tests:
-        raise SystemExit(
-            f"Expected {expected_tests} tests, "
-            f"generated {len(tests)}"
-        )
+    require(
+        len(metadata) == expected_metadata,
+        f"Expected {expected_metadata} metadata "
+        f"rows, generated {len(metadata)}",
+    )
+    require(
+        len(tests) == expected_tests,
+        f"Expected {expected_tests} test rows, "
+        f"generated {len(tests)}",
+    )
+
+    run_ids = [
+        row["run_id"]
+        for row in tests
+    ]
+
+    require(
+        len(run_ids) == len(set(run_ids)),
+        "Duplicate supercell run_id values generated",
+    )
+
+    write_csv_rows(
+        output_root
+        / "generated_supercell_tests.csv",
+        tests,
+        COLUMNS,
+    )
+    write_csv_rows(
+        output_root
+        / "supercell_metadata.csv",
+        metadata,
+        METADATA_COLUMNS,
+    )
 
     print(
-        f"Wrote {len(tests)} rows to "
+        f"Wrote {len(tests):,} rows to "
         f"{output_root / 'generated_supercell_tests.csv'}"
     )
     print(
-        f"Wrote {len(metadata)} rows to "
+        f"Wrote {len(metadata):,} rows to "
         f"{output_root / 'supercell_metadata.csv'}"
     )
 
 
-def task_list():
-    return [
-        (
-            material,
-            repeat_label,
-            model_id,
+def build_task_list(output_root):
+    metadata_path = (
+        output_root / "supercell_metadata.csv"
+    )
+    metadata = read_csv_rows(metadata_path)
+
+    require(
+        len(metadata) == 160,
+        "Expected 160 supercell metadata rows, "
+        f"found {len(metadata)}",
+    )
+
+    tasks = []
+
+    for row in metadata:
+        base_material_slug = clean(
+            row["base_material_slug"]
         )
-        for material in MATERIALS
-        for repeat_label in [
-            f"{x}x{y}x{z}"
-            for x, y, z in REPEAT_TUPLES
-        ]
-        for model_id in MODEL_ORDER
-    ]
+        repeat_label = clean(
+            row["repeat_tuple"]
+        )
+
+        for model_id in MODEL_ORDER:
+            tasks.append(
+                (
+                    base_material_slug,
+                    repeat_label,
+                    model_id,
+                )
+            )
+
+    require(
+        len(tasks) == 800,
+        f"Expected 800 supercell tasks, "
+        f"generated {len(tasks)}",
+    )
+
+    return tasks
+
+
+def shell_assignment(name, value):
+    print(
+        f"{name}={shlex.quote(str(value))}"
+    )
 
 
 def task_info(args):
+    output_root = Path(
+        args.output_root
+    ).resolve()
     task_id = int(args.task_id)
-    tasks = task_list()
+    tasks = build_task_list(output_root)
 
-    if task_id < 1 or task_id > len(tasks):
-        raise SystemExit(
-            f"task-id must be 1..{len(tasks)}, "
-            f"got {task_id}"
-        )
+    require(
+        1 <= task_id <= len(tasks),
+        f"task-id must be 1..{len(tasks)}, "
+        f"got {task_id}",
+    )
 
     material, repeat_label, model_id = (
         tasks[task_id - 1]
     )
 
-    output_root = Path(args.output_root).resolve()
     tests_path = (
-        output_root / "generated_supercell_tests.csv"
+        output_root
+        / "generated_supercell_tests.csv"
     )
     rows = read_csv_rows(tests_path)
 
@@ -614,18 +802,34 @@ def task_info(args):
         row
         for row in rows
         if (
-            row["base_material_slug"] == material
-            and row["supercell_repeat_tuple"]
+            clean(row["base_material_slug"])
+            == material
+            and clean(
+                row["supercell_repeat_tuple"]
+            )
             == repeat_label
-            and row["model_id"] == model_id
+            and clean(row["model_id"])
+            == model_id
         )
     ]
 
-    if not selected:
-        raise SystemExit(
-            f"No rows for {material} "
-            f"{repeat_label} {model_id}"
-        )
+    require(
+        selected,
+        f"No rows found for {material}, "
+        f"{repeat_label}, {model_id}",
+    )
+
+    expected_attacks = {
+        clean(row["run_folder"])
+        for row in selected
+    }
+
+    require(
+        len(expected_attacks) == 3,
+        f"Expected three attacks for {material}, "
+        f"{repeat_label}, {model_id}; "
+        f"found {len(expected_attacks)}",
+    )
 
     selected_path = (
         output_root
@@ -656,29 +860,38 @@ def task_info(args):
         exist_ok=True,
     )
 
-    print(f"MATERIAL={material}")
-    print(f"REPEAT={repeat_label}")
-    print(f"MODEL_ID={model_id}")
-    print(
-        "CALCULATOR_BACKEND="
-        f"{MODEL_BACKENDS[model_id]}"
+    shell_assignment("MATERIAL", material)
+    shell_assignment("REPEAT", repeat_label)
+    shell_assignment("MODEL_ID", model_id)
+    shell_assignment(
+        "CALCULATOR_BACKEND",
+        MODEL_BACKENDS[model_id],
     )
-    print(
-        "DEVICE="
-        f"{selected[0]['device']}"
+    shell_assignment(
+        "DEVICE",
+        selected[0]["device"],
     )
-    print(f"TEST_CSV={selected_path}")
-    print(f"SUMMARY_FILE={summary_path}")
+    shell_assignment(
+        "TEST_CSV",
+        selected_path,
+    )
+    shell_assignment(
+        "SUMMARY_FILE",
+        summary_path,
+    )
 
 
 def combine(args):
     output_root = Path(
         args.output_root
     ).resolve()
-
     summary_dir = (
-        output_root
-        / "array_summaries"
+        output_root / "array_summaries"
+    )
+
+    require(
+        summary_dir.is_dir(),
+        f"Missing summary directory: {summary_dir}",
     )
 
     for model_id in MODEL_ORDER:
@@ -689,11 +902,11 @@ def combine(args):
             )
         )
 
-        if not summary_paths:
-            raise SystemExit(
-                f"No {model_id} summaries found in "
-                f"{summary_dir}"
-            )
+        require(
+            len(summary_paths) == 160,
+            f"Expected 160 {model_id} summary "
+            f"files, found {len(summary_paths)}",
+        )
 
         combined_rows = []
         columns = []
@@ -710,6 +923,12 @@ def combine(args):
                 row["model_id"] = model_id
                 combined_rows.append(row)
 
+        require(
+            len(combined_rows) == 480,
+            f"Expected 480 combined {model_id} "
+            f"rows, found {len(combined_rows)}",
+        )
+
         output_path = (
             output_root
             / f"outputs_{DTYPE}"
@@ -724,41 +943,49 @@ def combine(args):
         )
 
         print(
-            f"Wrote {len(combined_rows)} rows to "
+            f"Wrote {len(combined_rows):,} rows to "
             f"{output_path}"
         )
 
 
 def main():
     parser = argparse.ArgumentParser()
+
     commands = parser.add_subparsers(
         dest="command",
         required=True,
     )
 
-    generate_parser = commands.add_parser("generate")
+    generate_parser = commands.add_parser(
+        "generate"
+    )
     generate_parser.add_argument(
         "--output-root",
         required=True,
     )
     generate_parser.add_argument(
         "--materials",
-        default="generated_licohpf_tests.csv",
+        default="generated_material_tests.csv",
     )
     generate_parser.add_argument(
         "--config",
-        default="datasets/licohpf_database/tests_comprehensive.json",
+        default=(
+            "datasets/2d_structures/"
+            "tests_comprehensive.json"
+        ),
     )
     generate_parser.add_argument(
         "--structures-dir",
-        default="datasets/licohpf_database/structures",
+        default="mp_structures",
     )
     generate_parser.add_argument(
         "--force",
         action="store_true",
     )
 
-    task_parser = commands.add_parser("task-info")
+    task_parser = commands.add_parser(
+        "task-info"
+    )
     task_parser.add_argument(
         "--output-root",
         required=True,
@@ -768,7 +995,9 @@ def main():
         required=True,
     )
 
-    combine_parser = commands.add_parser("combine")
+    combine_parser = commands.add_parser(
+        "combine"
+    )
     combine_parser.add_argument(
         "--output-root",
         required=True,

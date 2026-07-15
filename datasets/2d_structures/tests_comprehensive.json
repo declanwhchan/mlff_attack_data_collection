@@ -1,6 +1,11 @@
 {
-  "device": "cpu",
-  "epsilons": [0.001, 0.002, 0.003, 0.004, 0.005, 0.01, 0.02, 0.03, 0.04, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 1, 2, 3, 4, 5, 10],
+  "epsilons": [
+    0.001, 0.002, 0.003, 0.004, 0.005,
+    0.01,  0.02,  0.03,  0.04,  0.05,
+    0.1,   0.2,   0.3,   0.4,   0.5,
+    1,     2,     3,     4,     5,
+    10
+  ],
   "relax_fmax": 0.01,
   "relax_max_steps": 300,
   "relax_optimizer": "LBFGS",
@@ -8,28 +13,82 @@
   "contour_pre_relax_max_steps": 300,
   "contour_post_relax_fmax": 0.01,
   "contour_post_relax_max_steps": 300,
-  "contour_betas": [0.1, 0.05, 0.0],
+  "contour_betas": [
+    0.1,
+    0.05,
+    0.0
+  ],
   "contour_steps": 500,
   "contour_maxstep": 0.01,
+  "contour_parallel_drift": false,
   "contour_angle_limit": 20,
   "contour_seed": 12345,
   "contour_energy_target": null,
   "models": [
     {
+      "model_id": "mace_mh",
+      "display_name": "MACE-MH-1",
       "calculator": "mace",
+      "calculator_backend": "mace",
       "model_path": "mace-mh-1.model",
-      "mace_head": "omat_pbe"
+      "mace_head": "omat_pbe",
+      "device": "cpu",
+      "dtypes": [
+        "float32",
+        "float64"
+      ]
     },
     {
+      "model_id": "uma",
+      "display_name": "UMA-S-1p1",
       "calculator": "uma",
-      "model_path": "uma-s-1p1",
+      "calculator_backend": "uma",
+      "model_path": "uma-s-1p1.pt",
       "uma_task": "omat",
       "uma_charge": 0,
-      "uma_spin": 1
+      "uma_spin": 1,
+      "device": "cpu",
+      "dtypes": [
+        "float32",
+        "float64"
+      ]
     },
     {
+      "model_id": "mtp",
+      "display_name": "MTP",
+      "calculator": "mtp",
+      "calculator_backend": "mtp",
+      "model_path": "pot.almtp",
+      "elements_path": "pot.almtp.elements",
+      "device": "cpu",
+      "dtypes": [
+        "float64"
+      ]
+    },
+    {
+      "model_id": "chgnet",
+      "display_name": "CHGNet",
       "calculator": "chgnet",
-      "model_path": "chgnet-0.3.0"
+      "calculator_backend": "chgnet",
+      "model_path": "chgnet-0.3.0",
+      "device": "cpu",
+      "dtypes": [
+        "float32",
+        "float64"
+      ]
+    },
+    {
+      "model_id": "mace_model",
+      "display_name": "MACE Model",
+      "calculator": "mace",
+      "calculator_backend": "mace",
+      "model_path": "MACE_model.model",
+      "mace_head": null,
+      "device": "cuda",
+      "dtypes": [
+        "float32",
+        "float64"
+      ]
     }
   ],
   "attacks": [
@@ -58,7 +117,11 @@
   "n_step_sweeps": [
     {
       "epsilon": 0.1,
-      "n_steps": [1, 2, 3, 4, 5, 10, 20, 30, 40, 50, 100],
+      "n_steps": [
+        1, 2, 3, 4, 5,
+        10, 20, 30, 40, 50,
+        100
+      ],
       "attacks": [
         {
           "name": "ifgsm",

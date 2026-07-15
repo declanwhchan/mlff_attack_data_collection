@@ -1,10 +1,11 @@
 #!/bin/bash
-#SBATCH --account=rrg-j3goals
-#SBATCH --time=2-00:00:00
-#SBATCH --mem=16G
+#SBATCH --account=def-j3goals
+#SBATCH --time=12:00:00
+#SBATCH --mem=32G
 #SBATCH --cpus-per-task=8
-#SBATCH --array=1-700%15
-#SBATCH --output=contour-cpu-%A_%a.out
+#SBATCH --gpus-per-node=h100:1
+#SBATCH --array=1-200%40
+#SBATCH --output=contour-gpu-%A_%a.out
 
 set -euo pipefail
 
@@ -25,37 +26,40 @@ if [ -f .env ]; then
     set +a
 fi
 
-if [ -n "${HF_TOKEN:-}" ]; then
-    export HUGGINGFACE_HUB_TOKEN="$HF_TOKEN"
-fi
-
 module load gcc/12.3 python/3.11 arrow
 
-CPU_TESTS="$REPO_ROOT/generated_material_cpu_tests.csv"
+GPU_TESTS="$REPO_ROOT/generated_material_gpu_tests.csv"
 CONFIG_FILE="$REPO_ROOT/datasets/2d_structures/tests_comprehensive.json"
-MACE_PYTHON="$HOME/project/.venv-mace/bin/python"
+PYTHON="$HOME/project/.venv-mace/bin/python"
 
 for required_file in \
-    "$CPU_TESTS" \
+    "$GPU_TESTS" \
     "$CONFIG_FILE" \
-    "$REPO_ROOT/pipeline/contour.py"; do
+    "$REPO_ROOT/pipeline/contour.py" \
+    "$REPO_ROOT/MACE_model.model"; do
     if [ ! -f "$required_file" ]; then
         echo "ERROR: Missing required file:"
         echo "$required_file"
-        echo "Run setup.sh before submitting contour.sh."
+        echo "Run setup.sh before contour_gpu.sh."
         exit 1
     fi
 done
 
-if [ ! -x "$MACE_PYTHON" ]; then
+if [ ! -x "$PYTHON" ]; then
     echo "ERROR: Missing MACE Python:"
-    echo "$MACE_PYTHON"
+    echo "$PYTHON"
+    exit 1
+fi
+
+if [ -z "${CUDA_VISIBLE_DEVICES:-}" ]; then
+    echo "ERROR: CUDA_VISIBLE_DEVICES is empty."
+    echo "Submit this script with an H100 GPU."
     exit 1
 fi
 
 TASK_INFO=$(
-    "$MACE_PYTHON" - \
-        "$CPU_TESTS" \
+    "$PYTHON" - \
+        "$GPU_TESTS" \
         "$SLURM_ARRAY_TASK_ID" <<'PY'
 import csv
 import sys
@@ -72,13 +76,6 @@ trials = [
     ("trial5_seed46", 46),
 ]
 
-model_order = {
-    "mace_mh": 0,
-    "uma": 1,
-    "mtp": 2,
-    "chgnet": 3,
-}
-
 dtype_order = {
     "float32": 0,
     "float64": 1,
@@ -94,64 +91,57 @@ with open(
 
 if not rows:
     raise SystemExit(
-        f"ERROR: No test rows found in {tests_path}"
+        f"ERROR: No GPU rows found in {tests_path}"
+    )
+
+models = {
+    row["model_id"].strip().lower()
+    for row in rows
+}
+
+if models != {"mace_model"}:
+    raise SystemExit(
+        "ERROR: GPU test database must contain only "
+        f"mace_model. Found: {sorted(models)}"
+    )
+
+devices = {
+    row["device"].strip().lower()
+    for row in rows
+}
+
+if devices != {"cuda"}:
+    raise SystemExit(
+        "ERROR: GPU test rows must all use CUDA. "
+        f"Found: {sorted(devices)}"
     )
 
 jobs = sorted(
     {
         (
-            row["model_id"].strip().lower(),
             row["dtype_str"].strip().lower(),
             row["material_slug"].strip(),
         )
         for row in rows
     },
     key=lambda item: (
-        model_order[item[0]],
-        dtype_order[item[1]],
-        item[2],
+        dtype_order[item[0]],
+        item[1],
     ),
 )
-
-present_models = {
-    model_id
-    for model_id, _, _ in jobs
-}
-
-expected_models = {
-    "mace_mh",
-    "uma",
-    "mtp",
-    "chgnet",
-}
-
-if present_models != expected_models:
-    raise SystemExit(
-        "ERROR: CPU contour database contains the "
-        f"wrong models: {sorted(present_models)}"
-    )
-
-if any(
-    model_id == "mtp" and dtype_str != "float64"
-    for model_id, dtype_str, _ in jobs
-):
-    raise SystemExit(
-        "ERROR: CPU contour database contains "
-        "float32 MTP jobs"
-    )
 
 jobs_per_trial = len(jobs)
 total_tasks = len(trials) * jobs_per_trial
 
-if jobs_per_trial != 140:
+if jobs_per_trial != 40:
     raise SystemExit(
-        "ERROR: Expected 140 CPU contour jobs per "
+        "ERROR: Expected 40 GPU contour jobs per "
         f"trial but found {jobs_per_trial}"
     )
 
-if total_tasks != 700:
+if total_tasks != 200:
     raise SystemExit(
-        "ERROR: Expected 700 total CPU contour tasks "
+        "ERROR: Expected 200 total GPU contour tasks "
         f"but calculated {total_tasks}"
     )
 
@@ -166,14 +156,13 @@ trial_index = zero_based // jobs_per_trial
 job_index = zero_based % jobs_per_trial
 
 trial_name, seed = trials[trial_index]
-model_id, dtype_str, material_slug = jobs[job_index]
+dtype_str, material_slug = jobs[job_index]
 
 print(
     "|".join(
         [
             trial_name,
             str(seed),
-            model_id,
             dtype_str,
             material_slug,
         ]
@@ -185,70 +174,21 @@ PY
 IFS='|' read -r \
     TRIAL_NAME \
     MLFF_SEED \
-    MODEL_ID \
     MLFF_DTYPE \
     MATERIAL_SLUG \
     <<< "$TASK_INFO"
 
 if [ -z "${TRIAL_NAME:-}" ] || \
    [ -z "${MLFF_SEED:-}" ] || \
-   [ -z "${MODEL_ID:-}" ] || \
    [ -z "${MLFF_DTYPE:-}" ] || \
    [ -z "${MATERIAL_SLUG:-}" ]; then
-    echo "ERROR: Could not parse contour task:"
+    echo "ERROR: Could not parse GPU contour task:"
     echo "$TASK_INFO"
     exit 1
 fi
 
-case "$MODEL_ID" in
-    mace_mh)
-        CALCULATOR_BACKEND="mace"
-        PYTHON="$HOME/project/.venv-mace/bin/python"
-        ;;
-    uma)
-        CALCULATOR_BACKEND="uma"
-        PYTHON="$HOME/project/.venv-uma/bin/python"
-        ;;
-    mtp)
-        CALCULATOR_BACKEND="mtp"
-        PYTHON="$HOME/project/.venv-mtp/bin/python"
-        export PATH="$HOME/project/.venv-mtp/bin:$PATH"
-        ;;
-    chgnet)
-        CALCULATOR_BACKEND="chgnet"
-        PYTHON="$HOME/project/.venv-chgnet/bin/python"
-        ;;
-    *)
-        echo "ERROR: Unsupported CPU model: $MODEL_ID"
-        exit 1
-        ;;
-esac
-
-if [ ! -x "$PYTHON" ]; then
-    echo "ERROR: Python executable was not found:"
-    echo "$PYTHON"
-    exit 1
-fi
-
-if [ "$MODEL_ID" = "uma" ] && \
-   [ -z "${HF_TOKEN:-}" ] && \
-   [ -z "${HUGGINGFACE_HUB_TOKEN:-}" ]; then
-    echo "ERROR: UMA requires HF_TOKEN in .env or"
-    echo "HUGGINGFACE_HUB_TOKEN in the environment."
-    exit 1
-fi
-
-if [ "$MODEL_ID" = "mtp" ]; then
-    if [ "$MLFF_DTYPE" != "float64" ]; then
-        echo "ERROR: MTP can only run with float64"
-        exit 1
-    fi
-
-    if ! command -v mlp >/dev/null 2>&1; then
-        echo "ERROR: mlp is unavailable in .venv-mtp"
-        exit 1
-    fi
-fi
+MODEL_ID="mace_model"
+CALCULATOR_BACKEND="mace"
 
 SCRATCH_OUTPUT_ROOT="${SCRATCH_OUTPUT_ROOT:-/scratch/$USER/mlff_attack_data_collection/2d_structures}"
 TRIAL_DIR="$SCRATCH_OUTPUT_ROOT/$TRIAL_NAME"
@@ -273,11 +213,25 @@ echo "Dtype: $MLFF_DTYPE"
 echo "Material: $MATERIAL_SLUG"
 echo "Output root: $MLFF_OUTPUT_ROOT"
 echo "Python: $PYTHON"
+echo "CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES"
 echo "Summary: $CONTOUR_SUMMARY_FILE"
 echo "CPU threads: ${SLURM_CPUS_PER_TASK:-8}"
 
+"$PYTHON" - <<'PY'
+import torch
+
+if not torch.cuda.is_available():
+    raise SystemExit(
+        "ERROR: PyTorch reports that CUDA is unavailable"
+    )
+
+print("PyTorch version:", torch.__version__)
+print("CUDA device count:", torch.cuda.device_count())
+print("CUDA device:", torch.cuda.get_device_name(0))
+PY
+
 "$PYTHON" -u pipeline/contour.py \
-    --tests generated_material_cpu_tests.csv \
+    --tests generated_material_gpu_tests.csv \
     --config datasets/2d_structures/tests_comprehensive.json \
     --calculator "$MODEL_ID" \
     --dtype-str "$MLFF_DTYPE" \
@@ -285,7 +239,7 @@ echo "CPU threads: ${SLURM_CPUS_PER_TASK:-8}"
     --seed "$MLFF_SEED"
 
 if [ ! -s "$CONTOUR_SUMMARY_FILE" ]; then
-    echo "ERROR: Contour summary was not generated:"
+    echo "ERROR: GPU contour summary was not generated:"
     echo "$CONTOUR_SUMMARY_FILE"
     exit 1
 fi
@@ -328,7 +282,7 @@ with summary_path.open(
 
 if len(rows) != len(expected_betas):
     raise SystemExit(
-        "ERROR: Contour summary contains "
+        "ERROR: GPU contour summary contains "
         f"{len(rows)} rows; expected "
         f"{len(expected_betas)}"
     )
@@ -342,12 +296,13 @@ if statuses != {"success"}:
     for row in rows:
         if row["status"].strip().lower() != "success":
             print(
-                "FAILED CONTOUR:",
+                "FAILED GPU CONTOUR:",
                 row.get("error", ""),
             )
 
     raise SystemExit(
-        "ERROR: One or more contour calculations failed"
+        "ERROR: One or more GPU contour "
+        "calculations failed"
     )
 
 models = {
@@ -394,12 +349,12 @@ if actual_betas != expected_betas:
     )
 
 print(
-    f"All {len(rows)} CPU contour calculations "
+    f"All {len(rows)} GPU contour calculations "
     "succeeded"
 )
 PY
 
-echo "Finished CPU contour task successfully"
+echo "Finished GPU contour task successfully"
 echo "Model: $MODEL_ID"
 echo "Dtype: $MLFF_DTYPE"
 echo "Material: $MATERIAL_SLUG"
