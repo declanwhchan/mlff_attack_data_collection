@@ -1,10 +1,11 @@
 #!/bin/bash
-#SBATCH --account=rrg-j3goals
-#SBATCH --time=2-00:00:00
-#SBATCH --mem=24G
+#SBATCH --account=def-j3goals
+#SBATCH --time=12:00:00
+#SBATCH --mem=32G
 #SBATCH --cpus-per-task=8
-#SBATCH --array=1-640%15
-#SBATCH --output=supercell-cpu-%A_%a.out
+#SBATCH --gpus-per-node=h100:1
+#SBATCH --array=1-160%40
+#SBATCH --output=supercell-gpu-%A_%a.out
 
 set -euo pipefail
 
@@ -25,10 +26,6 @@ if [ -f .env ]; then
     set +a
 fi
 
-if [ -n "${HF_TOKEN:-}" ]; then
-    export HUGGINGFACE_HUB_TOKEN="$HF_TOKEN"
-fi
-
 module load gcc/12.3 python/3.11 arrow
 
 SCRATCH_OUTPUT_ROOT="${SCRATCH_OUTPUT_ROOT:-/scratch/$USER/mlff_attack_data_collection/2d_structures}"
@@ -36,13 +33,14 @@ SUPERCELL_ROOT="${SUPERCELL_OUTPUT_ROOT:-$SCRATCH_OUTPUT_ROOT/supercell}"
 
 SUPERCELL_TESTS="$SUPERCELL_ROOT/generated_supercell_tests.csv"
 SUPERCELL_METADATA="$SUPERCELL_ROOT/supercell_metadata.csv"
-MACE_PYTHON="$HOME/project/.venv-mace/bin/python"
+PYTHON="$HOME/project/.venv-mace/bin/python"
 
 for required_file in \
     "$SUPERCELL_TESTS" \
     "$SUPERCELL_METADATA" \
     "$REPO_ROOT/pipeline/supercell.py" \
-    "$REPO_ROOT/pipeline/runtime.py"; do
+    "$REPO_ROOT/pipeline/runtime.py" \
+    "$REPO_ROOT/MACE_model.model"; do
     if [ ! -f "$required_file" ]; then
         echo "ERROR: Missing required file:"
         echo "$required_file"
@@ -52,28 +50,30 @@ for required_file in \
     fi
 done
 
-if [ ! -x "$MACE_PYTHON" ]; then
+if [ ! -x "$PYTHON" ]; then
     echo "ERROR: Missing MACE Python:"
-    echo "$MACE_PYTHON"
+    echo "$PYTHON"
     exit 1
 fi
 
-CPU_TASK_ID="$SLURM_ARRAY_TASK_ID"
-
-if [ "$CPU_TASK_ID" -lt 1 ] || \
-   [ "$CPU_TASK_ID" -gt 640 ]; then
-    echo "ERROR: CPU supercell task must be 1..640"
+if [ -z "${CUDA_VISIBLE_DEVICES:-}" ]; then
+    echo "ERROR: CUDA_VISIBLE_DEVICES is empty."
+    echo "Submit this script with an H100 GPU."
     exit 1
 fi
 
-TASK_ZERO=$((CPU_TASK_ID - 1))
-CELL_INDEX=$((TASK_ZERO / 4))
-CPU_MODEL_INDEX=$((TASK_ZERO % 4))
+GPU_TASK_ID="$SLURM_ARRAY_TASK_ID"
 
-FULL_TASK_ID=$((CELL_INDEX * 5 + CPU_MODEL_INDEX + 1))
+if [ "$GPU_TASK_ID" -lt 1 ] || \
+   [ "$GPU_TASK_ID" -gt 160 ]; then
+    echo "ERROR: GPU supercell task must be 1..160"
+    exit 1
+fi
+
+FULL_TASK_ID=$((GPU_TASK_ID * 5))
 
 TASK_INFO=$(
-    "$MACE_PYTHON" -u pipeline/supercell.py \
+    "$PYTHON" -u pipeline/supercell.py \
         task-info \
         --output-root "$SUPERCELL_ROOT" \
         --task-id "$FULL_TASK_ID"
@@ -100,72 +100,30 @@ cleanup_task_csv() {
 
 trap cleanup_task_csv EXIT
 
-case "$MODEL_ID" in
-    mace_mh)
-        EXPECTED_BACKEND="mace"
-        PYTHON="$HOME/project/.venv-mace/bin/python"
-        ;;
-    uma)
-        EXPECTED_BACKEND="uma"
-        PYTHON="$HOME/project/.venv-uma/bin/python"
-        ;;
-    mtp)
-        EXPECTED_BACKEND="mtp"
-        PYTHON="$HOME/project/.venv-mtp/bin/python"
-        export PATH="$HOME/project/.venv-mtp/bin:$PATH"
-        ;;
-    chgnet)
-        EXPECTED_BACKEND="chgnet"
-        PYTHON="$HOME/project/.venv-chgnet/bin/python"
-        ;;
-    *)
-        echo "ERROR: GPU or unknown model appeared in"
-        echo "the CPU supercell workflow: $MODEL_ID"
-        exit 1
-        ;;
-esac
+if [ "$MODEL_ID" != "mace_model" ]; then
+    echo "ERROR: Expected mace_model, found:"
+    echo "$MODEL_ID"
+    exit 1
+fi
 
-if [ "$CALCULATOR_BACKEND" != "$EXPECTED_BACKEND" ]; then
-    echo "ERROR: Incorrect calculator backend."
-    echo "Model: $MODEL_ID"
-    echo "Expected: $EXPECTED_BACKEND"
+if [ "$CALCULATOR_BACKEND" != "mace" ]; then
+    echo "ERROR: mace_model requires backend=mace"
     echo "Found: $CALCULATOR_BACKEND"
     exit 1
 fi
 
-if [ "$DEVICE" != "cpu" ]; then
-    echo "ERROR: CPU model $MODEL_ID has"
-    echo "device=$DEVICE"
+if [[ "$DEVICE" != cuda* ]]; then
+    echo "ERROR: mace_model requires CUDA."
+    echo "Found device=$DEVICE"
     exit 1
-fi
-
-if [ ! -x "$PYTHON" ]; then
-    echo "ERROR: Missing Python executable:"
-    echo "$PYTHON"
-    exit 1
-fi
-
-if [ "$MODEL_ID" = "uma" ] && \
-   [ -z "${HF_TOKEN:-}" ] && \
-   [ -z "${HUGGINGFACE_HUB_TOKEN:-}" ]; then
-    echo "ERROR: UMA requires HF_TOKEN in .env or"
-    echo "HUGGINGFACE_HUB_TOKEN in the environment."
-    exit 1
-fi
-
-if [ "$MODEL_ID" = "mtp" ]; then
-    if ! command -v mlp >/dev/null 2>&1; then
-        echo "ERROR: mlp is unavailable in .venv-mtp"
-        exit 1
-    fi
 fi
 
 export MLFF_OUTPUT_ROOT="$SUPERCELL_ROOT"
 export MLFF_DTYPE="float64"
 export MLFF_SEED="42"
 
-echo "CPU supercell task"
-echo "Array task: $CPU_TASK_ID"
+echo "GPU supercell task"
+echo "Array task: $GPU_TASK_ID"
 echo "Full task: $FULL_TASK_ID"
 echo "Material: $MATERIAL"
 echo "Repeat: $REPEAT"
@@ -175,6 +133,7 @@ echo "Device: $DEVICE"
 echo "Dtype: $MLFF_DTYPE"
 echo "Seed: $MLFF_SEED"
 echo "Python: $PYTHON"
+echo "CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES"
 echo "Test CSV: $TEST_CSV"
 echo "Summary: $SUMMARY_FILE"
 echo "Output root: $MLFF_OUTPUT_ROOT"
@@ -182,8 +141,18 @@ echo "Output root: $MLFF_OUTPUT_ROOT"
 "$PYTHON" - <<'PY'
 import os
 import sys
+import torch
+
+if not torch.cuda.is_available():
+    raise SystemExit(
+        "ERROR: PyTorch reports that CUDA is unavailable"
+    )
 
 print("Python executable:", sys.executable)
+print("PyTorch version:", torch.__version__)
+print("CUDA available:", torch.cuda.is_available())
+print("CUDA device count:", torch.cuda.device_count())
+print("CUDA device:", torch.cuda.get_device_name(0))
 print("MLFF_DTYPE:", os.environ["MLFF_DTYPE"])
 print("MLFF_SEED:", os.environ["MLFF_SEED"])
 print("MLFF_OUTPUT_ROOT:", os.environ["MLFF_OUTPUT_ROOT"])
@@ -194,14 +163,13 @@ PY
     --summary-file "$SUMMARY_FILE"
 
 if [ ! -s "$SUMMARY_FILE" ]; then
-    echo "ERROR: Supercell summary was not generated:"
+    echo "ERROR: GPU supercell summary was not generated:"
     echo "$SUMMARY_FILE"
     exit 1
 fi
 
 "$PYTHON" - \
     "$SUMMARY_FILE" \
-    "$MODEL_ID" \
     "$MATERIAL" \
     "$REPEAT" <<'PY'
 import csv
@@ -210,9 +178,8 @@ from pathlib import Path
 
 
 summary_path = Path(sys.argv[1])
-expected_model = sys.argv[2]
-expected_material = sys.argv[3]
-expected_repeat = sys.argv[4]
+expected_material = sys.argv[2]
+expected_repeat = sys.argv[3]
 
 with summary_path.open(
     "r",
@@ -223,7 +190,7 @@ with summary_path.open(
 
 if len(rows) != 3:
     raise SystemExit(
-        "ERROR: Expected three CPU supercell "
+        "ERROR: Expected three GPU supercell "
         f"results, found {len(rows)}"
     )
 
@@ -237,14 +204,14 @@ failed = [
 if failed:
     for row in failed:
         print(
-            "FAILED SUPERCELL:",
+            "FAILED GPU SUPERCELL:",
             row.get("run_id", ""),
             row.get("error", ""),
             row.get("reason", ""),
         )
 
     raise SystemExit(
-        f"ERROR: {len(failed)} CPU supercell "
+        f"ERROR: {len(failed)} GPU supercell "
         "calculations failed"
     )
 
@@ -253,9 +220,33 @@ models = {
     for row in rows
 }
 
-if models != {expected_model}:
+if models != {"mace_model"}:
     raise SystemExit(
-        f"ERROR: Incorrect model identities: {models}"
+        f"ERROR: Incorrect GPU model identities: "
+        f"{models}"
+    )
+
+backends = {
+    row["calculator_backend"].strip().lower()
+    for row in rows
+}
+
+if backends != {"mace"}:
+    raise SystemExit(
+        f"ERROR: Incorrect GPU backends: {backends}"
+    )
+
+devices = {
+    row["device"].strip().lower()
+    for row in rows
+}
+
+if not all(
+    device.startswith("cuda")
+    for device in devices
+):
+    raise SystemExit(
+        f"ERROR: Incorrect GPU devices: {devices}"
     )
 
 dtypes = {
@@ -265,7 +256,8 @@ dtypes = {
 
 if dtypes != {"float64"}:
     raise SystemExit(
-        f"ERROR: Incorrect supercell dtypes: {dtypes}"
+        f"ERROR: Incorrect GPU supercell dtypes: "
+        f"{dtypes}"
     )
 
 base_materials = {
@@ -291,11 +283,11 @@ if repeat_values != {expected_repeat}:
     )
 
 print(
-    "All three CPU supercell attacks succeeded"
+    "All three CUDA supercell attacks succeeded"
 )
 PY
 
-echo "Finished CPU supercell task successfully"
-echo "Model: $MODEL_ID"
+echo "Finished GPU supercell task successfully"
+echo "Model: mace_model"
 echo "Material: $MATERIAL"
 echo "Repeat: $REPEAT"
