@@ -3,7 +3,7 @@
 #SBATCH --time=2-00:00:00
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=8
-#SBATCH --array=1-700%150
+#SBATCH --array=1-700%100
 #SBATCH --output=contour-cpu-%A_%a.out
 
 set -euo pipefail
