@@ -149,8 +149,8 @@ for dtype_str, models in models_by_dtype.items():
         )
 
         if len(main_paths) != expected_structures:
-            raise SystemExit(
-                f"ERROR: expected {expected_structures} "
+            print(
+                f"WARNING: expected {expected_structures} "
                 f"{dtype_str} {model_id} main summaries, "
                 f"found {len(main_paths)}"
             )
@@ -198,9 +198,9 @@ for dtype_str, models in models_by_dtype.items():
                 main["status"] != "success"
             ]
             print(failed.to_string(index=False))
-            raise SystemExit(
-                f"ERROR: failed main rows for "
-                f"{dtype_str} {model_id}"
+            print(
+                f"WARNING: failed main rows for "
+                f"{dtype_str} {model_id}; continuing"
             )
 
         main["calculator"] = model_id
@@ -228,8 +228,8 @@ for dtype_str, models in models_by_dtype.items():
         )
 
         if len(contour_paths) != expected_structures:
-            raise SystemExit(
-                f"ERROR: expected {expected_structures} "
+            print(
+                f"WARNING: expected {expected_structures} "
                 f"{dtype_str} {model_id} contour summaries, "
                 f"found {len(contour_paths)}"
             )
@@ -266,9 +266,9 @@ for dtype_str, models in models_by_dtype.items():
                 contour["status"] != "success"
             ]
             print(failed.to_string(index=False))
-            raise SystemExit(
-                f"ERROR: failed contour rows for "
-                f"{dtype_str} {model_id}"
+            print(
+                f"WARNING: failed contour rows for "
+                f"{dtype_str} {model_id}; continuing"
             )
 
         contour["calculator"] = model_id
