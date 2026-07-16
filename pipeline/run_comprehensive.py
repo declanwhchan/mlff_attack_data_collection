@@ -4337,6 +4337,808 @@ def force_angle_values(run_dir, before_name, after_name):
     return angles[np.isfinite(angles)], None
 
 
+def collect_mlff_ranking_values(records, value_getter):
+    rows = []
+
+    for _, row in records.iterrows():
+        value = material_ranking_value(row, value_getter)
+
+        if not np.isfinite(value):
+            continue
+
+        rows.append({
+            "calculator": row.get("calculator"),
+            "value": value,
+        })
+
+    data = pd.DataFrame(rows)
+
+    if data.empty:
+        return pd.DataFrame()
+
+    return data.dropna(subset=["calculator", "value"])
+
+
+def save_mlff_ranking_violin_plot(
+    records,
+    output_path,
+    title,
+    xlabel,
+    value_getter,
+):
+    """Create a publication-style MLFF ranking violin plot."""
+    data = collect_mlff_ranking_values(
+        records,
+        value_getter,
+    )
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    if data.empty:
+        fig, ax = plt.subplots(
+            figsize=(7.2, 3.6),
+        )
+        ax.text(
+            0.5,
+            0.5,
+            "No available data",
+            transform=ax.transAxes,
+            ha="center",
+            va="center",
+            fontsize=8,
+            color="#444444",
+        )
+        ax.set_title(
+            title,
+            loc="left",
+            fontsize=9,
+            fontweight="semibold",
+        )
+        ax.set_axis_off()
+
+        fig.savefig(
+            output_path,
+            dpi=600,
+            bbox_inches="tight",
+            facecolor="white",
+        )
+        plt.close(fig)
+        return
+
+    data = data.copy()
+    data["value"] = pd.to_numeric(
+        data["value"],
+        errors="coerce",
+    )
+    data = data.replace(
+        [np.inf, -np.inf],
+        np.nan,
+    ).dropna(
+        subset=["calculator", "value"],
+    )
+
+    summary = (
+        data.groupby(
+            "calculator",
+            sort=False,
+        )["value"]
+        .agg(
+            median="median",
+            q1=lambda values: values.quantile(0.25),
+            q3=lambda values: values.quantile(0.75),
+            count="count",
+        )
+        .reset_index()
+        .sort_values(
+            ["median", "calculator"],
+            ascending=[True, True],
+            kind="mergesort",
+        )
+    )
+
+    model_order = summary["calculator"].tolist()
+
+    violin_values = [
+        data.loc[
+            data["calculator"] == calculator,
+            "value",
+        ].to_numpy(dtype=float)
+        for calculator in model_order
+    ]
+
+    positions = np.arange(
+        len(model_order),
+        dtype=float,
+    )
+
+    figure_height = max(
+        3.8,
+        0.55 * len(model_order) + 1.55,
+    )
+
+    fig, ax = plt.subplots(
+        figsize=(7.2, figure_height),
+    )
+
+    # Draw each violin separately so constant or single-value
+    # distributions are handled without a KDE failure.
+    for position, calculator, values in zip(
+        positions,
+        model_order,
+        violin_values,
+    ):
+        values = np.asarray(
+            values,
+            dtype=float,
+        )
+        values = values[np.isfinite(values)]
+
+        if len(values) == 0:
+            continue
+
+        color = CALCULATOR_COLORS.get(
+            calculator,
+            "#777777",
+        )
+
+        value_range = float(np.ptp(values))
+        value_scale = max(
+            float(np.max(np.abs(values))),
+            1.0,
+        )
+        has_density = (
+            len(values) >= 2
+            and value_range
+            > 10.0 * np.finfo(float).eps * value_scale
+        )
+
+        if has_density:
+            violin = ax.violinplot(
+                [values],
+                positions=[position],
+                vert=False,
+                widths=0.68,
+                showmeans=False,
+                showmedians=False,
+                showextrema=False,
+                points=200,
+                bw_method="scott",
+            )
+
+            body = violin["bodies"][0]
+            body.set_facecolor(color)
+            body.set_edgecolor("#303030")
+            body.set_alpha(0.58)
+            body.set_linewidth(0.8)
+            body.set_zorder(2)
+        else:
+            ax.scatter(
+                values,
+                np.full(
+                    len(values),
+                    position,
+                ),
+                s=28,
+                facecolor=color,
+                edgecolor="#303030",
+                linewidth=0.8,
+                zorder=3,
+            )
+
+        q1, median, q3 = np.percentile(
+            values,
+            [25, 50, 75],
+        )
+        iqr = q3 - q1
+
+        if iqr > 0:
+            lower_limit = q1 - 1.5 * iqr
+            upper_limit = q3 + 1.5 * iqr
+
+            lower_values = values[
+                values >= lower_limit
+            ]
+            upper_values = values[
+                values <= upper_limit
+            ]
+
+            whisker_low = (
+                float(np.min(lower_values))
+                if len(lower_values)
+                else float(np.min(values))
+            )
+            whisker_high = (
+                float(np.max(upper_values))
+                if len(upper_values)
+                else float(np.max(values))
+            )
+        else:
+            whisker_low = float(np.min(values))
+            whisker_high = float(np.max(values))
+
+        # Tukey-style whiskers.
+        ax.hlines(
+            position,
+            whisker_low,
+            whisker_high,
+            color="#303030",
+            linewidth=1.0,
+            zorder=4,
+        )
+        ax.vlines(
+            [whisker_low, whisker_high],
+            position - 0.065,
+            position + 0.065,
+            color="#303030",
+            linewidth=1.0,
+            zorder=4,
+        )
+
+        # White IQR bar with a dark outline remains visible
+        # against every model color.
+        ax.hlines(
+            position,
+            q1,
+            q3,
+            color="#303030",
+            linewidth=5.4,
+            zorder=5,
+        )
+        ax.hlines(
+            position,
+            q1,
+            q3,
+            color="white",
+            linewidth=3.0,
+            zorder=6,
+        )
+
+        # Median.
+        ax.scatter(
+            [median],
+            [position],
+            s=25,
+            marker="o",
+            facecolor="#202020",
+            edgecolor="white",
+            linewidth=0.7,
+            zorder=7,
+        )
+
+    rank_labels = [
+        (
+            f"{rank}   "
+            f"{MODEL_LABELS.get(calculator, str(calculator))}"
+        )
+        for rank, calculator in enumerate(
+            model_order,
+            start=1,
+        )
+    ]
+
+    ax.set_yticks(positions)
+    ax.set_yticklabels(rank_labels)
+    ax.invert_yaxis()
+
+    ax.set_xlabel(
+        xlabel,
+        labelpad=7,
+    )
+    ax.set_ylabel("")
+
+    ax.set_title(
+        title,
+        loc="left",
+        fontsize=9,
+        fontweight="semibold",
+        pad=15,
+    )
+
+    ax.text(
+        1.0,
+        1.035,
+        "Lower median = better rank",
+        transform=ax.transAxes,
+        ha="right",
+        va="bottom",
+        fontsize=7,
+        color="#555555",
+    )
+
+    # Show sample sizes in a separate aligned column.
+    count_lookup = summary.set_index(
+        "calculator",
+    )["count"].to_dict()
+
+    ax.text(
+        1.012,
+        1.035,
+        "n",
+        transform=ax.transAxes,
+        ha="left",
+        va="bottom",
+        fontsize=7,
+        fontweight="semibold",
+        color="#444444",
+        clip_on=False,
+    )
+
+    for position, calculator in zip(
+        positions,
+        model_order,
+    ):
+        ax.text(
+            1.012,
+            position,
+            str(int(count_lookup[calculator])),
+            transform=ax.get_yaxis_transform(),
+            ha="left",
+            va="center",
+            fontsize=7,
+            color="#555555",
+            clip_on=False,
+        )
+
+    all_values = np.concatenate(
+        violin_values,
+    )
+    all_values = all_values[
+        np.isfinite(all_values)
+    ]
+
+    if len(all_values):
+        minimum = float(np.min(all_values))
+        maximum = float(np.max(all_values))
+
+        if minimum >= 0:
+            right_limit = (
+                maximum * 1.08
+                if maximum > 0
+                else 1.0
+            )
+            ax.set_xlim(
+                0.0,
+                right_limit,
+            )
+        else:
+            span = maximum - minimum
+            padding = (
+                0.08 * span
+                if span > 0
+                else max(abs(maximum) * 0.1, 1.0)
+            )
+            ax.set_xlim(
+                minimum - padding,
+                maximum + padding,
+            )
+
+    ax.xaxis.set_major_locator(
+        MaxNLocator(
+            nbins=6,
+            min_n_ticks=4,
+        )
+    )
+
+    scalar_formatter = ScalarFormatter(
+        useMathText=True,
+    )
+    scalar_formatter.set_powerlimits(
+        (-3, 4),
+    )
+    ax.xaxis.set_major_formatter(
+        scalar_formatter,
+    )
+
+    ax.grid(
+        True,
+        axis="x",
+        color="#D6D6D6",
+        linewidth=0.65,
+        linestyle="-",
+        alpha=0.8,
+        zorder=0,
+    )
+    ax.grid(
+        False,
+        axis="y",
+    )
+
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_color("#444444")
+    ax.spines["bottom"].set_color("#444444")
+    ax.spines["left"].set_linewidth(0.8)
+    ax.spines["bottom"].set_linewidth(0.8)
+
+    ax.tick_params(
+        axis="x",
+        direction="out",
+        length=3.5,
+        width=0.7,
+        color="#444444",
+    )
+    ax.tick_params(
+        axis="y",
+        length=0,
+        pad=7,
+    )
+
+    ax.margins(y=0.10)
+
+    fig.text(
+        0.5,
+        0.025,
+        (
+            "Violin: run-level distribution; "
+            "white bar: IQR; dot: median; "
+            "whiskers: 1.5\u00d7IQR."
+        ),
+        ha="center",
+        va="bottom",
+        fontsize=6.5,
+        color="#555555",
+    )
+
+    fig.subplots_adjust(
+        left=0.25,
+        right=0.92,
+        top=0.84,
+        bottom=0.20,
+    )
+
+    fig.savefig(
+        output_path,
+        dpi=600,
+        bbox_inches="tight",
+        facecolor="white",
+    )
+    plt.close(fig)
+
+
+def make_mlff_rankings(records, output_dir):
+    output_dir = Path(output_dir)
+
+    baseline_dir = (
+        output_dir
+        / "before_attack_after_relaxation"
+    )
+    immediate_dir = (
+        output_dir
+        / "after_attack_before_relaxation"
+    )
+    relaxed_dir = (
+        output_dir
+        / "after_attack_after_relaxation"
+    )
+
+    baseline_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    immediate_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    relaxed_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    for old_plot in output_dir.rglob("*.png"):
+        old_plot.unlink()
+
+    baseline_metrics = [
+        {
+            "filename": "convergence_steps.png",
+            "title": (
+                "MLFF ranking: relaxation steps "
+                "before attack"
+            ),
+            "xlabel": (
+                "Median initial relaxation steps"
+            ),
+            "getter": lambda row: baseline_ranking_value(
+                row,
+                "convergence_steps",
+            ),
+        },
+        {
+            "filename": "delta_force.png",
+            "title": (
+                "MLFF ranking: delta force "
+                "during relaxation before attack"
+            ),
+            "xlabel": (
+                r"Median $\Delta$ force "
+                r"(eV/$\AA$)"
+            ),
+            "getter": lambda row: baseline_ranking_value(
+                row,
+                "delta_force",
+            ),
+        },
+        {
+            "filename": "delta_force_angle.png",
+            "title": (
+                "MLFF ranking: force-vector angle "
+                "during relaxation before attack"
+            ),
+            "xlabel": (
+                "Median force-vector angle (degrees)"
+            ),
+            "getter": lambda row: baseline_ranking_value(
+                row,
+                "delta_force_angle",
+            ),
+        },
+        {
+            "filename": "displacement.png",
+            "title": (
+                "MLFF ranking: displacement "
+                "during relaxation before attack"
+            ),
+            "xlabel": (
+                r"Median displacement ($\AA$)"
+            ),
+            "getter": lambda row: baseline_ranking_value(
+                row,
+                "displacement",
+            ),
+        },
+        {
+            "filename": "neighbor_jaccard_distance.png",
+            "title": (
+                "MLFF ranking: neighbor Jaccard distance "
+                "during relaxation before attack"
+            ),
+            "xlabel": (
+                "Median neighbor Jaccard distance"
+            ),
+            "getter": lambda row: baseline_ranking_value(
+                row,
+                "neighbor_jaccard_distance",
+            ),
+        },
+        {
+            "filename": "rdf_l1_distance.png",
+            "title": (
+                "MLFF ranking: RDF L1 distance "
+                "during relaxation before attack"
+            ),
+            "xlabel": "Median RDF L1 distance",
+            "getter": lambda row: baseline_ranking_value(
+                row,
+                "rdf_l1_distance",
+            ),
+        },
+        {
+            "filename": "coordination_change.png",
+            "title": (
+                "MLFF ranking: coordination-number change "
+                "during relaxation before attack"
+            ),
+            "xlabel": (
+                "Median maximum coordination-number change"
+            ),
+            "getter": lambda row: baseline_ranking_value(
+                row,
+                "coordination_change_max",
+            ),
+        },
+    ]
+
+    immediate_metrics = [
+        {
+            "filename": "delta_force.png",
+            "title": (
+                "MLFF ranking: delta force "
+                "after attack, before relaxation"
+            ),
+            "xlabel": (
+                r"Median $\Delta$ force "
+                r"(eV/$\AA$)"
+            ),
+            "getter": lambda row: force_delta_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "perturbed_forces.csv",
+            ),
+        },
+        {
+            "filename": "delta_force_angle.png",
+            "title": (
+                "MLFF ranking: force-vector angle "
+                "after attack, before relaxation"
+            ),
+            "xlabel": "Median force-vector angle (degrees)",
+            "getter": lambda row: force_angle_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "perturbed_forces.csv",
+            ),
+        },
+        {
+            "filename": "displacement.png",
+            "title": (
+                "MLFF ranking: displacement "
+                "after attack, before relaxation"
+            ),
+            "xlabel": r"Median displacement ($\AA$)",
+            "getter": lambda row: displacement_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "perturbed_forces.csv",
+            ),
+        },
+        {
+            "filename": "neighbor_jaccard_distance.png",
+            "title": (
+                "MLFF ranking: neighbor Jaccard distance "
+                "after attack, before relaxation"
+            ),
+            "xlabel": "Median neighbor Jaccard distance",
+            "getter": lambda row: topology_scalar_values(
+                row,
+                "perturbed_neighbor_jaccard_distance",
+            ),
+        },
+        {
+            "filename": "rdf_l1_distance.png",
+            "title": (
+                "MLFF ranking: RDF L1 distance "
+                "after attack, before relaxation"
+            ),
+            "xlabel": "Median RDF L1 distance",
+            "getter": lambda row: topology_scalar_values(
+                row,
+                "perturbed_rdf_l1_distance",
+            ),
+        },
+        {
+            "filename": "coordination_change.png",
+            "title": (
+                "MLFF ranking: coordination-number change "
+                "after attack, before relaxation"
+            ),
+            "xlabel": (
+                "Median maximum coordination-number change"
+            ),
+            "getter": lambda row: topology_scalar_values(
+                row,
+                "perturbed_coordination_change_max",
+            ),
+        },
+    ]
+
+    relaxed_metrics = [
+        {
+            "filename": "convergence_steps.png",
+            "title": (
+                "MLFF ranking: relaxation steps "
+                "after attack and relaxation"
+            ),
+            "xlabel": (
+                "Median post-attack relaxation steps"
+            ),
+            "getter": lambda row: topology_scalar_values(
+                row,
+                "after_relax_steps",
+            ),
+        },
+        {
+            "filename": "delta_force.png",
+            "title": (
+                "MLFF ranking: delta force "
+                "after attack and relaxation"
+            ),
+            "xlabel": (
+                r"Median $\Delta$ force "
+                r"(eV/$\AA$)"
+            ),
+            "getter": lambda row: force_delta_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "after_forces.csv",
+            ),
+        },
+        {
+            "filename": "delta_force_angle.png",
+            "title": (
+                "MLFF ranking: force-vector angle "
+                "after attack and relaxation"
+            ),
+            "xlabel": "Median force-vector angle (degrees)",
+            "getter": lambda row: force_angle_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "after_forces.csv",
+            ),
+        },
+        {
+            "filename": "displacement.png",
+            "title": (
+                "MLFF ranking: displacement "
+                "after attack and relaxation"
+            ),
+            "xlabel": r"Median displacement ($\AA$)",
+            "getter": lambda row: displacement_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "after_forces.csv",
+            ),
+        },
+        {
+            "filename": "neighbor_jaccard_distance.png",
+            "title": (
+                "MLFF ranking: neighbor Jaccard distance "
+                "after attack and relaxation"
+            ),
+            "xlabel": "Median neighbor Jaccard distance",
+            "getter": lambda row: topology_scalar_values(
+                row,
+                "neighbor_jaccard_distance",
+            ),
+        },
+        {
+            "filename": "rdf_l1_distance.png",
+            "title": (
+                "MLFF ranking: RDF L1 distance "
+                "after attack and relaxation"
+            ),
+            "xlabel": "Median RDF L1 distance",
+            "getter": lambda row: topology_scalar_values(
+                row,
+                "rdf_l1_distance",
+            ),
+        },
+        {
+            "filename": "coordination_change.png",
+            "title": (
+                "MLFF ranking: coordination-number change "
+                "after attack and relaxation"
+            ),
+            "xlabel": (
+                "Median maximum coordination-number change"
+            ),
+            "getter": lambda row: topology_scalar_values(
+                row,
+                "coordination_change_max",
+            ),
+        },
+    ]
+
+    for metric in baseline_metrics:
+        save_mlff_ranking_violin_plot(
+            records=records,
+            output_path=baseline_dir / metric["filename"],
+            title=metric["title"],
+            xlabel=metric["xlabel"],
+            value_getter=metric["getter"],
+        )
+
+    for metric in immediate_metrics:
+        save_mlff_ranking_violin_plot(
+            records=records,
+            output_path=immediate_dir / metric["filename"],
+            title=metric["title"],
+            xlabel=metric["xlabel"],
+            value_getter=metric["getter"],
+        )
+
+    for metric in relaxed_metrics:
+        save_mlff_ranking_violin_plot(
+            records=records,
+            output_path=relaxed_dir / metric["filename"],
+            title=metric["title"],
+            xlabel=metric["xlabel"],
+            value_getter=metric["getter"],
+        )
+
+
 def make_lattice_axis_component_figures(epsilon_records, output_dir):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -5988,6 +6790,11 @@ def main():
     make_material_rankings(
         epsilon_records,
         args.output_dir / "materials_ranking",
+    )
+
+    make_mlff_rankings(
+        epsilon_records,
+        args.output_dir / "mlffs_ranking",
     )
 
     make_convergence_figure(epsilon_records, args.output_dir)
