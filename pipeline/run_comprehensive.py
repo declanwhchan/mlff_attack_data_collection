@@ -210,9 +210,11 @@ def percent_displacement_plot_x(value):
 
 
 STEP_POSITION_FACTORS = {
-    "mace": 10 ** (-0.05),
-    "uma": 1.0,
-    "chgnet": 10 ** (0.05),
+    "mace_mh": 10 ** (-0.10),
+    "uma": 10 ** (-0.05),
+    "mtp": 1.0,
+    "chgnet": 10 ** 0.05,
+    "mace_model": 10 ** 0.10,
 }
 
 STEP_BOX_WIDTH_LOG10 = 0.020
@@ -222,6 +224,22 @@ def step_plot_position(n_steps, calculator=None):
     n_steps = float(n_steps)
     if calculator is None:
         return n_steps
+    if calculator not in STEP_POSITION_FACTORS:
+        aliases = {
+            "mace_mh": "MACE-MH",
+            "mace_model": "MACE",
+            "chgnet": "CHGNet",
+            "uma": "UMA",
+            "mtp": "MTP",
+        }
+
+        calculator = aliases.get(calculator, calculator)
+
+        if calculator not in STEP_POSITION_FACTORS:
+            STEP_POSITION_FACTORS[calculator] = (
+                max(STEP_POSITION_FACTORS.values(), default=1.0) + 1.0
+            )
+
     return n_steps * STEP_POSITION_FACTORS[calculator]
 
 
@@ -2513,9 +2531,13 @@ def draw_grouped_ci(
         return False
 
     series = {
-        "mace": {"x": [], "median": [], "lower": [], "upper": []},
-        "uma": {"x": [], "median": [], "lower": [], "upper": []},
-        "chgnet": {"x": [], "median": [], "lower": [], "upper": []},
+        calculator: {
+            "x": [],
+            "median": [],
+            "lower": [],
+            "upper": [],
+        }
+        for calculator in dict.fromkeys(calculators)
     }
 
     for position, box_values, calculator in zip(positions, values, calculators):
@@ -3264,9 +3286,11 @@ def draw_grouped_ci_by_steps(ax, records, attack, epsilon, value_getter, ylabel,
         return False
 
     series = {
-        "mace": {"x": [], "median": [], "lower": [], "upper": []},
+        "mace_mh": {"x": [], "median": [], "lower": [], "upper": []},
         "uma": {"x": [], "median": [], "lower": [], "upper": []},
+        "mtp": {"x": [], "median": [], "lower": [], "upper": []},
         "chgnet": {"x": [], "median": [], "lower": [], "upper": []},
+        "mace_model": {"x": [], "median": [], "lower": [], "upper": []},
     }
 
     for position, box_values, calculator in zip(positions, values, calculators):
@@ -3807,9 +3831,11 @@ def save_material_ranking_plot(
         return np.asarray(values, dtype=float)
 
     for calculator, offset in [
-        ("mace", -bar_height),
-        ("uma", 0.0),
+        ("mace_mh", -2 * bar_height),
+        ("uma", -bar_height),
+        ("mtp", 0.0),
         ("chgnet", bar_height),
+        ("mace_model", 2 * bar_height),
     ]:
         median = column_values(
             final_indexed,
