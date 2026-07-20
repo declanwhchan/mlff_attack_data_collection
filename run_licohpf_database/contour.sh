@@ -3,7 +3,7 @@
 #SBATCH --time=2-00:00:00
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=8
-#SBATCH --array=1-700%100
+#SBATCH --array=1-700%150
 #SBATCH --output=contour-cpu-%A_%a.out
 
 set -euo pipefail
@@ -171,7 +171,7 @@ if [ "$MODEL_ID" = "mtp" ]; then
         exit 1
     fi
 
-    mlp list | head -n 3
+    mlp list >/dev/null
 fi
 
 python -u pipeline/contour.py \

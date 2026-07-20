@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH --account=rrg-j3goals
 #SBATCH --time=2-00:00:00
-#SBATCH --mem=16G
+#SBATCH --mem=32G
 #SBATCH --cpus-per-task=8
-#SBATCH --array=1-640%100
+#SBATCH --array=1-640%150
 #SBATCH --output=supercell-cpu-%A_%a.out
 
 set -euo pipefail
@@ -118,7 +118,7 @@ if [ "$MODEL_ID" = "mtp" ]; then
         exit 1
     fi
 
-    mlp list | head -n 3
+    mlp list >/dev/null
 fi
 
 export MLFF_OUTPUT_ROOT="$SUPERCELL_ROOT"

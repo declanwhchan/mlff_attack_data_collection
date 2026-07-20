@@ -3,7 +3,7 @@
 #SBATCH --time=7-00:00:00
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=8
-#SBATCH --array=1-700%100
+#SBATCH --array=1-700%150
 #SBATCH --output=main-cpu-%A_%a.out
 
 set -euo pipefail
@@ -163,7 +163,7 @@ if [ "$MODEL_ID" = "mtp" ]; then
         exit 1
     fi
 
-    mlp list | head -n 3
+    mlp list >/dev/null
 fi
 
 TASK_DIRECTORY="${SLURM_TMPDIR:-/tmp/$USER/mlff_attack_${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}}"
