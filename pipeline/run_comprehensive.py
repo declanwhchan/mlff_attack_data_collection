@@ -2653,7 +2653,7 @@ def make_ci_figure(records, output_dir, figure_name, ylabel, rows, axis_specs=No
 
                 if col_index == 0:
                     ax.text(
-                        -0.33,
+                        -0.50,
                         0.5,
                         row_title,
                         transform=ax.transAxes,
@@ -2711,7 +2711,7 @@ def make_distribution_figure(records, output_dir, figure_name, ylabel, rows, axi
 
                 if col_index == 0:
                     ax.text(
-                        -0.33,
+                        -0.50,
                         0.5,
                         row_title,
                         transform=ax.transAxes,
@@ -3016,7 +3016,7 @@ def make_whisker_span_figure(records, output_dir, figure_name, ylabel, rows, axi
 
                 if col_index == 0:
                     ax.text(
-                        -0.33,
+                        -0.50,
                         0.5,
                         row_title,
                         transform=ax.transAxes,
@@ -3159,7 +3159,7 @@ def make_whisker_span_by_steps_figure(records, output_dir, figure_name, ylabel, 
 
             if col_index == 0:
                 ax.text(
-                    -0.33,
+                    -0.50,
                     0.5,
                     row_title,
                     transform=ax.transAxes,
@@ -3376,7 +3376,7 @@ def make_ci_by_steps_figure(records, output_dir, figure_name, ylabel, rows, epsi
 
             if col_index == 0:
                 ax.text(
-                    -0.33,
+                    -0.50,
                     0.5,
                     row_title,
                     transform=ax.transAxes,
@@ -3428,7 +3428,7 @@ def make_distribution_by_steps_figure(records, output_dir, figure_name, ylabel, 
 
             if col_index == 0:
                 ax.text(
-                    -0.33,
+                    -0.50,
                     0.5,
                     row_title,
                     transform=ax.transAxes,
