@@ -3717,7 +3717,7 @@ def save_material_ranking_plot(
     comparison_getter=None,
     max_materials=20,
 ):
-    """Plot material medians with IQR error bars."""
+    """Plot ordered material medians with separated model/stage rows."""
 
     def collect_values(getter):
         rows = []
@@ -3755,15 +3755,50 @@ def save_material_ranking_plot(
             .reset_index()
         )
 
+    def material_sort_key(material_slug):
+        match = re.search(
+            r"(\d+)$",
+            str(material_slug),
+        )
+
+        if match:
+            return int(match.group(1))
+
+        return float("inf")
+
+    def column_values(table, calculator, column):
+        values = []
+
+        for material in material_order:
+            key = (material, calculator)
+
+            if key not in table.index:
+                values.append(np.nan)
+            else:
+                values.append(
+                    float(table.loc[key, column])
+                )
+
+        return np.asarray(values, dtype=float)
+
     final_summary = collect_values(value_getter)
+
     immediate_summary = (
         collect_values(comparison_getter)
         if comparison_getter is not None
         else pd.DataFrame()
     )
 
+    output_path = Path(output_path)
+    output_path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
     if final_summary.empty:
-        fig, ax = plt.subplots(figsize=(7.8, 4.5))
+        fig, ax = plt.subplots(
+            figsize=(8.0, 4.5)
+        )
         ax.text(
             0.5,
             0.5,
@@ -3783,18 +3818,18 @@ def save_material_ranking_plot(
         plt.close(fig)
         return
 
-    ranking = (
-        final_summary
-        .groupby("material_slug")["median"]
-        .median()
-        .sort_values(ascending=False)
-        .head(max_materials)
-    )
-    material_order = list(ranking.index[::-1])
+    # Always display materials numerically from 001 through 020.
+    material_order = sorted(
+        final_summary[
+            "material_slug"
+        ].dropna().unique(),
+        key=material_sort_key,
+    )[:max_materials]
 
     final_indexed = final_summary.set_index(
         ["material_slug", "calculator"]
     )
+
     immediate_indexed = (
         immediate_summary.set_index(
             ["material_slug", "calculator"]
@@ -3803,172 +3838,275 @@ def save_material_ranking_plot(
         else None
     )
 
+    available_calculators = set(
+        final_summary["calculator"]
+    )
+
+    if not immediate_summary.empty:
+        available_calculators.update(
+            immediate_summary["calculator"]
+        )
+
+    # MTP is omitted automatically when no MTP data exists,
+    # such as in the float32 results.
+    models_present = [
+        model_id
+        for model_id in MODEL_ORDER
+        if model_id in available_calculators
+    ]
+
+    has_comparison = (
+        immediate_indexed is not None
+    )
+
+    # Give every model and stage its own vertical sub-row.
+    plot_slots = []
+
+    for calculator in models_present:
+        plot_slots.append(
+            (calculator, "final")
+        )
+
+        if has_comparison:
+            plot_slots.append(
+                (calculator, "immediate")
+            )
+
+    number_slots = max(
+        len(plot_slots),
+        1,
+    )
+
+    slot_offsets = np.linspace(
+        -0.40,
+        0.40,
+        number_slots,
+    )
+
+    # Scale height with the number of model/stage rows.
+    height_per_material = (
+        0.34
+        + 0.065 * number_slots
+    )
+
     figure_height = max(
-        4.5,
-        0.34 * len(material_order) + 1.5,
+        8.0,
+        height_per_material
+        * len(material_order)
+        + 2.0,
     )
+
     fig, ax = plt.subplots(
-        figsize=(8.5, figure_height)
+        figsize=(10.5, figure_height)
     )
 
-    y = np.arange(len(material_order))
+    y = np.arange(
+        len(material_order),
+        dtype=float,
+    )
 
-    bar_height = 0.24
+    # Alternating material bands.
+    for index in range(
+        len(material_order)
+    ):
+        if index % 2 == 0:
+            ax.axhspan(
+                index - 0.5,
+                index + 0.5,
+                color="#F3F3F3",
+                zorder=0,
+            )
 
-    def column_values(table, calculator, column):
-        values = []
+    for slot_offset, (
+        calculator,
+        stage,
+    ) in zip(
+        slot_offsets,
+        plot_slots,
+    ):
+        color = CALCULATOR_COLORS[
+            calculator
+        ]
 
-        for material in material_order:
-            key = (material, calculator)
+        if stage == "final":
+            table = final_indexed
+            marker = "o"
+            facecolor = color
+            linestyle = "-"
+            line_alpha = 0.58
+            marker_size = 30
+            marker_linewidth = 0.6
+        else:
+            table = immediate_indexed
+            marker = "D"
+            facecolor = "white"
+            linestyle = ":"
+            line_alpha = 0.55
+            marker_size = 27
+            marker_linewidth = 1.1
 
-            if key not in table.index:
-                values.append(np.nan)
-            else:
-                values.append(
-                    float(table.loc[key, column])
-                )
-
-        return np.asarray(values, dtype=float)
-
-    for calculator, offset in [
-        ("mace_mh", -2 * bar_height),
-        ("uma", -bar_height),
-        ("mtp", 0.0),
-        ("chgnet", bar_height),
-        ("mace_model", 2 * bar_height),
-    ]:
         median = column_values(
-            final_indexed,
+            table,
             calculator,
             "median",
         )
         q1 = column_values(
-            final_indexed,
+            table,
             calculator,
             "q1",
         )
         q3 = column_values(
-            final_indexed,
+            table,
             calculator,
             "q3",
         )
 
-        lower_error = np.maximum(median - q1, 0.0)
-        upper_error = np.maximum(q3 - median, 0.0)
+        slot_y = y + slot_offset
 
-        ax.barh(
-            y + offset,
-            median,
-            height=bar_height,
-            color=CALCULATOR_COLORS[calculator],
-            alpha=0.78,
-            xerr=np.vstack([
-                lower_error,
-                upper_error,
-            ]),
-            error_kw={
-                "ecolor": "#222222",
-                "elinewidth": 1.0,
-                "capsize": 2.5,
-                "capthick": 1.0,
-            },
+        valid = (
+            np.isfinite(median)
+            & np.isfinite(q1)
+            & np.isfinite(q3)
         )
 
-        if immediate_indexed is None:
-            continue
-
-        immediate_median = column_values(
-            immediate_indexed,
-            calculator,
-            "median",
-        )
-        immediate_q1 = column_values(
-            immediate_indexed,
-            calculator,
-            "q1",
-        )
-        immediate_q3 = column_values(
-            immediate_indexed,
-            calculator,
-            "q3",
+        # IQR represented by a thin colored line without caps.
+        ax.hlines(
+            slot_y[valid],
+            q1[valid],
+            q3[valid],
+            color=color,
+            linewidth=1.25,
+            linestyle=linestyle,
+            alpha=line_alpha,
+            zorder=2,
         )
 
-        immediate_lower = np.maximum(
-            immediate_median - immediate_q1,
-            0.0,
-        )
-        immediate_upper = np.maximum(
-            immediate_q3 - immediate_median,
-            0.0,
-        )
-
-        ax.barh(
-            y + offset,
-            immediate_median,
-            height=bar_height * 0.68,
-            facecolor="none",
-            edgecolor=CALCULATOR_COLORS[calculator],
-            linewidth=1.5,
-            linestyle=":",
-            hatch="...",
+        # Median represented by a clearly visible marker.
+        ax.scatter(
+            median[valid],
+            slot_y[valid],
+            s=marker_size,
+            marker=marker,
+            facecolor=facecolor,
+            edgecolor=color,
+            linewidth=marker_linewidth,
+            zorder=4,
         )
 
-        ax.errorbar(
-            immediate_median,
-            y + offset,
-            xerr=np.vstack([
-                immediate_lower,
-                immediate_upper,
-            ]),
-            fmt="none",
-            ecolor=CALCULATOR_COLORS[calculator],
-            elinewidth=1.0,
-            capsize=2.5,
-            alpha=0.9,
+    model_handles = [
+        plt.Line2D(
+            [0],
+            [0],
+            marker="o",
+            linestyle="none",
+            markersize=7,
+            markerfacecolor=(
+                CALCULATOR_COLORS[
+                    model_id
+                ]
+            ),
+            markeredgecolor="white",
+            label=MODEL_LABELS[
+                model_id
+            ],
         )
-
-    legend_handles = [
-        Patch(
-            facecolor=CALCULATOR_COLORS[model_id],
-            label=MODEL_LABELS[model_id],
-        )
-        for model_id in MODEL_ORDER
+        for model_id in models_present
     ]
 
-    if comparison_getter is not None:
+    legend_handles = list(
+        model_handles
+    )
+
+    if has_comparison:
         legend_handles.extend([
-            Patch(
-                facecolor="#777777",
-                alpha=0.78,
-                label="After attack and relaxation",
+            plt.Line2D(
+                [0],
+                [0],
+                marker="o",
+                linestyle="-",
+                color="#555555",
+                markerfacecolor="#555555",
+                markersize=6,
+                label=(
+                    "After attack and relaxation"
+                ),
             ),
-            Patch(
-                facecolor="none",
-                edgecolor="#555555",
+            plt.Line2D(
+                [0],
+                [0],
+                marker="D",
                 linestyle=":",
-                hatch="...",
-                label="After attack, before relaxation",
+                color="#555555",
+                markerfacecolor="white",
+                markersize=6,
+                label=(
+                    "After attack, before relaxation"
+                ),
             ),
         ])
 
     ax.set_yticks(y)
-    ax.set_yticklabels(material_order)
+    ax.set_yticklabels(
+        material_order
+    )
+
+    # Put 001 at the top and 020 at the bottom.
+    ax.invert_yaxis()
+
     ax.set_xlabel(xlabel)
     ax.set_ylabel("Material")
-    ax.set_title(title)
-    ax.grid(True, axis="x", alpha=0.28)
-    ax.grid(False, axis="y")
+    ax.set_title(
+        title,
+        pad=12,
+    )
+
+    ax.grid(
+        True,
+        axis="x",
+        color="#D8D8D8",
+        linewidth=0.7,
+        alpha=0.7,
+    )
+    ax.grid(
+        False,
+        axis="y",
+    )
+    ax.set_axisbelow(True)
+    ax.margins(x=0.04)
+
+    ax.spines[
+        "top"
+    ].set_visible(False)
+    ax.spines[
+        "right"
+    ].set_visible(False)
+
+    # Keep the legend completely outside the plotting area.
     ax.legend(
         handles=legend_handles,
         frameon=False,
-        loc="lower right",
+        loc="upper left",
+        bbox_to_anchor=(
+            1.01,
+            1.0,
+        ),
+        borderaxespad=0.0,
     )
 
-    fig.tight_layout()
+    fig.tight_layout(
+        rect=[
+            0.0,
+            0.0,
+            0.82,
+            1.0,
+        ]
+    )
+
     fig.savefig(
         output_path,
         dpi=300,
         bbox_inches="tight",
+        facecolor="white",
     )
     plt.close(fig)
 
