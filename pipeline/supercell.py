@@ -882,17 +882,29 @@ def task_info(args):
 
 
 def combine(args):
+    """
+    Combine every available supercell summary.
+
+    Missing materials, repeats, models and rows generate warnings
+    instead of preventing the available data from being combined.
+    """
     output_root = Path(
         args.output_root
     ).resolve()
+
     summary_dir = (
         output_root / "array_summaries"
     )
 
-    require(
-        summary_dir.is_dir(),
-        f"Missing summary directory: {summary_dir}",
-    )
+    if not summary_dir.is_dir():
+        print(
+            "WARNING: missing supercell summary "
+            f"directory: {summary_dir}"
+        )
+        return
+
+    total_models = 0
+    total_rows = 0
 
     for model_id in MODEL_ORDER:
         summary_paths = sorted(
@@ -902,17 +914,34 @@ def combine(args):
             )
         )
 
-        require(
-            len(summary_paths) == 160,
-            f"Expected 160 {model_id} summary "
-            f"files, found {len(summary_paths)}",
-        )
+        if not summary_paths:
+            print(
+                f"WARNING: no supercell summary "
+                f"files for {model_id}"
+            )
+            continue
 
         combined_rows = []
         columns = []
 
         for summary_path in summary_paths:
-            rows = read_csv_rows(summary_path)
+            try:
+                rows = read_csv_rows(
+                    summary_path
+                )
+            except BaseException as error:
+                print(
+                    f"WARNING: could not read "
+                    f"{summary_path}: {error}"
+                )
+                continue
+
+            if not rows:
+                print(
+                    f"WARNING: empty supercell "
+                    f"summary: {summary_path}"
+                )
+                continue
 
             for row in rows:
                 for column in row:
@@ -923,11 +952,45 @@ def combine(args):
                 row["model_id"] = model_id
                 combined_rows.append(row)
 
-        require(
-            len(combined_rows) == 480,
-            f"Expected 480 combined {model_id} "
-            f"rows, found {len(combined_rows)}",
-        )
+        if not combined_rows:
+            print(
+                f"WARNING: no usable supercell "
+                f"rows for {model_id}"
+            )
+            continue
+
+        for required_column in [
+            "calculator",
+            "model_id",
+        ]:
+            if required_column not in columns:
+                columns.append(
+                    required_column
+                )
+
+        # If the command is rerun, retain only the newest copy of
+        # each run rather than duplicating rows.
+        if "run_id" in columns:
+            rows_by_run_id = {}
+
+            for row_number, row in enumerate(
+                combined_rows
+            ):
+                run_id = clean(
+                    row.get("run_id")
+                )
+
+                key = (
+                    run_id
+                    if run_id
+                    else f"missing_run_id_{row_number}"
+                )
+
+                rows_by_run_id[key] = row
+
+            combined_rows = list(
+                rows_by_run_id.values()
+            )
 
         output_path = (
             output_root
@@ -942,10 +1005,34 @@ def combine(args):
             columns,
         )
 
+        total_models += 1
+        total_rows += len(
+            combined_rows
+        )
+
         print(
-            f"Wrote {len(combined_rows):,} rows to "
+            f"Wrote {len(combined_rows):,} "
+            f"available {model_id} rows to "
             f"{output_path}"
         )
+
+        if (
+            len(summary_paths) < 160
+            or len(combined_rows) < 480
+        ):
+            print(
+                f"WARNING: {model_id} supercell "
+                "results are partial: "
+                f"{len(summary_paths)}/160 summary "
+                "files and "
+                f"{len(combined_rows)}/480 rows"
+            )
+
+    print(
+        "Combined available supercell data: "
+        f"{total_models} models and "
+        f"{total_rows:,} rows"
+    )
 
 
 def main():

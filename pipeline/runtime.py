@@ -442,27 +442,43 @@ def relaxation_converged(row):
 
 
 def load_summaries(summary_paths):
+    """
+    Load every available runtime summary.
+
+    Missing or empty MLFF summaries are reported and skipped.
+    At least one readable model summary is sufficient.
+    """
     frames = []
     missing = []
 
     for model_id in MODEL_ORDER:
-        path = Path(summary_paths[model_id])
+        path = Path(
+            summary_paths[model_id]
+        )
 
-        if not path.exists():
+        if not path.is_file():
             missing.append(model_id)
             print(
-                f"Warning: missing {model_id} summary: "
-                f"{path}"
+                f"WARNING: missing {model_id} "
+                f"summary: {path}"
             )
             continue
 
-        frame = pd.read_csv(path)
+        try:
+            frame = pd.read_csv(path)
+        except Exception as error:
+            missing.append(model_id)
+            print(
+                f"WARNING: unreadable {model_id} "
+                f"summary {path}: {error}"
+            )
+            continue
 
         if frame.empty:
             missing.append(model_id)
             print(
-                f"Warning: empty {model_id} summary: "
-                f"{path}"
+                f"WARNING: empty {model_id} "
+                f"summary: {path}"
             )
             continue
 
@@ -471,15 +487,10 @@ def load_summaries(summary_paths):
         frame["model_id"] = model_id
         frames.append(frame)
 
-    if missing:
-        raise SystemExit(
-            "ERROR: missing runtime summaries for: "
-            f"{sorted(missing)}"
-        )
-
     if not frames:
         raise SystemExit(
-            "ERROR: no runtime summaries were found"
+            "ERROR: no usable runtime summaries "
+            "were found"
         )
 
     records = pd.concat(
@@ -488,16 +499,28 @@ def load_summaries(summary_paths):
         sort=False,
     )
 
-    present_models = set(
-        records["calculator"].dropna()
+    if missing:
+        print(
+            "WARNING: plotting partial supercell "
+            "data; unavailable models: "
+            f"{sorted(missing)}"
+        )
+
+    present_models = sorted(
+        records["calculator"]
+        .dropna()
+        .astype(str)
+        .unique()
     )
 
-    if present_models != set(MODEL_ORDER):
-        raise SystemExit(
-            "ERROR: runtime model set is incorrect. "
-            f"Expected {sorted(MODEL_ORDER)}, "
-            f"got {sorted(present_models)}"
-        )
+    print(
+        "Supercell plots will use models: "
+        f"{present_models}"
+    )
+    print(
+        "Supercell plots will use "
+        f"{len(records)} available rows."
+    )
 
     return records
 
@@ -1390,10 +1413,12 @@ def plot_command(args):
     # Combined figures 1-7.
     make_figures_1_to_7(primary, output_dir)
 
-    make_component_figures(
-        primary,
-        output_dir / "components",
-    )
+    # Component plots are intentionally disabled to reduce the
+    # number and total size of generated image files.
+    # make_component_figures(
+    #     primary,
+    #     output_dir / "components",
+    # )
 
     make_topology_figures(
         primary,
@@ -1420,10 +1445,10 @@ def plot_command(args):
             output_dir / safe_name,
         )
 
-        make_component_figures(
-            material_data,
-            output_dir / "components" / safe_name,
-        )
+        # make_component_figures(
+        #     material_data,
+        #     output_dir / "components" / safe_name,
+        # )
 
         make_topology_figures(
             material_data,

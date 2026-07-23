@@ -441,8 +441,26 @@ def calculate_stage_metrics(row):
 
 
 def load_trials(project_root):
+    """
+    Load every readable trial.
+
+    Missing, empty or partially generated trials are recorded but do
+    not prevent plots from being generated.
+    """
     frames = []
     missing = []
+
+    required_columns = [
+        "run_id",
+        "material_slug",
+        "calculator",
+        "attack_label",
+        "epsilon",
+        "epsilon_percent_displacement",
+        "run_dir",
+        "trial",
+        "seed",
+    ]
 
     for trial_name, seed in TRIALS:
         path = (
@@ -453,13 +471,21 @@ def load_trials(project_root):
             / "combined_dataset.csv"
         )
 
+        if not path.is_file():
+            missing.append({
+                "trial": trial_name,
+                "seed": seed,
+                "reason": f"missing file: {path}",
+            })
+            continue
+
         try:
             data = pd.read_csv(path)
         except Exception as error:
             missing.append({
                 "trial": trial_name,
                 "seed": seed,
-                "reason": str(error),
+                "reason": f"unreadable dataset: {error}",
             })
             continue
 
@@ -471,27 +497,37 @@ def load_trials(project_root):
             })
             continue
 
+        data = data.copy()
         data["trial"] = trial_name
         data["seed"] = seed
         frames.append(data)
 
     if not frames:
-        raise SystemExit(
-            "ERROR: no float64 trial datasets were readable"
+        # Return an empty table with the correct schema. This allows
+        # the plotting functions to create "No matched seed data"
+        # figures instead of terminating.
+        return (
+            pd.DataFrame(
+                columns=required_columns
+            ),
+            missing,
         )
 
-    return (
-        pd.concat(
-            frames,
-            ignore_index=True,
-            sort=False,
-        ),
-        missing,
+    combined = pd.concat(
+        frames,
+        ignore_index=True,
+        sort=False,
     )
+
+    return combined, missing
 
 
 def prepare_records(records):
-    required = {
+    """
+    Prepare all usable rows without requiring every trial, material,
+    attack, epsilon or MLFF to be present.
+    """
+    required_columns = [
         "run_id",
         "material_slug",
         "calculator",
@@ -500,54 +536,39 @@ def prepare_records(records):
         "epsilon_percent_displacement",
         "run_dir",
         "seed",
-    }
+    ]
 
-    missing = sorted(
-        required - set(records.columns)
+    data = records.copy()
+
+    # Add missing columns instead of aborting.
+    for column in required_columns:
+        if column not in data.columns:
+            data[column] = np.nan
+
+    run_ids = (
+        data["run_id"]
+        .fillna("")
+        .astype(str)
     )
 
-    if missing:
-        raise SystemExit(
-            "ERROR: missing columns: "
-            + ", ".join(missing)
+    data = data[
+        ~run_ids.str.contains(
+            "_steps",
+            regex=False,
         )
-
-    data = records[
-        ~records["run_id"]
-        .astype(str)
-        .str.contains("_steps", regex=False)
     ].copy()
 
+    # Retain every valid available row. Missing models, attacks and
+    # epsilon values are allowed.
     data = data[
         data["attack_label"].isin(ATTACKS)
         & data["calculator"].isin(CALCULATORS)
     ].copy()
 
-    present_models = set(
-        data["calculator"].dropna()
-    )
-    expected_models = set(CALCULATORS)
-
-    missing_models = expected_models.difference(
-        present_models
-    )
-    unexpected_models = present_models.difference(
-        expected_models
+    data["epsilon"] = numeric(
+        data["epsilon"]
     )
 
-    if missing_models:
-        raise SystemExit(
-            "ERROR: random-seed data is missing models: "
-            f"{sorted(missing_models)}"
-        )
-
-    if unexpected_models:
-        raise SystemExit(
-            "ERROR: random-seed data contains unexpected models: "
-            f"{sorted(unexpected_models)}"
-        )
-
-    data["epsilon"] = numeric(data["epsilon"])
     data["epsilon_percent_displacement"] = numeric(
         data["epsilon_percent_displacement"]
     )
@@ -568,10 +589,44 @@ def prepare_records(records):
 
     for stage in STAGES:
         for metric in metric_names:
-            data[stage_column(stage, metric)] = [
+            column = stage_column(
+                stage,
+                metric,
+            )
+
+            data[column] = [
                 result[stage][metric]
                 for result in stage_results
             ]
+
+    present_models = sorted(
+        data["calculator"]
+        .dropna()
+        .astype(str)
+        .unique()
+    )
+
+    present_seeds = sorted(
+        pd.to_numeric(
+            data["seed"],
+            errors="coerce",
+        )
+        .dropna()
+        .astype(int)
+        .unique()
+    )
+
+    print(
+        "Random-seed plotting will use available models: "
+        f"{present_models}"
+    )
+    print(
+        "Random-seed plotting will use available seeds: "
+        f"{present_seeds}"
+    )
+    print(
+        f"Random-seed plotting will use {len(data)} valid rows."
+    )
 
     return data
 
@@ -657,16 +712,50 @@ def seed_curves(records, metric):
 
 
 def aggregate_curves(curves):
+    """
+    Aggregate every available seed.
+
+    One available seed is sufficient. The seed_count column records
+    how many seeds contributed to each point.
+    """
+    columns = [
+        "calculator",
+        "attack_label",
+        "epsilon",
+        "epsilon_percent_displacement",
+        "median",
+        "q25",
+        "q75",
+        "seed_count",
+    ]
+
+    if curves.empty:
+        return pd.DataFrame(
+            columns=columns
+        )
+
     rows = []
 
     for key, group in curves.groupby(
-        ["calculator", "attack_label", "epsilon"]
+        [
+            "calculator",
+            "attack_label",
+            "epsilon",
+        ],
+        dropna=False,
     ):
         values = numeric(
             group["value"]
         ).dropna().to_numpy(dtype=float)
 
-        if len(values) < 3:
+        if len(values) == 0:
+            continue
+
+        epsilon_percent = numeric(
+            group["epsilon_percent_displacement"]
+        ).dropna().to_numpy(dtype=float)
+
+        if len(epsilon_percent) == 0:
             continue
 
         rows.append({
@@ -674,21 +763,26 @@ def aggregate_curves(curves):
             "attack_label": key[1],
             "epsilon": float(key[2]),
             "epsilon_percent_displacement": float(
-                np.median(
-                    group["epsilon_percent_displacement"]
-                )
+                np.median(epsilon_percent)
             ),
-            "median": float(np.median(values)),
+            "median": float(
+                np.median(values)
+            ),
             "q25": float(
                 np.percentile(values, 25)
             ),
             "q75": float(
                 np.percentile(values, 75)
             ),
-            "seed_count": len(values),
+            "seed_count": int(
+                group["seed"].nunique()
+            ),
         })
 
-    return pd.DataFrame(rows)
+    return pd.DataFrame(
+        rows,
+        columns=columns,
+    )
 
 
 def cap_y_axis(ax, values):
