@@ -210,9 +210,11 @@ def percent_displacement_plot_x(value):
 
 
 STEP_POSITION_FACTORS = {
-    "mace": 10 ** (-0.05),
-    "uma": 1.0,
-    "chgnet": 10 ** (0.05),
+    "mace_mh": 10 ** (-0.10),
+    "uma": 10 ** (-0.05),
+    "mtp": 1.0,
+    "chgnet": 10 ** 0.05,
+    "mace_model": 10 ** 0.10,
 }
 
 STEP_BOX_WIDTH_LOG10 = 0.020
@@ -222,6 +224,22 @@ def step_plot_position(n_steps, calculator=None):
     n_steps = float(n_steps)
     if calculator is None:
         return n_steps
+    if calculator not in STEP_POSITION_FACTORS:
+        aliases = {
+            "mace_mh": "MACE-MH",
+            "mace_model": "MACE",
+            "chgnet": "CHGNet",
+            "uma": "UMA",
+            "mtp": "MTP",
+        }
+
+        calculator = aliases.get(calculator, calculator)
+
+        if calculator not in STEP_POSITION_FACTORS:
+            STEP_POSITION_FACTORS[calculator] = (
+                max(STEP_POSITION_FACTORS.values(), default=1.0) + 1.0
+            )
+
     return n_steps * STEP_POSITION_FACTORS[calculator]
 
 
@@ -773,9 +791,6 @@ def load_summary(summary_path, base_dir, calculator):
             "mean_displacement": as_float(row.get("mean_displacement")),
             "max_displacement": as_float(row.get("max_displacement")),
             "final_energy": as_float(row.get("final_energy")),
-            "perturbed_topology_edge_changes_csv": clean_value(
-                row.get("perturbed_topology_edge_changes_csv")
-            ),
             "perturbed_neighbor_edges_before": as_float(
                 row.get("perturbed_neighbor_edges_before")
             ),
@@ -803,7 +818,6 @@ def load_summary(summary_path, base_dir, calculator):
             "perturbed_rdf_l1_distance": as_float(
                 row.get("perturbed_rdf_l1_distance")
             ),
-            "topology_edge_changes_csv": clean_value(row.get("topology_edge_changes_csv")),
             "neighbor_edges_before": as_float(row.get("neighbor_edges_before")),
             "neighbor_edges_after": as_float(row.get("neighbor_edges_after")),
             "neighbor_edges_added": as_float(row.get("neighbor_edges_added")),
@@ -2513,9 +2527,13 @@ def draw_grouped_ci(
         return False
 
     series = {
-        "mace": {"x": [], "median": [], "lower": [], "upper": []},
-        "uma": {"x": [], "median": [], "lower": [], "upper": []},
-        "chgnet": {"x": [], "median": [], "lower": [], "upper": []},
+        calculator: {
+            "x": [],
+            "median": [],
+            "lower": [],
+            "upper": [],
+        }
+        for calculator in dict.fromkeys(calculators)
     }
 
     for position, box_values, calculator in zip(positions, values, calculators):
@@ -2631,7 +2649,7 @@ def make_ci_figure(records, output_dir, figure_name, ylabel, rows, axis_specs=No
 
                 if col_index == 0:
                     ax.text(
-                        -0.33,
+                        -0.50,
                         0.5,
                         row_title,
                         transform=ax.transAxes,
@@ -2689,7 +2707,7 @@ def make_distribution_figure(records, output_dir, figure_name, ylabel, rows, axi
 
                 if col_index == 0:
                     ax.text(
-                        -0.33,
+                        -0.50,
                         0.5,
                         row_title,
                         transform=ax.transAxes,
@@ -2994,7 +3012,7 @@ def make_whisker_span_figure(records, output_dir, figure_name, ylabel, rows, axi
 
                 if col_index == 0:
                     ax.text(
-                        -0.33,
+                        -0.50,
                         0.5,
                         row_title,
                         transform=ax.transAxes,
@@ -3137,7 +3155,7 @@ def make_whisker_span_by_steps_figure(records, output_dir, figure_name, ylabel, 
 
             if col_index == 0:
                 ax.text(
-                    -0.33,
+                    -0.50,
                     0.5,
                     row_title,
                     transform=ax.transAxes,
@@ -3264,9 +3282,11 @@ def draw_grouped_ci_by_steps(ax, records, attack, epsilon, value_getter, ylabel,
         return False
 
     series = {
-        "mace": {"x": [], "median": [], "lower": [], "upper": []},
+        "mace_mh": {"x": [], "median": [], "lower": [], "upper": []},
         "uma": {"x": [], "median": [], "lower": [], "upper": []},
+        "mtp": {"x": [], "median": [], "lower": [], "upper": []},
         "chgnet": {"x": [], "median": [], "lower": [], "upper": []},
+        "mace_model": {"x": [], "median": [], "lower": [], "upper": []},
     }
 
     for position, box_values, calculator in zip(positions, values, calculators):
@@ -3352,7 +3372,7 @@ def make_ci_by_steps_figure(records, output_dir, figure_name, ylabel, rows, epsi
 
             if col_index == 0:
                 ax.text(
-                    -0.33,
+                    -0.50,
                     0.5,
                     row_title,
                     transform=ax.transAxes,
@@ -3404,7 +3424,7 @@ def make_distribution_by_steps_figure(records, output_dir, figure_name, ylabel, 
 
             if col_index == 0:
                 ax.text(
-                    -0.33,
+                    -0.50,
                     0.5,
                     row_title,
                     transform=ax.transAxes,
@@ -3691,15 +3711,26 @@ def save_material_ranking_plot(
     xlabel,
     value_getter,
     comparison_getter=None,
+    current_label="Current / final",
+    comparison_label="Initial (before attack)",
     max_materials=20,
 ):
-    """Plot material medians with IQR error bars."""
+    """
+    Rank materials by their actual current/final median.
+
+    Rank 1 is the material with the lowest median metric value.
+    When comparison_getter is supplied, dotted lines connect each
+    initial median directly to its current/final median.
+    """
 
     def collect_values(getter):
         rows = []
 
         for _, row in records.iterrows():
-            value = material_ranking_value(row, getter)
+            value = material_ranking_value(
+                row,
+                getter,
+            )
 
             if not np.isfinite(value):
                 continue
@@ -3715,13 +3746,27 @@ def save_material_ranking_plot(
         if data.empty:
             return pd.DataFrame()
 
-        data = data.dropna(
-            subset=["material_slug", "calculator", "value"]
+        data = (
+            data.replace(
+                [np.inf, -np.inf],
+                np.nan,
+            )
+            .dropna(
+                subset=[
+                    "material_slug",
+                    "calculator",
+                    "value",
+                ]
+            )
         )
 
         return (
             data.groupby(
-                ["material_slug", "calculator"]
+                [
+                    "material_slug",
+                    "calculator",
+                ],
+                sort=False,
             )["value"]
             .agg(
                 median="median",
@@ -3731,15 +3776,38 @@ def save_material_ranking_plot(
             .reset_index()
         )
 
-    final_summary = collect_values(value_getter)
-    immediate_summary = (
+    def material_sort_key(material_slug):
+        match = re.search(
+            r"(\d+)$",
+            str(material_slug),
+        )
+
+        if match:
+            return int(match.group(1))
+
+        return float("inf")
+
+    current_summary = collect_values(
+        value_getter
+    )
+
+    initial_summary = (
         collect_values(comparison_getter)
         if comparison_getter is not None
         else pd.DataFrame()
     )
 
-    if final_summary.empty:
-        fig, ax = plt.subplots(figsize=(7.8, 4.5))
+    output_path = Path(output_path)
+    output_path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    if current_summary.empty:
+        fig, ax = plt.subplots(
+            figsize=(8.0, 4.5),
+        )
+
         ax.text(
             0.5,
             0.5,
@@ -3748,201 +3816,422 @@ def save_material_ranking_plot(
             ha="center",
             va="center",
         )
+
         ax.set_title(title)
         ax.set_axis_off()
+
         fig.tight_layout()
         fig.savefig(
             output_path,
             dpi=300,
             bbox_inches="tight",
+            facecolor="white",
         )
         plt.close(fig)
         return
 
+    # Rank materials using the median current/final value across MLFFs.
+    # The lowest median value receives rank 1.
     ranking = (
-        final_summary
-        .groupby("material_slug")["median"]
+        current_summary.groupby(
+            "material_slug",
+            sort=False,
+        )["median"]
         .median()
-        .sort_values(ascending=False)
-        .head(max_materials)
+        .rename("ranking_value")
+        .reset_index()
     )
-    material_order = list(ranking.index[::-1])
 
-    final_indexed = final_summary.set_index(
-        ["material_slug", "calculator"]
-    )
-    immediate_indexed = (
-        immediate_summary.set_index(
-            ["material_slug", "calculator"]
+    ranking["material_number"] = ranking[
+        "material_slug"
+    ].map(material_sort_key)
+
+    ranking = (
+        ranking.sort_values(
+            [
+                "ranking_value",
+                "material_number",
+                "material_slug",
+            ],
+            ascending=[
+                True,
+                True,
+                True,
+            ],
+            kind="mergesort",
         )
-        if not immediate_summary.empty
+        .head(max_materials)
+        .reset_index(drop=True)
+    )
+
+    material_order = ranking[
+        "material_slug"
+    ].tolist()
+
+    current_indexed = current_summary.set_index(
+        [
+            "material_slug",
+            "calculator",
+        ]
+    )
+
+    initial_indexed = (
+        initial_summary.set_index(
+            [
+                "material_slug",
+                "calculator",
+            ]
+        )
+        if not initial_summary.empty
         else None
     )
 
-    figure_height = max(
-        4.5,
-        0.34 * len(material_order) + 1.5,
-    )
-    fig, ax = plt.subplots(
-        figsize=(8.5, figure_height)
+    available_calculators = set(
+        current_summary["calculator"]
     )
 
-    y = np.arange(len(material_order))
+    if not initial_summary.empty:
+        available_calculators.update(
+            initial_summary["calculator"]
+        )
 
-    bar_height = 0.24
+    models_present = [
+        model_id
+        for model_id in MODEL_ORDER
+        if model_id in available_calculators
+    ]
 
-    def column_values(table, calculator, column):
+    has_comparison = (
+        initial_indexed is not None
+    )
+
+    def column_values(
+        table,
+        calculator,
+        column,
+    ):
         values = []
 
         for material in material_order:
-            key = (material, calculator)
+            key = (
+                material,
+                calculator,
+            )
 
-            if key not in table.index:
+            if table is None or key not in table.index:
                 values.append(np.nan)
             else:
+                selected = table.loc[
+                    key,
+                    column,
+                ]
+
+                if isinstance(
+                    selected,
+                    pd.Series,
+                ):
+                    selected = selected.iloc[0]
+
                 values.append(
-                    float(table.loc[key, column])
+                    float(selected)
                 )
 
-        return np.asarray(values, dtype=float)
+        return np.asarray(
+            values,
+            dtype=float,
+        )
 
-    for calculator, offset in [
-        ("mace", -bar_height),
-        ("uma", 0.0),
-        ("chgnet", bar_height),
-    ]:
-        median = column_values(
-            final_indexed,
+    number_models = max(
+        len(models_present),
+        1,
+    )
+
+    if number_models == 1:
+        model_offsets = np.asarray(
+            [0.0],
+            dtype=float,
+        )
+    else:
+        model_offsets = np.linspace(
+            -0.32,
+            0.32,
+            number_models,
+        )
+
+    figure_height = max(
+        7.0,
+        0.48 * len(material_order) + 2.0,
+    )
+
+    fig, ax = plt.subplots(
+        figsize=(10.5, figure_height),
+    )
+
+    y = np.arange(
+        len(material_order),
+        dtype=float,
+    )
+
+    # Alternating bands make individual material ranks easier to follow.
+    for index in range(
+        len(material_order)
+    ):
+        if index % 2 == 0:
+            ax.axhspan(
+                index - 0.5,
+                index + 0.5,
+                color="#F3F3F3",
+                zorder=0,
+            )
+
+    for model_offset, calculator in zip(
+        model_offsets,
+        models_present,
+    ):
+        color = CALCULATOR_COLORS.get(
+            calculator,
+            "#777777",
+        )
+
+        current_median = column_values(
+            current_indexed,
             calculator,
             "median",
         )
-        q1 = column_values(
-            final_indexed,
+        current_q1 = column_values(
+            current_indexed,
             calculator,
             "q1",
         )
-        q3 = column_values(
-            final_indexed,
+        current_q3 = column_values(
+            current_indexed,
             calculator,
             "q3",
         )
 
-        lower_error = np.maximum(median - q1, 0.0)
-        upper_error = np.maximum(q3 - median, 0.0)
+        model_y = y + model_offset
 
-        ax.barh(
-            y + offset,
-            median,
-            height=bar_height,
-            color=CALCULATOR_COLORS[calculator],
-            alpha=0.78,
-            xerr=np.vstack([
-                lower_error,
-                upper_error,
-            ]),
-            error_kw={
-                "ecolor": "#222222",
-                "elinewidth": 1.0,
-                "capsize": 2.5,
-                "capthick": 1.0,
-            },
+        current_valid = (
+            np.isfinite(current_median)
+            & np.isfinite(current_q1)
+            & np.isfinite(current_q3)
         )
 
-        if immediate_indexed is None:
-            continue
+        if has_comparison:
+            initial_median = column_values(
+                initial_indexed,
+                calculator,
+                "median",
+            )
+            initial_q1 = column_values(
+                initial_indexed,
+                calculator,
+                "q1",
+            )
+            initial_q3 = column_values(
+                initial_indexed,
+                calculator,
+                "q3",
+            )
 
-        immediate_median = column_values(
-            immediate_indexed,
-            calculator,
-            "median",
-        )
-        immediate_q1 = column_values(
-            immediate_indexed,
-            calculator,
-            "q1",
-        )
-        immediate_q3 = column_values(
-            immediate_indexed,
-            calculator,
-            "q3",
+            initial_valid = (
+                np.isfinite(initial_median)
+                & np.isfinite(initial_q1)
+                & np.isfinite(initial_q3)
+            )
+
+            paired = (
+                np.isfinite(initial_median)
+                & np.isfinite(current_median)
+            )
+
+            # Dotted before-to-after connector for every material and MLFF.
+            for initial_value, current_value, row_y in zip(
+                initial_median[paired],
+                current_median[paired],
+                model_y[paired],
+            ):
+                ax.plot(
+                    [
+                        initial_value,
+                        current_value,
+                    ],
+                    [
+                        row_y,
+                        row_y,
+                    ],
+                    color=color,
+                    linewidth=1.15,
+                    linestyle=(0, (1.5, 2.2)),
+                    alpha=0.75,
+                    zorder=1,
+                )
+
+            # Initial IQR.
+            ax.hlines(
+                model_y[initial_valid],
+                initial_q1[initial_valid],
+                initial_q3[initial_valid],
+                color=color,
+                linewidth=1.0,
+                linestyle=":",
+                alpha=0.65,
+                zorder=2,
+            )
+
+            # Initial median.
+            ax.scatter(
+                initial_median[initial_valid],
+                model_y[initial_valid],
+                s=31,
+                marker="D",
+                facecolor="white",
+                edgecolor=color,
+                linewidth=1.1,
+                zorder=4,
+            )
+
+        # Current/final IQR.
+        ax.hlines(
+            model_y[current_valid],
+            current_q1[current_valid],
+            current_q3[current_valid],
+            color=color,
+            linewidth=1.35,
+            alpha=0.8,
+            zorder=3,
         )
 
-        immediate_lower = np.maximum(
-            immediate_median - immediate_q1,
-            0.0,
-        )
-        immediate_upper = np.maximum(
-            immediate_q3 - immediate_median,
-            0.0,
-        )
-
-        ax.barh(
-            y + offset,
-            immediate_median,
-            height=bar_height * 0.68,
-            facecolor="none",
-            edgecolor=CALCULATOR_COLORS[calculator],
-            linewidth=1.5,
-            linestyle=":",
-            hatch="...",
+        # Current/final median.
+        ax.scatter(
+            current_median[current_valid],
+            model_y[current_valid],
+            s=35,
+            marker="o",
+            facecolor=color,
+            edgecolor="white",
+            linewidth=0.6,
+            zorder=5,
         )
 
-        ax.errorbar(
-            immediate_median,
-            y + offset,
-            xerr=np.vstack([
-                immediate_lower,
-                immediate_upper,
-            ]),
-            fmt="none",
-            ecolor=CALCULATOR_COLORS[calculator],
-            elinewidth=1.0,
-            capsize=2.5,
-            alpha=0.9,
+    model_handles = [
+        plt.Line2D(
+            [0],
+            [0],
+            marker="o",
+            linestyle="none",
+            markersize=7,
+            markerfacecolor=CALCULATOR_COLORS.get(
+                model_id,
+                "#777777",
+            ),
+            markeredgecolor="white",
+            label=MODEL_LABELS.get(
+                model_id,
+                str(model_id).upper(),
+            ),
         )
-
-    legend_handles = [
-        Patch(
-            facecolor=CALCULATOR_COLORS[model_id],
-            label=MODEL_LABELS[model_id],
-        )
-        for model_id in MODEL_ORDER
+        for model_id in models_present
     ]
 
-    if comparison_getter is not None:
+    legend_handles = list(
+        model_handles
+    )
+
+    if has_comparison:
         legend_handles.extend([
-            Patch(
-                facecolor="#777777",
-                alpha=0.78,
-                label="After attack and relaxation",
-            ),
-            Patch(
-                facecolor="none",
-                edgecolor="#555555",
+            plt.Line2D(
+                [0, 1],
+                [0, 0],
+                marker="D",
                 linestyle=":",
-                hatch="...",
-                label="After attack, before relaxation",
+                color="#555555",
+                markerfacecolor="white",
+                markeredgecolor="#555555",
+                markersize=6,
+                label=comparison_label,
+            ),
+            plt.Line2D(
+                [0, 1],
+                [0, 0],
+                marker="o",
+                linestyle="-",
+                color="#555555",
+                markerfacecolor="#555555",
+                markeredgecolor="white",
+                markersize=6,
+                label=current_label,
             ),
         ])
 
+    ranked_labels = [
+        f"{rank}. {material}"
+        for rank, material in enumerate(
+            material_order,
+            start=1,
+        )
+    ]
+
     ax.set_yticks(y)
-    ax.set_yticklabels(material_order)
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel("Material")
-    ax.set_title(title)
-    ax.grid(True, axis="x", alpha=0.28)
-    ax.grid(False, axis="y")
-    ax.legend(
-        handles=legend_handles,
-        frameon=False,
-        loc="lower right",
+    ax.set_yticklabels(
+        ranked_labels
     )
 
-    fig.tight_layout()
+    # Rank 1 appears at the top.
+    ax.invert_yaxis()
+
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(
+        "Actual rank and material"
+    )
+    ax.set_title(
+        title,
+        pad=12,
+    )
+
+    ax.grid(
+        True,
+        axis="x",
+        color="#D8D8D8",
+        linewidth=0.7,
+        alpha=0.7,
+    )
+    ax.grid(
+        False,
+        axis="y",
+    )
+    ax.set_axisbelow(True)
+    ax.margins(x=0.05)
+
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    if legend_handles:
+        ax.legend(
+            handles=legend_handles,
+            frameon=False,
+            loc="upper left",
+            bbox_to_anchor=(
+                1.01,
+                1.0,
+            ),
+            borderaxespad=0.0,
+        )
+
+    fig.tight_layout(
+        rect=[
+            0.0,
+            0.0,
+            0.80,
+            1.0,
+        ]
+    )
+
     fig.savefig(
         output_path,
         dpi=300,
         bbox_inches="tight",
+        facecolor="white",
     )
     plt.close(fig)
 
@@ -3951,7 +4240,12 @@ def make_material_rankings(
     records,
     output_dir,
 ):
-    """Generate seven baseline, six immediate and seven final rankings."""
+    """
+    Generate rankings ordered by their actual metric values.
+
+    Immediate and final rankings contain dotted connections from
+    the initial before-attack value to the current/final value.
+    """
     output_dir = Path(output_dir)
 
     baseline_dir = (
@@ -3980,338 +4274,236 @@ def make_material_rankings(
         exist_ok=True,
     )
 
-    # Remove stale ranking plots, including a previously generated
-    # baseline convergence ranking.
-    for old_plot in output_dir.rglob("*.png"):
+    # Remove stale plots so old 001-020 ordered plots are not retained.
+    for old_plot in output_dir.rglob(
+        "*.png"
+    ):
         old_plot.unlink()
 
-    baseline_metrics = [
-        {
-            "filename": "convergence_steps.png",
-            "title": (
-                "Material ranking: relaxation steps "
-                "before attack"
-            ),
-            "xlabel": (
-                "Median initial relaxation steps"
-            ),
-            "getter": lambda row: baseline_ranking_value(
-                row,
-                "convergence_steps",
-            ),
+    metric_specs = {
+        "convergence_steps.png": {
+            "name": "relaxation steps",
+            "xlabel": "Median relaxation steps",
+            "baseline_key": "convergence_steps",
         },
-        {
-            "filename": "delta_force.png",
-            "title": (
-                "Material ranking: delta force "
-                "during relaxation before attack"
-            ),
+        "delta_force.png": {
+            "name": "delta force",
             "xlabel": (
-                r"Median $\Delta$ force "
-                r"(eV/$\AA$)"
+                r"Median $\Delta$ force (eV/$\AA$)"
             ),
-            "getter": lambda row: baseline_ranking_value(
-                row,
-                "delta_force",
-            ),
+            "baseline_key": "delta_force",
         },
-        {
-            "filename": "delta_force_angle.png",
-            "title": (
-                "Material ranking: force-vector angle "
-                "during relaxation before attack"
-            ),
+        "delta_force_angle.png": {
+            "name": "force-vector angle",
             "xlabel": (
                 "Median force-vector angle (degrees)"
             ),
-            "getter": lambda row: baseline_ranking_value(
-                row,
-                "delta_force_angle",
-            ),
+            "baseline_key": "delta_force_angle",
         },
-        {
-            "filename": "displacement.png",
-            "title": (
-                "Material ranking: displacement "
-                "during relaxation before attack"
-            ),
+        "displacement.png": {
+            "name": "displacement",
             "xlabel": (
                 r"Median displacement ($\AA$)"
             ),
-            "getter": lambda row: baseline_ranking_value(
-                row,
-                "displacement",
-            ),
+            "baseline_key": "displacement",
         },
-        {
-            "filename": "neighbor_jaccard_distance.png",
-            "title": (
-                "Material ranking: neighbor Jaccard distance "
-                "during relaxation before attack"
-            ),
+        "neighbor_jaccard_distance.png": {
+            "name": "neighbor Jaccard distance",
             "xlabel": (
                 "Median neighbor Jaccard distance"
             ),
-            "getter": lambda row: baseline_ranking_value(
-                row,
-                "neighbor_jaccard_distance",
+            "baseline_key": (
+                "neighbor_jaccard_distance"
             ),
         },
-        {
-            "filename": "rdf_l1_distance.png",
-            "title": (
-                "Material ranking: RDF L1 distance "
-                "during relaxation before attack"
-            ),
+        "rdf_l1_distance.png": {
+            "name": "RDF L1 distance",
             "xlabel": "Median RDF L1 distance",
-            "getter": lambda row: baseline_ranking_value(
-                row,
-                "rdf_l1_distance",
-            ),
+            "baseline_key": "rdf_l1_distance",
         },
-        {
-            "filename": "coordination_change.png",
-            "title": (
-                "Material ranking: coordination-number change "
-                "during relaxation before attack"
+        "coordination_change.png": {
+            "name": (
+                "coordination-number change"
             ),
             "xlabel": (
-                "Median maximum coordination-number change"
+                "Median maximum "
+                "coordination-number change"
             ),
-            "getter": lambda row: baseline_ranking_value(
-                row,
-                "coordination_change_max",
+            "baseline_key": (
+                "coordination_change_max"
             ),
         },
-    ]
+    }
 
-    immediate_metrics = [
-        {
-            "filename": "delta_force.png",
-            "title": (
-                "Material ranking: delta force "
-                "after attack, before relaxation"
-            ),
-            "xlabel": (
-                r"Median $\Delta$ force "
-                r"(eV/$\AA$)"
-            ),
-            "getter": lambda row: force_delta_values(
+    def baseline_getter(metric_name):
+        def getter(row):
+            return baseline_ranking_value(
+                row,
+                metric_name,
+            )
+
+        return getter
+
+    immediate_getters = {
+        "delta_force.png": (
+            lambda row: force_delta_values(
                 row["run_dir"],
                 "before_forces.csv",
                 "perturbed_forces.csv",
-            ),
-        },
-        {
-            "filename": "delta_force_angle.png",
-            "title": (
-                "Material ranking: force-vector angle "
-                "after attack, before relaxation"
-            ),
-            "xlabel": "Median force-vector angle (degrees)",
-            "getter": lambda row: force_angle_values(
+            )
+        ),
+        "delta_force_angle.png": (
+            lambda row: force_angle_values(
                 row["run_dir"],
                 "before_forces.csv",
                 "perturbed_forces.csv",
-            ),
-        },
-        {
-            "filename": "displacement.png",
-            "title": (
-                "Material ranking: displacement "
-                "after attack, before relaxation"
-            ),
-            "xlabel": r"Median displacement ($\AA$)",
-            "getter": lambda row: displacement_values(
+            )
+        ),
+        "displacement.png": (
+            lambda row: displacement_values(
                 row["run_dir"],
                 "before_forces.csv",
                 "perturbed_forces.csv",
-            ),
-        },
-        {
-            "filename": "neighbor_jaccard_distance.png",
-            "title": (
-                "Material ranking: neighbor Jaccard distance "
-                "after attack, before relaxation"
-            ),
-            "xlabel": "Median neighbor Jaccard distance",
-            "getter": lambda row: topology_scalar_values(
+            )
+        ),
+        "neighbor_jaccard_distance.png": (
+            lambda row: topology_scalar_values(
                 row,
                 "perturbed_neighbor_jaccard_distance",
-            ),
-        },
-        {
-            "filename": "rdf_l1_distance.png",
-            "title": (
-                "Material ranking: RDF L1 distance "
-                "after attack, before relaxation"
-            ),
-            "xlabel": "Median RDF L1 distance",
-            "getter": lambda row: topology_scalar_values(
+            )
+        ),
+        "rdf_l1_distance.png": (
+            lambda row: topology_scalar_values(
                 row,
                 "perturbed_rdf_l1_distance",
-            ),
-        },
-        {
-            "filename": "coordination_change.png",
-            "title": (
-                "Material ranking: coordination-number change "
-                "after attack, before relaxation"
-            ),
-            "xlabel": (
-                "Median maximum coordination-number change"
-            ),
-            "getter": lambda row: topology_scalar_values(
+            )
+        ),
+        "coordination_change.png": (
+            lambda row: topology_scalar_values(
                 row,
                 "perturbed_coordination_change_max",
-            ),
-        },
-    ]
+            )
+        ),
+    }
 
-    relaxed_metrics = [
-        {
-            "filename": "convergence_steps.png",
-            "title": (
-                "Material ranking: relaxation steps "
-                "after attack and relaxation"
-            ),
-            "xlabel": (
-                "Median post-attack relaxation steps"
-            ),
-            "getter": lambda row: topology_scalar_values(
+    relaxed_getters = {
+        "convergence_steps.png": (
+            lambda row: topology_scalar_values(
                 row,
                 "after_relax_steps",
-            ),
-        },
-        {
-            "filename": "delta_force.png",
-            "title": (
-                "Material ranking: delta force "
-                "after attack and relaxation"
-            ),
-            "xlabel": (
-                r"Median $\Delta$ force "
-                r"(eV/$\AA$)"
-            ),
-            "getter": lambda row: force_delta_values(
+            )
+        ),
+        "delta_force.png": (
+            lambda row: force_delta_values(
                 row["run_dir"],
                 "before_forces.csv",
                 "after_forces.csv",
-            ),
-        },
-        {
-            "filename": "delta_force_angle.png",
-            "title": (
-                "Material ranking: force-vector angle "
-                "after attack and relaxation"
-            ),
-            "xlabel": "Median force-vector angle (degrees)",
-            "getter": lambda row: force_angle_values(
+            )
+        ),
+        "delta_force_angle.png": (
+            lambda row: force_angle_values(
                 row["run_dir"],
                 "before_forces.csv",
                 "after_forces.csv",
-            ),
-        },
-        {
-            "filename": "displacement.png",
-            "title": (
-                "Material ranking: displacement "
-                "after attack and relaxation"
-            ),
-            "xlabel": r"Median displacement ($\AA$)",
-            "getter": lambda row: displacement_values(
+            )
+        ),
+        "displacement.png": (
+            lambda row: displacement_values(
                 row["run_dir"],
                 "before_forces.csv",
                 "after_forces.csv",
-            ),
-        },
-        {
-            "filename": "neighbor_jaccard_distance.png",
-            "title": (
-                "Material ranking: neighbor Jaccard distance "
-                "after attack and relaxation"
-            ),
-            "xlabel": "Median neighbor Jaccard distance",
-            "getter": lambda row: topology_scalar_values(
+            )
+        ),
+        "neighbor_jaccard_distance.png": (
+            lambda row: topology_scalar_values(
                 row,
                 "neighbor_jaccard_distance",
-            ),
-        },
-        {
-            "filename": "rdf_l1_distance.png",
-            "title": (
-                "Material ranking: RDF L1 distance "
-                "after attack and relaxation"
-            ),
-            "xlabel": "Median RDF L1 distance",
-            "getter": lambda row: topology_scalar_values(
+            )
+        ),
+        "rdf_l1_distance.png": (
+            lambda row: topology_scalar_values(
                 row,
                 "rdf_l1_distance",
-            ),
-        },
-        {
-            "filename": "coordination_change.png",
-            "title": (
-                "Material ranking: coordination-number change "
-                "after attack and relaxation"
-            ),
-            "xlabel": (
-                "Median maximum coordination-number change"
-            ),
-            "getter": lambda row: topology_scalar_values(
+            )
+        ),
+        "coordination_change.png": (
+            lambda row: topology_scalar_values(
                 row,
                 "coordination_change_max",
-            ),
-        },
-    ]
+            )
+        ),
+    }
 
+    # Initial rankings.
+    for filename, spec in metric_specs.items():
+        getter = baseline_getter(
+            spec["baseline_key"]
+        )
 
-    for metric in baseline_metrics:
         save_material_ranking_plot(
             records=records,
             output_path=(
-                baseline_dir / metric["filename"]
+                baseline_dir / filename
             ),
-            title=metric["title"],
-            xlabel=metric["xlabel"],
-            value_getter=metric["getter"],
+            title=(
+                f"Material ranking: {spec['name']} "
+                "before attack"
+            ),
+            xlabel=spec["xlabel"],
+            value_getter=getter,
         )
 
-    for metric in immediate_metrics:
+    # Immediate rankings: initial -> after attack, before relaxation.
+    for filename, getter in immediate_getters.items():
+        spec = metric_specs[filename]
+
         save_material_ranking_plot(
             records=records,
             output_path=(
-                immediate_dir / metric["filename"]
+                immediate_dir / filename
             ),
-            title=metric["title"],
-            xlabel=metric["xlabel"],
-            value_getter=metric["getter"],
+            title=(
+                f"Material ranking: {spec['name']} "
+                "after attack, before relaxation"
+            ),
+            xlabel=spec["xlabel"],
+            value_getter=getter,
+            comparison_getter=baseline_getter(
+                spec["baseline_key"]
+            ),
+            current_label=(
+                "After attack, before relaxation"
+            ),
+            comparison_label=(
+                "Initial (before attack)"
+            ),
         )
 
-        immediate_by_filename = {
-            metric["filename"]: metric
-            for metric in immediate_metrics
-        }
+    # Final rankings: initial -> after attack and relaxation.
+    for filename, getter in relaxed_getters.items():
+        spec = metric_specs[filename]
 
-        for metric in relaxed_metrics:
-            immediate_metric = immediate_by_filename.get(
-                metric["filename"]
-            )
-
-            save_material_ranking_plot(
-                records=records,
-                output_path=(
-                    relaxed_dir / metric["filename"]
-                ),
-                title=metric["title"],
-                xlabel=metric["xlabel"],
-                value_getter=metric["getter"],
-                comparison_getter=(
-                    immediate_metric["getter"]
-                    if immediate_metric is not None
-                    else None
-                ),
-            )
+        save_material_ranking_plot(
+            records=records,
+            output_path=(
+                relaxed_dir / filename
+            ),
+            title=(
+                f"Material ranking: {spec['name']} "
+                "after attack and relaxation"
+            ),
+            xlabel=spec["xlabel"],
+            value_getter=getter,
+            comparison_getter=baseline_getter(
+                spec["baseline_key"]
+            ),
+            current_label=(
+                "After attack and relaxation"
+            ),
+            comparison_label=(
+                "Initial (before attack)"
+            ),
+        )
 
 
 COMPONENTS = ["x", "y", "z"]
@@ -4335,6 +4527,1125 @@ def force_angle_values(run_dir, before_name, after_name):
     angles[valid] = np.degrees(np.arccos(cos_theta))
 
     return angles[np.isfinite(angles)], None
+
+
+def collect_mlff_ranking_values(records, value_getter):
+    rows = []
+
+    for _, row in records.iterrows():
+        value = material_ranking_value(row, value_getter)
+
+        if not np.isfinite(value):
+            continue
+
+        rows.append({
+            "calculator": row.get("calculator"),
+            "value": value,
+        })
+
+    data = pd.DataFrame(rows)
+
+    if data.empty:
+        return pd.DataFrame()
+
+    return data.dropna(subset=["calculator", "value"])
+
+
+def save_mlff_ranking_violin_plot(
+    records,
+    output_path,
+    title,
+    xlabel,
+    value_getter,
+    log_x=False,
+):
+    """
+    Create a publication-style MLFF ranking violin plot.
+
+    When log_x is True, KDE, quartiles, whiskers and markers are
+    displayed in log10 space. Exact zeros are placed one decade below
+    the smallest positive value so they remain visible.
+    """
+    data = collect_mlff_ranking_values(
+        records,
+        value_getter,
+    )
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    data = data.copy()
+
+    if not data.empty:
+        data["value"] = pd.to_numeric(
+            data["value"],
+            errors="coerce",
+        )
+
+        data = (
+            data.replace(
+                [np.inf, -np.inf],
+                np.nan,
+            )
+            .dropna(
+                subset=[
+                    "calculator",
+                    "value",
+                ]
+            )
+        )
+
+        if log_x:
+            # Delta-force magnitudes should not be negative.
+            data = data[
+                data["value"] >= 0
+            ].copy()
+
+    if data.empty:
+        fig, ax = plt.subplots(
+            figsize=(7.2, 3.6),
+        )
+
+        ax.text(
+            0.5,
+            0.5,
+            "No available data",
+            transform=ax.transAxes,
+            ha="center",
+            va="center",
+            fontsize=8,
+            color="#444444",
+        )
+
+        ax.set_title(
+            title,
+            loc="left",
+            fontsize=9,
+            fontweight="semibold",
+        )
+
+        ax.set_axis_off()
+
+        fig.savefig(
+            output_path,
+            dpi=300,
+            bbox_inches="tight",
+            facecolor="white",
+        )
+
+        plt.close(fig)
+        return
+
+    positive_values = data.loc[
+        data["value"] > 0,
+        "value",
+    ].to_numpy(dtype=float)
+
+    if log_x:
+        if len(positive_values):
+            log_floor = max(
+                float(
+                    np.min(
+                        positive_values
+                    )
+                )
+                / 10.0,
+                np.finfo(float).tiny,
+            )
+        else:
+            log_floor = 1e-12
+    else:
+        log_floor = None
+
+    def display_values(values):
+        values = np.asarray(
+            values,
+            dtype=float,
+        )
+
+        if not log_x:
+            return values
+
+        return np.log10(
+            np.maximum(
+                values,
+                log_floor,
+            )
+        )
+
+    summary = (
+        data.groupby(
+            "calculator",
+            sort=False,
+        )["value"]
+        .agg(
+            median="median",
+            q1=lambda values:
+            values.quantile(0.25),
+            q3=lambda values:
+            values.quantile(0.75),
+            count="count",
+        )
+        .reset_index()
+        .sort_values(
+            [
+                "median",
+                "calculator",
+            ],
+            ascending=[
+                True,
+                True,
+            ],
+            kind="mergesort",
+        )
+    )
+
+    model_order = summary[
+        "calculator"
+    ].tolist()
+
+    violin_values = [
+        data.loc[
+            data["calculator"]
+            == calculator,
+            "value",
+        ].to_numpy(dtype=float)
+        for calculator in model_order
+    ]
+
+    positions = np.arange(
+        len(model_order),
+        dtype=float,
+    )
+
+    figure_height = max(
+        3.8,
+        0.55 * len(model_order) + 1.55,
+    )
+
+    fig, ax = plt.subplots(
+        figsize=(
+            7.8,
+            figure_height,
+        ),
+    )
+
+    for position, calculator, values in zip(
+        positions,
+        model_order,
+        violin_values,
+    ):
+        values = np.asarray(
+            values,
+            dtype=float,
+        )
+
+        values = values[
+            np.isfinite(values)
+        ]
+
+        if log_x:
+            values = values[
+                values >= 0
+            ]
+
+        if len(values) == 0:
+            continue
+
+        plotted_values = display_values(
+            values
+        )
+
+        color = CALCULATOR_COLORS.get(
+            calculator,
+            "#777777",
+        )
+
+        plotted_range = float(
+            np.ptp(plotted_values)
+        )
+
+        plotted_scale = max(
+            float(
+                np.max(
+                    np.abs(
+                        plotted_values
+                    )
+                )
+            ),
+            1.0,
+        )
+
+        has_density = (
+            len(plotted_values) >= 2
+            and plotted_range
+            > 10.0
+            * np.finfo(float).eps
+            * plotted_scale
+        )
+
+        if has_density:
+            violin = ax.violinplot(
+                [plotted_values],
+                positions=[position],
+                vert=False,
+                widths=0.68,
+                showmeans=False,
+                showmedians=False,
+                showextrema=False,
+                points=300,
+                bw_method="scott",
+            )
+
+            body = violin[
+                "bodies"
+            ][0]
+
+            body.set_facecolor(
+                color
+            )
+            body.set_edgecolor(
+                "#303030"
+            )
+            body.set_alpha(
+                0.58
+            )
+            body.set_linewidth(
+                0.8
+            )
+            body.set_zorder(
+                2
+            )
+        else:
+            ax.scatter(
+                plotted_values,
+                np.full(
+                    len(plotted_values),
+                    position,
+                ),
+                s=28,
+                facecolor=color,
+                edgecolor="#303030",
+                linewidth=0.8,
+                zorder=3,
+            )
+
+        q1, median, q3 = np.percentile(
+            values,
+            [
+                25,
+                50,
+                75,
+            ],
+        )
+
+        iqr = q3 - q1
+
+        if iqr > 0:
+            lower_limit = (
+                q1 - 1.5 * iqr
+            )
+            upper_limit = (
+                q3 + 1.5 * iqr
+            )
+
+            lower_values = values[
+                values >= lower_limit
+            ]
+            upper_values = values[
+                values <= upper_limit
+            ]
+
+            whisker_low = (
+                float(
+                    np.min(
+                        lower_values
+                    )
+                )
+                if len(lower_values)
+                else float(
+                    np.min(values)
+                )
+            )
+
+            whisker_high = (
+                float(
+                    np.max(
+                        upper_values
+                    )
+                )
+                if len(upper_values)
+                else float(
+                    np.max(values)
+                )
+            )
+        else:
+            whisker_low = float(
+                np.min(values)
+            )
+            whisker_high = float(
+                np.max(values)
+            )
+
+        plotted_whiskers = display_values([
+            whisker_low,
+            whisker_high,
+        ])
+
+        plotted_quartiles = display_values([
+            q1,
+            median,
+            q3,
+        ])
+
+        plotted_q1 = float(
+            plotted_quartiles[0]
+        )
+        plotted_median = float(
+            plotted_quartiles[1]
+        )
+        plotted_q3 = float(
+            plotted_quartiles[2]
+        )
+
+        ax.hlines(
+            position,
+            plotted_whiskers[0],
+            plotted_whiskers[1],
+            color="#303030",
+            linewidth=1.0,
+            zorder=4,
+        )
+
+        ax.vlines(
+            plotted_whiskers,
+            position - 0.065,
+            position + 0.065,
+            color="#303030",
+            linewidth=1.0,
+            zorder=4,
+        )
+
+        ax.hlines(
+            position,
+            plotted_q1,
+            plotted_q3,
+            color="#303030",
+            linewidth=5.4,
+            zorder=5,
+        )
+
+        ax.hlines(
+            position,
+            plotted_q1,
+            plotted_q3,
+            color="white",
+            linewidth=3.0,
+            zorder=6,
+        )
+
+        ax.scatter(
+            [plotted_median],
+            [position],
+            s=25,
+            marker="o",
+            facecolor="#202020",
+            edgecolor="white",
+            linewidth=0.7,
+            zorder=7,
+        )
+
+    rank_labels = [
+        (
+            f"{rank}   "
+            f"{MODEL_LABELS.get(calculator, str(calculator))}"
+        )
+        for rank, calculator in enumerate(
+            model_order,
+            start=1,
+        )
+    ]
+
+    ax.set_yticks(
+        positions
+    )
+    ax.set_yticklabels(
+        rank_labels
+    )
+    ax.invert_yaxis()
+
+    axis_label = xlabel
+
+    if log_x:
+        axis_label += " (log scale)"
+
+    ax.set_xlabel(
+        axis_label,
+        labelpad=7,
+    )
+
+    ax.set_ylabel("")
+
+    ax.set_title(
+        title,
+        loc="left",
+        fontsize=9,
+        fontweight="semibold",
+        pad=15,
+    )
+
+    ax.text(
+        0.92,
+        1.035,
+        "Lower median = better rank",
+        transform=ax.transAxes,
+        ha="right",
+        va="bottom",
+        fontsize=7,
+        color="#555555",
+    )
+
+    count_lookup = summary.set_index(
+        "calculator",
+    )["count"].to_dict()
+
+    ax.text(
+        1.015,
+        1.035,
+        "n",
+        transform=ax.transAxes,
+        ha="left",
+        va="bottom",
+        fontsize=7,
+        fontweight="semibold",
+        color="#444444",
+        clip_on=False,
+    )
+
+    for position, calculator in zip(
+        positions,
+        model_order,
+    ):
+        ax.text(
+            1.015,
+            position,
+            str(
+                int(
+                    count_lookup[
+                        calculator
+                    ]
+                )
+            ),
+            transform=(
+                ax.get_yaxis_transform()
+            ),
+            ha="left",
+            va="center",
+            fontsize=7,
+            color="#555555",
+            clip_on=False,
+        )
+
+    all_values = np.concatenate(
+        violin_values
+    )
+
+    all_values = all_values[
+        np.isfinite(all_values)
+    ]
+
+    if log_x:
+        all_values = all_values[
+            all_values >= 0
+        ]
+
+    plotted_all_values = display_values(
+        all_values
+    )
+
+    if len(plotted_all_values):
+        minimum = float(
+            np.min(
+                plotted_all_values
+            )
+        )
+        maximum = float(
+            np.max(
+                plotted_all_values
+            )
+        )
+
+        if log_x:
+            if maximum > minimum:
+                padding = max(
+                    0.18,
+                    0.035
+                    * (
+                        maximum
+                        - minimum
+                    ),
+                )
+            else:
+                padding = 1.0
+
+            ax.set_xlim(
+                minimum - padding,
+                maximum + padding,
+            )
+
+            first_power = int(
+                np.floor(
+                    minimum
+                )
+            )
+            last_power = int(
+                np.ceil(
+                    maximum
+                )
+            )
+
+            powers = np.arange(
+                first_power,
+                last_power + 1,
+                dtype=int,
+            )
+
+            if len(powers) > 8:
+                selected_indices = np.unique(
+                    np.round(
+                        np.linspace(
+                            0,
+                            len(powers) - 1,
+                            8,
+                        )
+                    ).astype(int)
+                )
+
+                powers = powers[
+                    selected_indices
+                ]
+
+            ax.xaxis.set_major_locator(
+                FixedLocator(
+                    powers
+                )
+            )
+
+            ax.xaxis.set_minor_locator(
+                NullLocator()
+            )
+
+            ax.xaxis.set_major_formatter(
+                FuncFormatter(
+                    lambda exponent, _:
+                    (
+                        rf"$10^{{{int(round(exponent))}}}$"
+                    )
+                )
+            )
+        else:
+            raw_minimum = float(
+                np.min(all_values)
+            )
+            raw_maximum = float(
+                np.max(all_values)
+            )
+
+            if raw_minimum >= 0:
+                right_limit = (
+                    raw_maximum * 1.08
+                    if raw_maximum > 0
+                    else 1.0
+                )
+
+                ax.set_xlim(
+                    0.0,
+                    right_limit,
+                )
+            else:
+                span = (
+                    raw_maximum
+                    - raw_minimum
+                )
+
+                padding = (
+                    0.08 * span
+                    if span > 0
+                    else max(
+                        abs(raw_maximum)
+                        * 0.1,
+                        1.0,
+                    )
+                )
+
+                ax.set_xlim(
+                    raw_minimum - padding,
+                    raw_maximum + padding,
+                )
+
+            ax.xaxis.set_major_locator(
+                MaxNLocator(
+                    nbins=6,
+                    min_n_ticks=4,
+                )
+            )
+
+            scalar_formatter = ScalarFormatter(
+                useMathText=True,
+            )
+
+            scalar_formatter.set_powerlimits(
+                (-3, 4),
+            )
+
+            ax.xaxis.set_major_formatter(
+                scalar_formatter
+            )
+
+    ax.grid(
+        True,
+        axis="x",
+        color="#D6D6D6",
+        linewidth=0.65,
+        linestyle="-",
+        alpha=0.8,
+        zorder=0,
+    )
+
+    ax.grid(
+        False,
+        axis="y",
+    )
+
+    ax.spines[
+        "top"
+    ].set_visible(False)
+
+    ax.spines[
+        "right"
+    ].set_visible(False)
+
+    ax.spines[
+        "left"
+    ].set_color("#444444")
+
+    ax.spines[
+        "bottom"
+    ].set_color("#444444")
+
+    ax.spines[
+        "left"
+    ].set_linewidth(0.8)
+
+    ax.spines[
+        "bottom"
+    ].set_linewidth(0.8)
+
+    ax.tick_params(
+        axis="x",
+        direction="out",
+        length=3.5,
+        width=0.7,
+        color="#444444",
+    )
+
+    ax.tick_params(
+        axis="y",
+        length=0,
+        pad=7,
+    )
+
+    ax.margins(
+        y=0.10
+    )
+
+    footer = (
+        "Violin: run-level distribution; "
+        "white bar: IQR; dot: median; "
+        "whiskers: 1.5×IQR."
+    )
+
+    if log_x:
+        footer += (
+            " Density is calculated in log space; "
+            f"zeros are displayed at {log_floor:.1e}."
+        )
+
+    fig.text(
+        0.5,
+        0.025,
+        footer,
+        ha="center",
+        va="bottom",
+        fontsize=6.5,
+        color="#555555",
+    )
+
+    fig.subplots_adjust(
+        left=0.25,
+        right=0.90,
+        top=0.84,
+        bottom=0.20,
+    )
+
+    fig.savefig(
+        output_path,
+        dpi=300,
+        bbox_inches="tight",
+        facecolor="white",
+    )
+
+    plt.close(fig)
+
+
+def make_mlff_rankings(records, output_dir):
+    output_dir = Path(output_dir)
+
+    baseline_dir = (
+        output_dir
+        / "before_attack_after_relaxation"
+    )
+    immediate_dir = (
+        output_dir
+        / "after_attack_before_relaxation"
+    )
+    relaxed_dir = (
+        output_dir
+        / "after_attack_after_relaxation"
+    )
+
+    baseline_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    immediate_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    relaxed_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    for old_plot in output_dir.rglob("*.png"):
+        old_plot.unlink()
+
+    baseline_metrics = [
+        {
+            "filename": "convergence_steps.png",
+            "title": (
+                "MLFF ranking: relaxation steps "
+                "before attack"
+            ),
+            "xlabel": (
+                "Median initial relaxation steps"
+            ),
+            "getter": lambda row: baseline_ranking_value(
+                row,
+                "convergence_steps",
+            ),
+        },
+        {
+            "filename": "delta_force.png",
+            "title": (
+                "MLFF ranking: delta force "
+                "during relaxation before attack"
+            ),
+            "xlabel": (
+                r"Median $\Delta$ force "
+                r"(eV/$\AA$)"
+            ),
+            "getter": lambda row: baseline_ranking_value(
+                row,
+                "delta_force",
+            ),
+        },
+        {
+            "filename": "delta_force_angle.png",
+            "title": (
+                "MLFF ranking: force-vector angle "
+                "during relaxation before attack"
+            ),
+            "xlabel": (
+                "Median force-vector angle (degrees)"
+            ),
+            "getter": lambda row: baseline_ranking_value(
+                row,
+                "delta_force_angle",
+            ),
+        },
+        {
+            "filename": "displacement.png",
+            "title": (
+                "MLFF ranking: displacement "
+                "during relaxation before attack"
+            ),
+            "xlabel": (
+                r"Median displacement ($\AA$)"
+            ),
+            "getter": lambda row: baseline_ranking_value(
+                row,
+                "displacement",
+            ),
+        },
+        {
+            "filename": "neighbor_jaccard_distance.png",
+            "title": (
+                "MLFF ranking: neighbor Jaccard distance "
+                "during relaxation before attack"
+            ),
+            "xlabel": (
+                "Median neighbor Jaccard distance"
+            ),
+            "getter": lambda row: baseline_ranking_value(
+                row,
+                "neighbor_jaccard_distance",
+            ),
+        },
+        {
+            "filename": "rdf_l1_distance.png",
+            "title": (
+                "MLFF ranking: RDF L1 distance "
+                "during relaxation before attack"
+            ),
+            "xlabel": "Median RDF L1 distance",
+            "getter": lambda row: baseline_ranking_value(
+                row,
+                "rdf_l1_distance",
+            ),
+        },
+        {
+            "filename": "coordination_change.png",
+            "title": (
+                "MLFF ranking: coordination-number change "
+                "during relaxation before attack"
+            ),
+            "xlabel": (
+                "Median maximum coordination-number change"
+            ),
+            "getter": lambda row: baseline_ranking_value(
+                row,
+                "coordination_change_max",
+            ),
+        },
+    ]
+
+    immediate_metrics = [
+        {
+            "filename": "delta_force.png",
+            "title": (
+                "MLFF ranking: delta force "
+                "after attack, before relaxation"
+            ),
+            "xlabel": (
+                r"Median $\Delta$ force "
+                r"(eV/$\AA$)"
+            ),
+            "getter": lambda row: force_delta_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "perturbed_forces.csv",
+            ),
+        },
+        {
+            "filename": "delta_force_angle.png",
+            "title": (
+                "MLFF ranking: force-vector angle "
+                "after attack, before relaxation"
+            ),
+            "xlabel": "Median force-vector angle (degrees)",
+            "getter": lambda row: force_angle_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "perturbed_forces.csv",
+            ),
+        },
+        {
+            "filename": "displacement.png",
+            "title": (
+                "MLFF ranking: displacement "
+                "after attack, before relaxation"
+            ),
+            "xlabel": r"Median displacement ($\AA$)",
+            "getter": lambda row: displacement_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "perturbed_forces.csv",
+            ),
+        },
+        {
+            "filename": "neighbor_jaccard_distance.png",
+            "title": (
+                "MLFF ranking: neighbor Jaccard distance "
+                "after attack, before relaxation"
+            ),
+            "xlabel": "Median neighbor Jaccard distance",
+            "getter": lambda row: topology_scalar_values(
+                row,
+                "perturbed_neighbor_jaccard_distance",
+            ),
+        },
+        {
+            "filename": "rdf_l1_distance.png",
+            "title": (
+                "MLFF ranking: RDF L1 distance "
+                "after attack, before relaxation"
+            ),
+            "xlabel": "Median RDF L1 distance",
+            "getter": lambda row: topology_scalar_values(
+                row,
+                "perturbed_rdf_l1_distance",
+            ),
+        },
+        {
+            "filename": "coordination_change.png",
+            "title": (
+                "MLFF ranking: coordination-number change "
+                "after attack, before relaxation"
+            ),
+            "xlabel": (
+                "Median maximum coordination-number change"
+            ),
+            "getter": lambda row: topology_scalar_values(
+                row,
+                "perturbed_coordination_change_max",
+            ),
+        },
+    ]
+
+    relaxed_metrics = [
+        {
+            "filename": "convergence_steps.png",
+            "title": (
+                "MLFF ranking: relaxation steps "
+                "after attack and relaxation"
+            ),
+            "xlabel": (
+                "Median post-attack relaxation steps"
+            ),
+            "getter": lambda row: topology_scalar_values(
+                row,
+                "after_relax_steps",
+            ),
+        },
+        {
+            "filename": "delta_force.png",
+            "title": (
+                "MLFF ranking: delta force "
+                "after attack and relaxation"
+            ),
+            "xlabel": (
+                r"Median $\Delta$ force "
+                r"(eV/$\AA$)"
+            ),
+            "getter": lambda row: force_delta_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "after_forces.csv",
+            ),
+        },
+        {
+            "filename": "delta_force_angle.png",
+            "title": (
+                "MLFF ranking: force-vector angle "
+                "after attack and relaxation"
+            ),
+            "xlabel": "Median force-vector angle (degrees)",
+            "getter": lambda row: force_angle_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "after_forces.csv",
+            ),
+        },
+        {
+            "filename": "displacement.png",
+            "title": (
+                "MLFF ranking: displacement "
+                "after attack and relaxation"
+            ),
+            "xlabel": r"Median displacement ($\AA$)",
+            "getter": lambda row: displacement_values(
+                row["run_dir"],
+                "before_forces.csv",
+                "after_forces.csv",
+            ),
+        },
+        {
+            "filename": "neighbor_jaccard_distance.png",
+            "title": (
+                "MLFF ranking: neighbor Jaccard distance "
+                "after attack and relaxation"
+            ),
+            "xlabel": "Median neighbor Jaccard distance",
+            "getter": lambda row: topology_scalar_values(
+                row,
+                "neighbor_jaccard_distance",
+            ),
+        },
+        {
+            "filename": "rdf_l1_distance.png",
+            "title": (
+                "MLFF ranking: RDF L1 distance "
+                "after attack and relaxation"
+            ),
+            "xlabel": "Median RDF L1 distance",
+            "getter": lambda row: topology_scalar_values(
+                row,
+                "rdf_l1_distance",
+            ),
+        },
+        {
+            "filename": "coordination_change.png",
+            "title": (
+                "MLFF ranking: coordination-number change "
+                "after attack and relaxation"
+            ),
+            "xlabel": (
+                "Median maximum coordination-number change"
+            ),
+            "getter": lambda row: topology_scalar_values(
+                row,
+                "coordination_change_max",
+            ),
+        },
+    ]
+
+    for metric in baseline_metrics:
+        save_mlff_ranking_violin_plot(
+            records=records,
+            output_path=baseline_dir / metric["filename"],
+            title=metric["title"],
+            xlabel=metric["xlabel"],
+            value_getter=metric["getter"],
+        )
+
+    for metric in immediate_metrics:
+        save_mlff_ranking_violin_plot(
+            records=records,
+            output_path=(
+                immediate_dir
+                / metric["filename"]
+            ),
+            title=metric["title"],
+            xlabel=metric["xlabel"],
+            value_getter=metric["getter"],
+            log_x=(
+                metric["filename"]
+                == "delta_force.png"
+            ),
+        )
+
+    for metric in relaxed_metrics:
+        save_mlff_ranking_violin_plot(
+            records=records,
+            output_path=relaxed_dir / metric["filename"],
+            title=metric["title"],
+            xlabel=metric["xlabel"],
+            value_getter=metric["getter"],
+        )
 
 
 def make_lattice_axis_component_figures(epsilon_records, output_dir):
@@ -5600,11 +6911,13 @@ def make_topology_figures(records, output_dir):
             material_output_dir,
         )
 
-        if not material_epsilon_records.empty:
-            make_topology_lattice_axis_component_figures(
-                material_epsilon_records,
-                material_output_dir,
-            )
+        # Component plots are intentionally disabled to reduce the
+        # number and total size of generated image files.
+        # if not material_epsilon_records.empty:
+        #     make_topology_lattice_axis_component_figures(
+        #         material_epsilon_records,
+        #         material_output_dir,
+        #     )
 
 
 def make_space_group_figures(records, output_dir):
@@ -5990,16 +7303,23 @@ def main():
         args.output_dir / "materials_ranking",
     )
 
+    make_mlff_rankings(
+        epsilon_records,
+        args.output_dir / "mlffs_ranking",
+    )
+
     make_convergence_figure(epsilon_records, args.output_dir)
-    make_lattice_axis_component_figures(
-        epsilon_records,
-        args.output_dir / "components",
-    )
+    # Component plots are intentionally disabled to reduce the
+    # number and total size of generated image files.
+    # make_lattice_axis_component_figures(
+    #     epsilon_records,
+    #     args.output_dir / "components",
+    # )
     make_topology_metric_figure_set(epsilon_records, n_step_records, args.output_dir / "topology")
-    make_topology_lattice_axis_component_figures(
-        epsilon_records,
-        args.output_dir / "topology",
-    )
+    # make_topology_lattice_axis_component_figures(
+    #     epsilon_records,
+    #     args.output_dir / "topology",
+    # )
     make_outlier_reports(records, args.output_dir / "outliers")
 
     force_missing = make_distribution_figure(

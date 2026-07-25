@@ -184,16 +184,50 @@ def run_relaxation_and_save_data(
         verbose=True,
     )
 
-    if not success:
-        raise RuntimeError(f"Relaxation failed for {traj_path.name}")
-
     trajectory = load_trajectory(traj_path)
-    if trajectory is None:
+
+    if trajectory is None or len(trajectory) == 0:
         raise RuntimeError(f"Could not load {traj_path}")
 
     steps, energies, max_forces, volumes = (
         extract_trajectory_data(trajectory)
     )
+
+    if len(steps) == 0:
+        raise RuntimeError(
+            f"No relaxation frames were saved for {traj_path.name}"
+        )
+
+    steps = np.asarray(steps).copy()
+
+    if not success:
+        maximum_steps = int(max_steps)
+        final_recorded_step = int(steps[-1])
+        trajectory_steps = max(
+            0,
+            len(trajectory) - 1,
+        )
+        completed_steps = max(
+            final_recorded_step,
+            trajectory_steps,
+        )
+
+        if completed_steps < maximum_steps:
+            raise RuntimeError(
+                f"Relaxation failed for {traj_path.name} "
+                f"after {completed_steps} of {maximum_steps} steps"
+            )
+
+        # Reaching the optimizer limit is a valid nonconverged result,
+        # not a failed calculation. Store the configured maximum so
+        # rankings and convergence plots retain this run as 300 steps.
+        steps[-1] = maximum_steps
+
+        print(
+            f"WARNING: {traj_path.name} did not converge; "
+            f"recording the maximum {maximum_steps} steps "
+            "and continuing from the final trajectory frame"
+        )
 
     data_path = output_dir / f"{traj_path.stem}_data.csv"
 
@@ -456,8 +490,6 @@ def rdf_l1_distance(before_atoms, after_atoms, r_max=6.0, bins=60):
 def topology_change_metrics(
     before_atoms,
     after_atoms,
-    output_dir,
-    edge_changes_filename="topology_edge_changes.csv",
 ):
     before_edges = neighbor_edge_set(before_atoms)
     after_edges = neighbor_edge_set(after_atoms)
@@ -473,23 +505,7 @@ def topology_change_metrics(
         for atom in sorted(set(before_coord) | set(after_coord))
     ]
 
-    edge_changes_csv = Path(output_dir) / edge_changes_filename
-    edge_rows = [
-        {"change": "added", "edge": "-".join(edge)}
-        for edge in sorted(added_edges)
-    ]
-    edge_rows.extend(
-        {"change": "removed", "edge": "-".join(edge)}
-        for edge in sorted(removed_edges)
-    )
-
-    pd.DataFrame(
-        edge_rows,
-        columns=["change", "edge"],
-    ).to_csv(edge_changes_csv, index=False)
-
     return {
-        "topology_edge_changes_csv": str(edge_changes_csv),
         "neighbor_edges_before": len(before_edges),
         "neighbor_edges_after": len(after_edges),
         "neighbor_edges_added": len(added_edges),
@@ -772,8 +788,6 @@ def run_one(row):
     perturbed_topology = topology_change_metrics(
         relaxed_atoms,
         perturbed_atoms,
-        output_dir,
-        edge_changes_filename="topology_edge_changes_perturbed.csv",
     )
 
     perturbed_topology = {
@@ -787,8 +801,6 @@ def run_one(row):
     final_topology = topology_change_metrics(
         relaxed_atoms,
         attack_relaxed_atoms,
-        output_dir,
-        edge_changes_filename="topology_edge_changes.csv",
     )
 
     original_positions = relaxed_atoms.get_positions()

@@ -441,8 +441,26 @@ def calculate_stage_metrics(row):
 
 
 def load_trials(project_root):
+    """
+    Load every readable trial.
+
+    Missing, empty or partially generated trials are recorded but do
+    not prevent plots from being generated.
+    """
     frames = []
     missing = []
+
+    required_columns = [
+        "run_id",
+        "material_slug",
+        "calculator",
+        "attack_label",
+        "epsilon",
+        "epsilon_percent_displacement",
+        "run_dir",
+        "trial",
+        "seed",
+    ]
 
     for trial_name, seed in TRIALS:
         path = (
@@ -453,13 +471,21 @@ def load_trials(project_root):
             / "combined_dataset.csv"
         )
 
+        if not path.is_file():
+            missing.append({
+                "trial": trial_name,
+                "seed": seed,
+                "reason": f"missing file: {path}",
+            })
+            continue
+
         try:
             data = pd.read_csv(path)
         except Exception as error:
             missing.append({
                 "trial": trial_name,
                 "seed": seed,
-                "reason": str(error),
+                "reason": f"unreadable dataset: {error}",
             })
             continue
 
@@ -471,27 +497,37 @@ def load_trials(project_root):
             })
             continue
 
+        data = data.copy()
         data["trial"] = trial_name
         data["seed"] = seed
         frames.append(data)
 
     if not frames:
-        raise SystemExit(
-            "ERROR: no float64 trial datasets were readable"
+        # Return an empty table with the correct schema. This allows
+        # the plotting functions to create "No matched seed data"
+        # figures instead of terminating.
+        return (
+            pd.DataFrame(
+                columns=required_columns
+            ),
+            missing,
         )
 
-    return (
-        pd.concat(
-            frames,
-            ignore_index=True,
-            sort=False,
-        ),
-        missing,
+    combined = pd.concat(
+        frames,
+        ignore_index=True,
+        sort=False,
     )
+
+    return combined, missing
 
 
 def prepare_records(records):
-    required = {
+    """
+    Prepare all usable rows without requiring every trial, material,
+    attack, epsilon or MLFF to be present.
+    """
+    required_columns = [
         "run_id",
         "material_slug",
         "calculator",
@@ -500,54 +536,39 @@ def prepare_records(records):
         "epsilon_percent_displacement",
         "run_dir",
         "seed",
-    }
+    ]
 
-    missing = sorted(
-        required - set(records.columns)
+    data = records.copy()
+
+    # Add missing columns instead of aborting.
+    for column in required_columns:
+        if column not in data.columns:
+            data[column] = np.nan
+
+    run_ids = (
+        data["run_id"]
+        .fillna("")
+        .astype(str)
     )
 
-    if missing:
-        raise SystemExit(
-            "ERROR: missing columns: "
-            + ", ".join(missing)
+    data = data[
+        ~run_ids.str.contains(
+            "_steps",
+            regex=False,
         )
-
-    data = records[
-        ~records["run_id"]
-        .astype(str)
-        .str.contains("_steps", regex=False)
     ].copy()
 
+    # Retain every valid available row. Missing models, attacks and
+    # epsilon values are allowed.
     data = data[
         data["attack_label"].isin(ATTACKS)
         & data["calculator"].isin(CALCULATORS)
     ].copy()
 
-    present_models = set(
-        data["calculator"].dropna()
-    )
-    expected_models = set(CALCULATORS)
-
-    missing_models = expected_models.difference(
-        present_models
-    )
-    unexpected_models = present_models.difference(
-        expected_models
+    data["epsilon"] = numeric(
+        data["epsilon"]
     )
 
-    if missing_models:
-        raise SystemExit(
-            "ERROR: random-seed data is missing models: "
-            f"{sorted(missing_models)}"
-        )
-
-    if unexpected_models:
-        raise SystemExit(
-            "ERROR: random-seed data contains unexpected models: "
-            f"{sorted(unexpected_models)}"
-        )
-
-    data["epsilon"] = numeric(data["epsilon"])
     data["epsilon_percent_displacement"] = numeric(
         data["epsilon_percent_displacement"]
     )
@@ -568,10 +589,44 @@ def prepare_records(records):
 
     for stage in STAGES:
         for metric in metric_names:
-            data[stage_column(stage, metric)] = [
+            column = stage_column(
+                stage,
+                metric,
+            )
+
+            data[column] = [
                 result[stage][metric]
                 for result in stage_results
             ]
+
+    present_models = sorted(
+        data["calculator"]
+        .dropna()
+        .astype(str)
+        .unique()
+    )
+
+    present_seeds = sorted(
+        pd.to_numeric(
+            data["seed"],
+            errors="coerce",
+        )
+        .dropna()
+        .astype(int)
+        .unique()
+    )
+
+    print(
+        "Random-seed plotting will use available models: "
+        f"{present_models}"
+    )
+    print(
+        "Random-seed plotting will use available seeds: "
+        f"{present_seeds}"
+    )
+    print(
+        f"Random-seed plotting will use {len(data)} valid rows."
+    )
 
     return data
 
@@ -657,16 +712,50 @@ def seed_curves(records, metric):
 
 
 def aggregate_curves(curves):
+    """
+    Aggregate every available seed.
+
+    One available seed is sufficient. The seed_count column records
+    how many seeds contributed to each point.
+    """
+    columns = [
+        "calculator",
+        "attack_label",
+        "epsilon",
+        "epsilon_percent_displacement",
+        "median",
+        "q25",
+        "q75",
+        "seed_count",
+    ]
+
+    if curves.empty:
+        return pd.DataFrame(
+            columns=columns
+        )
+
     rows = []
 
     for key, group in curves.groupby(
-        ["calculator", "attack_label", "epsilon"]
+        [
+            "calculator",
+            "attack_label",
+            "epsilon",
+        ],
+        dropna=False,
     ):
         values = numeric(
             group["value"]
         ).dropna().to_numpy(dtype=float)
 
-        if len(values) < 3:
+        if len(values) == 0:
+            continue
+
+        epsilon_percent = numeric(
+            group["epsilon_percent_displacement"]
+        ).dropna().to_numpy(dtype=float)
+
+        if len(epsilon_percent) == 0:
             continue
 
         rows.append({
@@ -674,38 +763,183 @@ def aggregate_curves(curves):
             "attack_label": key[1],
             "epsilon": float(key[2]),
             "epsilon_percent_displacement": float(
-                np.median(
-                    group["epsilon_percent_displacement"]
-                )
+                np.median(epsilon_percent)
             ),
-            "median": float(np.median(values)),
+            "median": float(
+                np.median(values)
+            ),
             "q25": float(
                 np.percentile(values, 25)
             ),
             "q75": float(
                 np.percentile(values, 75)
             ),
-            "seed_count": len(values),
+            "seed_count": int(
+                group["seed"].nunique()
+            ),
         })
 
-    return pd.DataFrame(rows)
+    return pd.DataFrame(
+        rows,
+        columns=columns,
+    )
 
 
-def cap_y_axis(ax, values):
-    values = np.asarray(values, dtype=float)
-    values = values[np.isfinite(values)]
+def configure_y_axis(
+    ax,
+    values,
+    scale="linear",
+):
+    """
+    Configure robust y-axis scaling.
+
+    symlog is used for force metrics because it supports zero while
+    still displaying values spanning many orders of magnitude.
+    """
+    values = np.asarray(
+        values,
+        dtype=float,
+    )
+
+    values = values[
+        np.isfinite(values)
+    ]
+
+    if scale == "symlog":
+        nonzero = np.abs(
+            values[values != 0]
+        )
+
+        if len(nonzero):
+            linthresh = max(
+                float(
+                    np.percentile(
+                        nonzero,
+                        10,
+                    )
+                ),
+                float(np.max(nonzero)) * 1e-8,
+                1e-12,
+            )
+        else:
+            linthresh = 1e-12
+
+        ax.set_yscale(
+            "symlog",
+            linthresh=linthresh,
+            linscale=1.0,
+            base=10,
+        )
+
+        if len(values):
+            minimum = float(
+                np.min(values)
+            )
+            maximum = float(
+                np.max(values)
+            )
+
+            if minimum >= 0:
+                if maximum > 0:
+                    ax.set_ylim(
+                        0,
+                        maximum * 1.12,
+                    )
+                else:
+                    ax.set_ylim(
+                        -1,
+                        1,
+                    )
+            else:
+                limit = max(
+                    abs(minimum),
+                    abs(maximum),
+                )
+
+                if limit > 0:
+                    ax.set_ylim(
+                        -1.12 * limit,
+                        1.12 * limit,
+                    )
+
+        ax.axhline(
+            0,
+            color="#888888",
+            linewidth=0.65,
+            alpha=0.45,
+            zorder=0,
+        )
+        return
+
+    if scale == "log":
+        positive = values[
+            values > 0
+        ]
+
+        ax.set_yscale(
+            "log",
+            nonpositive="mask",
+        )
+
+        if len(positive):
+            low = float(
+                np.min(positive)
+            )
+            high = float(
+                np.max(positive)
+            )
+
+            if high > low:
+                ax.set_ylim(
+                    low / 1.25,
+                    high * 1.25,
+                )
+
+        return
 
     if len(values) == 0:
         return
 
-    low = min(
-        0.0,
-        float(np.percentile(values, 1)),
+    low = float(
+        np.percentile(
+            values,
+            0.5,
+        )
     )
-    high = float(np.percentile(values, 99))
+    high = float(
+        np.percentile(
+            values,
+            99.5,
+        )
+    )
+
+    if np.min(values) >= 0:
+        low = 0.0
+    else:
+        low = min(
+            0.0,
+            low,
+        )
 
     if high > low:
-        padding = 0.08 * (high - low)
+        padding = 0.07 * (
+            high - low
+        )
+
+        ax.set_ylim(
+            low - (
+                0.0
+                if low == 0
+                else padding
+            ),
+            high + padding,
+        )
+    elif high == low:
+        padding = max(
+            abs(high) * 0.1,
+            1e-8,
+        )
+
         ax.set_ylim(
             low - padding,
             high + padding,
@@ -717,51 +951,130 @@ def draw_metric_panel(
     records,
     metric,
     attack,
+    y_scale="linear",
 ):
-    curves = seed_curves(records, metric)
+    curves = seed_curves(
+        records,
+        metric,
+    )
+
     curves = curves[
         curves["attack_label"] == attack
-    ]
+    ].copy()
 
-    aggregate = aggregate_curves(curves)
+    aggregate = aggregate_curves(
+        curves
+    )
+
     plotted = []
 
     for calculator in CALCULATORS:
         calculator_curves = curves[
-            curves["calculator"] == calculator
+            curves["calculator"]
+            == calculator
         ]
-        color = COLORS[calculator]
 
-        for seed, seed_data in calculator_curves.groupby(
-            "seed"
-        ):
-            seed_data = seed_data.sort_values(
-                "epsilon"
+        if calculator_curves.empty:
+            continue
+
+        color = COLORS.get(
+            calculator,
+            "#777777",
+        )
+
+        for seed, seed_data in (
+            calculator_curves.groupby(
+                "seed"
             )
-            linestyle, marker = SEED_STYLES[
-                int(seed)
-            ]
+        ):
+            seed_data = (
+                seed_data.sort_values(
+                    "epsilon"
+                )
+                .replace(
+                    [np.inf, -np.inf],
+                    np.nan,
+                )
+                .dropna(
+                    subset=[
+                        "epsilon_percent_displacement",
+                        "value",
+                    ]
+                )
+            )
 
-            ax.plot(
+            seed_data = seed_data[
                 seed_data[
                     "epsilon_percent_displacement"
-                ],
-                seed_data["value"],
+                ] > 0
+            ]
+
+            if seed_data.empty:
+                continue
+
+            seed_number = int(
+                seed
+            )
+
+            linestyle, marker = (
+                SEED_STYLES.get(
+                    seed_number,
+                    ("-", "o"),
+                )
+            )
+
+            x = seed_data[
+                "epsilon_percent_displacement"
+            ].to_numpy(dtype=float)
+
+            y = seed_data[
+                "value"
+            ].to_numpy(dtype=float)
+
+            ax.plot(
+                x,
+                y,
                 color=color,
                 linestyle=linestyle,
                 marker=marker,
-                markersize=2.5,
-                linewidth=0.85,
-                alpha=0.42,
+                markersize=2.6,
+                markeredgewidth=0.3,
+                linewidth=0.9,
+                alpha=0.38,
+                zorder=2,
             )
 
             plotted.extend(
-                seed_data["value"].tolist()
+                y.tolist()
             )
 
         summary = aggregate[
-            aggregate["calculator"] == calculator
-        ].sort_values("epsilon")
+            aggregate["calculator"]
+            == calculator
+        ].sort_values(
+            "epsilon"
+        )
+
+        summary = (
+            summary.replace(
+                [np.inf, -np.inf],
+                np.nan,
+            )
+            .dropna(
+                subset=[
+                    "epsilon_percent_displacement",
+                    "median",
+                    "q25",
+                    "q75",
+                ]
+            )
+        )
+
+        summary = summary[
+            summary[
+                "epsilon_percent_displacement"
+            ] > 0
+        ]
 
         if summary.empty:
             continue
@@ -774,20 +1087,40 @@ def draw_metric_panel(
             "median"
         ].to_numpy(dtype=float)
 
+        q25 = summary[
+            "q25"
+        ].to_numpy(dtype=float)
+
+        q75 = summary[
+            "q75"
+        ].to_numpy(dtype=float)
+
         ax.fill_between(
             x,
-            summary["q25"].to_numpy(dtype=float),
-            summary["q75"].to_numpy(dtype=float),
+            q25,
+            q75,
             color=color,
-            alpha=0.15,
+            alpha=0.14,
             linewidth=0,
+            zorder=1,
         )
 
         ax.plot(
             x,
             center,
             color=color,
-            linewidth=2.2,
+            linewidth=2.25,
+            zorder=4,
+        )
+
+        plotted.extend(
+            center.tolist()
+        )
+        plotted.extend(
+            q25.tolist()
+        )
+        plotted.extend(
+            q75.tolist()
         )
 
     if not plotted:
@@ -798,30 +1131,86 @@ def draw_metric_panel(
             transform=ax.transAxes,
             ha="center",
             va="center",
+            color="#555555",
         )
 
     positive_x = numeric(
-        curves["epsilon_percent_displacement"]
+        curves[
+            "epsilon_percent_displacement"
+        ]
     ).dropna()
 
-    if (positive_x > 0).any():
-        ax.set_xscale("log")
+    positive_x = positive_x[
+        positive_x > 0
+    ]
 
-    cap_y_axis(ax, plotted)
-    ax.set_title(attack)
-    ax.grid(True, alpha=0.25)
+    if len(positive_x):
+        ax.set_xscale(
+            "log"
+        )
+
+    configure_y_axis(
+        ax,
+        plotted,
+        scale=y_scale,
+    )
+
+    ax.set_title(
+        attack,
+        pad=7,
+    )
+
+    ax.grid(
+        True,
+        which="major",
+        alpha=0.24,
+        linewidth=0.7,
+    )
+
+    ax.grid(
+        True,
+        which="minor",
+        alpha=0.08,
+        linewidth=0.45,
+    )
+
+    ax.tick_params(
+        axis="both",
+        labelsize=8,
+    )
 
 
-def figure_legend():
+def figure_legend(records):
+    present_calculators = set(
+        records["calculator"]
+        .dropna()
+        .astype(str)
+    )
+
+    present_seeds = set(
+        pd.to_numeric(
+            records["seed"],
+            errors="coerce",
+        )
+        .dropna()
+        .astype(int)
+    )
+
     handles = [
         Line2D(
             [0],
             [0],
-            color=COLORS[calculator],
-            linewidth=2.5,
-            label=model_label(calculator),
+            color=COLORS.get(
+                calculator,
+                "#777777",
+            ),
+            linewidth=2.7,
+            label=model_label(
+                calculator
+            ),
         )
         for calculator in CALCULATORS
+        if calculator in present_calculators
     ]
 
     handles.extend(
@@ -829,24 +1218,33 @@ def figure_legend():
             [0],
             [0],
             color="#555555",
-            linestyle=SEED_STYLES[seed][0],
-            marker=SEED_STYLES[seed][1],
+            linestyle=SEED_STYLES.get(
+                seed,
+                ("-", "o"),
+            )[0],
+            marker=SEED_STYLES.get(
+                seed,
+                ("-", "o"),
+            )[1],
             markersize=4,
             linewidth=1,
             label=f"Seed {seed}",
         )
-        for seed in sorted(SEED_STYLES)
-    )
-
-    handles.append(
-        Line2D(
-            [0],
-            [0],
-            color="#333333",
-            linewidth=2.5,
-            label="Cross-seed median",
+        for seed in sorted(
+            present_seeds
         )
     )
+
+    if present_seeds:
+        handles.append(
+            Line2D(
+                [0],
+                [0],
+                color="#333333",
+                linewidth=2.7,
+                label="Available-seed median",
+            )
+        )
 
     return handles
 
@@ -856,86 +1254,161 @@ def make_metric_figure(
     metrics,
     output_path,
     title,
-    log_panels=None,
+    panel_scales=None,
 ):
-    log_panels = set(log_panels or [])
+    """
+    Create a 3x3 random-seed figure.
+
+    panel_scales maps panel letters to "linear", "log" or "symlog".
+    Force panels should use symlog because force changes can contain
+    both exact zeros and extremely large finite values.
+    """
+    panel_scales = dict(
+        panel_scales or {}
+    )
+
     fig, axes = plt.subplots(
         3,
         3,
-        figsize=(13.2, 10),
+        figsize=(14.5, 10.4),
         squeeze=False,
     )
 
-    for row, (metric, ylabel) in enumerate(metrics):
-        for column, attack in enumerate(ATTACKS):
-            ax = axes[row, column]
+    for row, (
+        metric,
+        ylabel,
+    ) in enumerate(metrics):
+        for column, attack in enumerate(
+            ATTACKS
+        ):
+            ax = axes[
+                row,
+                column,
+            ]
+
+            panel_label = chr(
+                ord("A")
+                + row * 3
+                + column
+            )
 
             draw_metric_panel(
                 ax,
                 records,
                 metric,
                 attack,
+                y_scale=panel_scales.get(
+                    panel_label,
+                    "linear",
+                ),
             )
-
-            panel_label = chr(
-                ord("A") + row * 3 + column
-            )
-
-            if panel_label in log_panels:
-                ax.set_yscale("log", nonpositive="clip")
 
             if column == 0:
-                ax.set_ylabel(ylabel)
+                ax.set_ylabel(
+                    ylabel,
+                    labelpad=7,
+                )
 
             if row == 2:
                 ax.set_xlabel(
-                    "Epsilon (% minimum lattice length)"
+                    "Epsilon "
+                    "(% minimum lattice length)",
+                    labelpad=6,
                 )
 
+            # Keep panel labels inside the axes so they cannot collide
+            # with y-axis labels or scientific-notation offset text.
             ax.text(
-                -0.11,
-                1.05,
+                0.018,
+                0.965,
                 panel_label,
                 transform=ax.transAxes,
-                fontweight="bold",
+                ha="left",
                 va="top",
+                fontsize=9,
+                fontweight="bold",
+                color="#111111",
+                bbox={
+                    "facecolor": "white",
+                    "edgecolor": "none",
+                    "alpha": 0.82,
+                    "pad": 1.5,
+                },
+                zorder=10,
             )
 
-    fig.legend(
-        handles=figure_legend(),
-        loc="upper center",
-        ncol=5,
-        frameon=False,
-        bbox_to_anchor=(0.5, 0.985),
+    legend_handles = figure_legend(
+        records
     )
+
+    if legend_handles:
+        fig.legend(
+            handles=legend_handles,
+            loc="upper center",
+            ncol=5,
+            frameon=False,
+            bbox_to_anchor=(
+                0.5,
+                0.955,
+            ),
+        )
 
     fig.suptitle(
         title,
         fontsize=15,
-        y=1.015,
+        y=0.995,
     )
+
+    uses_symlog = any(
+        scale == "symlog"
+        for scale in panel_scales.values()
+    )
+
+    note = (
+        "Thin lines: individual seeds; "
+        "thick lines: available-seed median; "
+        "shading: interquartile range"
+    )
+
+    if uses_symlog:
+        note += (
+            "; force panels use a symmetric-log scale"
+        )
 
     fig.text(
         0.5,
-        0.012,
-        (
-            "Thin lines: individual seeds; "
-            "thick lines: cross-seed median; "
-            "shading: interquartile range"
-        ),
+        0.014,
+        note,
         ha="center",
         fontsize=8.5,
         color="#555555",
     )
 
     fig.tight_layout(
-        rect=[0.03, 0.04, 1, 0.92]
+        rect=[
+            0.035,
+            0.05,
+            0.995,
+            0.875,
+        ],
+        h_pad=2.0,
+        w_pad=1.8,
+    )
+
+    output_path = Path(
+        output_path
+    )
+
+    output_path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
     )
 
     fig.savefig(
         output_path,
-        dpi=400,
+        dpi=300,
         bbox_inches="tight",
+        facecolor="white",
     )
 
     plt.close(fig)
@@ -1032,7 +1505,11 @@ def main():
         / "seed_response_physical_metrics_after_attack_after_relaxation.png",
         "Random-seed comparison: physical response "
         "after attack and relaxation",
-        log_panels={"E", "F"},
+        panel_scales={
+            "D": "symlog",
+            "E": "symlog",
+            "F": "symlog",
+        },
     )
 
     make_metric_figure(
@@ -1057,7 +1534,11 @@ def main():
         ),
         "Random-seed comparison: immediate physical response "
         "after attack, before relaxation",
-        log_panels={"E", "F"},
+        panel_scales={
+            "D": "symlog",
+            "E": "symlog",
+            "F": "symlog",
+        },
     )
 
     make_metric_figure(
@@ -1085,6 +1566,11 @@ def main():
         ),
         "Random-seed comparison: physical response "
         "during relaxation before attack",
+        panel_scales={
+            "D": "symlog",
+            "E": "symlog",
+            "F": "symlog",
+        },
     )
 
     make_metric_figure(

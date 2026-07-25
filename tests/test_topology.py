@@ -2,7 +2,6 @@ from pathlib import Path
 import sys
 
 import numpy as np
-import pandas as pd
 from ase import Atoms
 
 
@@ -20,10 +19,13 @@ def carbon_pair(distance):
     )
 
 
-def test_identical_structures_have_zero_topology_change(tmp_path):
+def test_identical_structures_have_zero_topology_change():
     atoms = carbon_pair(distance=1.2)
 
-    metrics = topology.topology_change_metrics(atoms, atoms.copy(), tmp_path)
+    metrics = topology.topology_change_metrics(
+        atoms,
+        atoms.copy(),
+    )
 
     assert metrics["neighbor_jaccard_distance"] == 0.0
     assert metrics["coordination_change_mean"] == 0.0
@@ -31,11 +33,14 @@ def test_identical_structures_have_zero_topology_change(tmp_path):
     assert metrics["rdf_l1_distance"] == 0.0
 
 
-def test_removing_the_only_bond_has_jaccard_distance_one(tmp_path):
+def test_removing_the_only_bond_has_jaccard_distance_one():
     bonded = carbon_pair(distance=1.2)
     separated = carbon_pair(distance=3.0)
 
-    metrics = topology.topology_change_metrics(bonded, separated, tmp_path)
+    metrics = topology.topology_change_metrics(
+        bonded,
+        separated,
+    )
 
     assert metrics["neighbor_edges_before"] == 1
     assert metrics["neighbor_edges_after"] == 0
@@ -87,15 +92,14 @@ def test_moving_an_atom_changes_standard_rdf():
     assert distance > 0.0
 
 
-def test_edge_change_csv_lists_removed_bond(tmp_path):
-    topology.topology_change_metrics(
+def test_topology_summary_records_removed_bond():
+    summary = topology.topology_change_metrics(
         carbon_pair(distance=1.2),
         carbon_pair(distance=3.0),
-        tmp_path,
     )
 
-    changes = pd.read_csv(tmp_path / "topology_edge_changes.csv")
-
-    assert changes.to_dict("records") == [
-        {"change": "removed", "edge": "C0-C1"}
-    ]
+    assert summary["neighbor_edges_before"] == 1
+    assert summary["neighbor_edges_after"] == 0
+    assert summary["neighbor_edges_added"] == 0
+    assert summary["neighbor_edges_removed"] == 1
+    assert summary["neighbor_edge_change_count"] == 1

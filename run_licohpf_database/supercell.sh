@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --account=rrg-j3goals
 #SBATCH --time=2-00:00:00
-#SBATCH --mem=16G
+#SBATCH --mem=32G
 #SBATCH --cpus-per-task=8
 #SBATCH --array=1-640%150
 #SBATCH --output=supercell-cpu-%A_%a.out
@@ -86,6 +86,14 @@ case "$MODEL_ID" in
 
     mtp)
         ENVIRONMENT="$HOME/project/.venv-mtp"
+
+        # MTP is executed as a single local MPI process. Restrict UCX
+        # to loopback so it cannot select a missing InfiniBand device.
+        export UCX_TLS="self,tcp"
+        export UCX_NET_DEVICES="lo"
+
+        echo "UCX_TLS=$UCX_TLS"
+        echo "UCX_NET_DEVICES=$UCX_NET_DEVICES"
         ;;
 
     chgnet)
@@ -118,7 +126,7 @@ if [ "$MODEL_ID" = "mtp" ]; then
         exit 1
     fi
 
-    mlp list | head -n 3
+    mlp list >/dev/null
 fi
 
 export MLFF_OUTPUT_ROOT="$SUPERCELL_ROOT"

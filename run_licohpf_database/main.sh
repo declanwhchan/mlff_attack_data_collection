@@ -134,6 +134,14 @@ case "$MODEL_ID" in
 
     mtp)
         ENVIRONMENT="$HOME/project/.venv-mtp"
+
+        # MTP is executed as a single local MPI process. Restrict UCX
+        # to loopback so it cannot select a missing InfiniBand device.
+        export UCX_TLS="self,tcp"
+        export UCX_NET_DEVICES="lo"
+
+        echo "UCX_TLS=$UCX_TLS"
+        echo "UCX_NET_DEVICES=$UCX_NET_DEVICES"
         ;;
 
     chgnet)
@@ -163,7 +171,7 @@ if [ "$MODEL_ID" = "mtp" ]; then
         exit 1
     fi
 
-    mlp list | head -n 3
+    mlp list >/dev/null
 fi
 
 TASK_DIRECTORY="${SLURM_TMPDIR:-/tmp/$USER/mlff_attack_${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}}"
