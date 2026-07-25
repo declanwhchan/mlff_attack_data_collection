@@ -4557,8 +4557,15 @@ def save_mlff_ranking_violin_plot(
     title,
     xlabel,
     value_getter,
+    log_x=False,
 ):
-    """Create a publication-style MLFF ranking violin plot."""
+    """
+    Create a publication-style MLFF ranking violin plot.
+
+    When log_x is True, KDE, quartiles, whiskers and markers are
+    displayed in log10 space. Exact zeros are placed one decade below
+    the smallest positive value so they remain visible.
+    """
     data = collect_mlff_ranking_values(
         records,
         value_getter,
@@ -4570,10 +4577,38 @@ def save_mlff_ranking_violin_plot(
         exist_ok=True,
     )
 
+    data = data.copy()
+
+    if not data.empty:
+        data["value"] = pd.to_numeric(
+            data["value"],
+            errors="coerce",
+        )
+
+        data = (
+            data.replace(
+                [np.inf, -np.inf],
+                np.nan,
+            )
+            .dropna(
+                subset=[
+                    "calculator",
+                    "value",
+                ]
+            )
+        )
+
+        if log_x:
+            # Delta-force magnitudes should not be negative.
+            data = data[
+                data["value"] >= 0
+            ].copy()
+
     if data.empty:
         fig, ax = plt.subplots(
             figsize=(7.2, 3.6),
         )
+
         ax.text(
             0.5,
             0.5,
@@ -4584,34 +4619,62 @@ def save_mlff_ranking_violin_plot(
             fontsize=8,
             color="#444444",
         )
+
         ax.set_title(
             title,
             loc="left",
             fontsize=9,
             fontweight="semibold",
         )
+
         ax.set_axis_off()
 
         fig.savefig(
             output_path,
-            dpi=600,
+            dpi=300,
             bbox_inches="tight",
             facecolor="white",
         )
+
         plt.close(fig)
         return
 
-    data = data.copy()
-    data["value"] = pd.to_numeric(
-        data["value"],
-        errors="coerce",
-    )
-    data = data.replace(
-        [np.inf, -np.inf],
-        np.nan,
-    ).dropna(
-        subset=["calculator", "value"],
-    )
+    positive_values = data.loc[
+        data["value"] > 0,
+        "value",
+    ].to_numpy(dtype=float)
+
+    if log_x:
+        if len(positive_values):
+            log_floor = max(
+                float(
+                    np.min(
+                        positive_values
+                    )
+                )
+                / 10.0,
+                np.finfo(float).tiny,
+            )
+        else:
+            log_floor = 1e-12
+    else:
+        log_floor = None
+
+    def display_values(values):
+        values = np.asarray(
+            values,
+            dtype=float,
+        )
+
+        if not log_x:
+            return values
+
+        return np.log10(
+            np.maximum(
+                values,
+                log_floor,
+            )
+        )
 
     summary = (
         data.groupby(
@@ -4620,23 +4683,34 @@ def save_mlff_ranking_violin_plot(
         )["value"]
         .agg(
             median="median",
-            q1=lambda values: values.quantile(0.25),
-            q3=lambda values: values.quantile(0.75),
+            q1=lambda values:
+            values.quantile(0.25),
+            q3=lambda values:
+            values.quantile(0.75),
             count="count",
         )
         .reset_index()
         .sort_values(
-            ["median", "calculator"],
-            ascending=[True, True],
+            [
+                "median",
+                "calculator",
+            ],
+            ascending=[
+                True,
+                True,
+            ],
             kind="mergesort",
         )
     )
 
-    model_order = summary["calculator"].tolist()
+    model_order = summary[
+        "calculator"
+    ].tolist()
 
     violin_values = [
         data.loc[
-            data["calculator"] == calculator,
+            data["calculator"]
+            == calculator,
             "value",
         ].to_numpy(dtype=float)
         for calculator in model_order
@@ -4653,11 +4727,12 @@ def save_mlff_ranking_violin_plot(
     )
 
     fig, ax = plt.subplots(
-        figsize=(7.2, figure_height),
+        figsize=(
+            7.8,
+            figure_height,
+        ),
     )
 
-    # Draw each violin separately so constant or single-value
-    # distributions are handled without a KDE failure.
     for position, calculator, values in zip(
         positions,
         model_order,
@@ -4667,51 +4742,88 @@ def save_mlff_ranking_violin_plot(
             values,
             dtype=float,
         )
-        values = values[np.isfinite(values)]
+
+        values = values[
+            np.isfinite(values)
+        ]
+
+        if log_x:
+            values = values[
+                values >= 0
+            ]
 
         if len(values) == 0:
             continue
+
+        plotted_values = display_values(
+            values
+        )
 
         color = CALCULATOR_COLORS.get(
             calculator,
             "#777777",
         )
 
-        value_range = float(np.ptp(values))
-        value_scale = max(
-            float(np.max(np.abs(values))),
+        plotted_range = float(
+            np.ptp(plotted_values)
+        )
+
+        plotted_scale = max(
+            float(
+                np.max(
+                    np.abs(
+                        plotted_values
+                    )
+                )
+            ),
             1.0,
         )
+
         has_density = (
-            len(values) >= 2
-            and value_range
-            > 10.0 * np.finfo(float).eps * value_scale
+            len(plotted_values) >= 2
+            and plotted_range
+            > 10.0
+            * np.finfo(float).eps
+            * plotted_scale
         )
 
         if has_density:
             violin = ax.violinplot(
-                [values],
+                [plotted_values],
                 positions=[position],
                 vert=False,
                 widths=0.68,
                 showmeans=False,
                 showmedians=False,
                 showextrema=False,
-                points=200,
+                points=300,
                 bw_method="scott",
             )
 
-            body = violin["bodies"][0]
-            body.set_facecolor(color)
-            body.set_edgecolor("#303030")
-            body.set_alpha(0.58)
-            body.set_linewidth(0.8)
-            body.set_zorder(2)
+            body = violin[
+                "bodies"
+            ][0]
+
+            body.set_facecolor(
+                color
+            )
+            body.set_edgecolor(
+                "#303030"
+            )
+            body.set_alpha(
+                0.58
+            )
+            body.set_linewidth(
+                0.8
+            )
+            body.set_zorder(
+                2
+            )
         else:
             ax.scatter(
-                values,
+                plotted_values,
                 np.full(
-                    len(values),
+                    len(plotted_values),
                     position,
                 ),
                 s=28,
@@ -4723,13 +4835,22 @@ def save_mlff_ranking_violin_plot(
 
         q1, median, q3 = np.percentile(
             values,
-            [25, 50, 75],
+            [
+                25,
+                50,
+                75,
+            ],
         )
+
         iqr = q3 - q1
 
         if iqr > 0:
-            lower_limit = q1 - 1.5 * iqr
-            upper_limit = q3 + 1.5 * iqr
+            lower_limit = (
+                q1 - 1.5 * iqr
+            )
+            upper_limit = (
+                q3 + 1.5 * iqr
+            )
 
             lower_values = values[
                 values >= lower_limit
@@ -4739,30 +4860,68 @@ def save_mlff_ranking_violin_plot(
             ]
 
             whisker_low = (
-                float(np.min(lower_values))
+                float(
+                    np.min(
+                        lower_values
+                    )
+                )
                 if len(lower_values)
-                else float(np.min(values))
+                else float(
+                    np.min(values)
+                )
             )
+
             whisker_high = (
-                float(np.max(upper_values))
+                float(
+                    np.max(
+                        upper_values
+                    )
+                )
                 if len(upper_values)
-                else float(np.max(values))
+                else float(
+                    np.max(values)
+                )
             )
         else:
-            whisker_low = float(np.min(values))
-            whisker_high = float(np.max(values))
+            whisker_low = float(
+                np.min(values)
+            )
+            whisker_high = float(
+                np.max(values)
+            )
 
-        # Tukey-style whiskers.
-        ax.hlines(
-            position,
+        plotted_whiskers = display_values([
             whisker_low,
             whisker_high,
+        ])
+
+        plotted_quartiles = display_values([
+            q1,
+            median,
+            q3,
+        ])
+
+        plotted_q1 = float(
+            plotted_quartiles[0]
+        )
+        plotted_median = float(
+            plotted_quartiles[1]
+        )
+        plotted_q3 = float(
+            plotted_quartiles[2]
+        )
+
+        ax.hlines(
+            position,
+            plotted_whiskers[0],
+            plotted_whiskers[1],
             color="#303030",
             linewidth=1.0,
             zorder=4,
         )
+
         ax.vlines(
-            [whisker_low, whisker_high],
+            plotted_whiskers,
             position - 0.065,
             position + 0.065,
             color="#303030",
@@ -4770,28 +4929,26 @@ def save_mlff_ranking_violin_plot(
             zorder=4,
         )
 
-        # White IQR bar with a dark outline remains visible
-        # against every model color.
         ax.hlines(
             position,
-            q1,
-            q3,
+            plotted_q1,
+            plotted_q3,
             color="#303030",
             linewidth=5.4,
             zorder=5,
         )
+
         ax.hlines(
             position,
-            q1,
-            q3,
+            plotted_q1,
+            plotted_q3,
             color="white",
             linewidth=3.0,
             zorder=6,
         )
 
-        # Median.
         ax.scatter(
-            [median],
+            [plotted_median],
             [position],
             s=25,
             marker="o",
@@ -4812,14 +4969,24 @@ def save_mlff_ranking_violin_plot(
         )
     ]
 
-    ax.set_yticks(positions)
-    ax.set_yticklabels(rank_labels)
+    ax.set_yticks(
+        positions
+    )
+    ax.set_yticklabels(
+        rank_labels
+    )
     ax.invert_yaxis()
 
+    axis_label = xlabel
+
+    if log_x:
+        axis_label += " (log scale)"
+
     ax.set_xlabel(
-        xlabel,
+        axis_label,
         labelpad=7,
     )
+
     ax.set_ylabel("")
 
     ax.set_title(
@@ -4831,7 +4998,7 @@ def save_mlff_ranking_violin_plot(
     )
 
     ax.text(
-        1.0,
+        0.92,
         1.035,
         "Lower median = better rank",
         transform=ax.transAxes,
@@ -4841,13 +5008,12 @@ def save_mlff_ranking_violin_plot(
         color="#555555",
     )
 
-    # Show sample sizes in a separate aligned column.
     count_lookup = summary.set_index(
         "calculator",
     )["count"].to_dict()
 
     ax.text(
-        1.012,
+        1.015,
         1.035,
         "n",
         transform=ax.transAxes,
@@ -4864,10 +5030,18 @@ def save_mlff_ranking_violin_plot(
         model_order,
     ):
         ax.text(
-            1.012,
+            1.015,
             position,
-            str(int(count_lookup[calculator])),
-            transform=ax.get_yaxis_transform(),
+            str(
+                int(
+                    count_lookup[
+                        calculator
+                    ]
+                )
+            ),
+            transform=(
+                ax.get_yaxis_transform()
+            ),
             ha="left",
             va="center",
             fontsize=7,
@@ -4876,54 +5050,160 @@ def save_mlff_ranking_violin_plot(
         )
 
     all_values = np.concatenate(
-        violin_values,
+        violin_values
     )
+
     all_values = all_values[
         np.isfinite(all_values)
     ]
 
-    if len(all_values):
-        minimum = float(np.min(all_values))
-        maximum = float(np.max(all_values))
+    if log_x:
+        all_values = all_values[
+            all_values >= 0
+        ]
 
-        if minimum >= 0:
-            right_limit = (
-                maximum * 1.08
-                if maximum > 0
-                else 1.0
+    plotted_all_values = display_values(
+        all_values
+    )
+
+    if len(plotted_all_values):
+        minimum = float(
+            np.min(
+                plotted_all_values
             )
-            ax.set_xlim(
-                0.0,
-                right_limit,
+        )
+        maximum = float(
+            np.max(
+                plotted_all_values
             )
-        else:
-            span = maximum - minimum
-            padding = (
-                0.08 * span
-                if span > 0
-                else max(abs(maximum) * 0.1, 1.0)
-            )
+        )
+
+        if log_x:
+            if maximum > minimum:
+                padding = max(
+                    0.18,
+                    0.035
+                    * (
+                        maximum
+                        - minimum
+                    ),
+                )
+            else:
+                padding = 1.0
+
             ax.set_xlim(
                 minimum - padding,
                 maximum + padding,
             )
 
-    ax.xaxis.set_major_locator(
-        MaxNLocator(
-            nbins=6,
-            min_n_ticks=4,
-        )
-    )
+            first_power = int(
+                np.floor(
+                    minimum
+                )
+            )
+            last_power = int(
+                np.ceil(
+                    maximum
+                )
+            )
 
-    scalar_formatter = ScalarFormatter(
-        useMathText=True,
-    )
-    scalar_formatter.set_powerlimits(
-        (-3, 4),
-    )
-    ax.xaxis.set_major_formatter(
-        scalar_formatter,
-    )
+            powers = np.arange(
+                first_power,
+                last_power + 1,
+                dtype=int,
+            )
+
+            if len(powers) > 8:
+                selected_indices = np.unique(
+                    np.round(
+                        np.linspace(
+                            0,
+                            len(powers) - 1,
+                            8,
+                        )
+                    ).astype(int)
+                )
+
+                powers = powers[
+                    selected_indices
+                ]
+
+            ax.xaxis.set_major_locator(
+                FixedLocator(
+                    powers
+                )
+            )
+
+            ax.xaxis.set_minor_locator(
+                NullLocator()
+            )
+
+            ax.xaxis.set_major_formatter(
+                FuncFormatter(
+                    lambda exponent, _:
+                    (
+                        rf"$10^{{{int(round(exponent))}}}$"
+                    )
+                )
+            )
+        else:
+            raw_minimum = float(
+                np.min(all_values)
+            )
+            raw_maximum = float(
+                np.max(all_values)
+            )
+
+            if raw_minimum >= 0:
+                right_limit = (
+                    raw_maximum * 1.08
+                    if raw_maximum > 0
+                    else 1.0
+                )
+
+                ax.set_xlim(
+                    0.0,
+                    right_limit,
+                )
+            else:
+                span = (
+                    raw_maximum
+                    - raw_minimum
+                )
+
+                padding = (
+                    0.08 * span
+                    if span > 0
+                    else max(
+                        abs(raw_maximum)
+                        * 0.1,
+                        1.0,
+                    )
+                )
+
+                ax.set_xlim(
+                    raw_minimum - padding,
+                    raw_maximum + padding,
+                )
+
+            ax.xaxis.set_major_locator(
+                MaxNLocator(
+                    nbins=6,
+                    min_n_ticks=4,
+                )
+            )
+
+            scalar_formatter = ScalarFormatter(
+                useMathText=True,
+            )
+
+            scalar_formatter.set_powerlimits(
+                (-3, 4),
+            )
+
+            ax.xaxis.set_major_formatter(
+                scalar_formatter
+            )
 
     ax.grid(
         True,
@@ -4934,17 +5214,35 @@ def save_mlff_ranking_violin_plot(
         alpha=0.8,
         zorder=0,
     )
+
     ax.grid(
         False,
         axis="y",
     )
 
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    ax.spines["left"].set_color("#444444")
-    ax.spines["bottom"].set_color("#444444")
-    ax.spines["left"].set_linewidth(0.8)
-    ax.spines["bottom"].set_linewidth(0.8)
+    ax.spines[
+        "top"
+    ].set_visible(False)
+
+    ax.spines[
+        "right"
+    ].set_visible(False)
+
+    ax.spines[
+        "left"
+    ].set_color("#444444")
+
+    ax.spines[
+        "bottom"
+    ].set_color("#444444")
+
+    ax.spines[
+        "left"
+    ].set_linewidth(0.8)
+
+    ax.spines[
+        "bottom"
+    ].set_linewidth(0.8)
 
     ax.tick_params(
         axis="x",
@@ -4953,22 +5251,33 @@ def save_mlff_ranking_violin_plot(
         width=0.7,
         color="#444444",
     )
+
     ax.tick_params(
         axis="y",
         length=0,
         pad=7,
     )
 
-    ax.margins(y=0.10)
+    ax.margins(
+        y=0.10
+    )
+
+    footer = (
+        "Violin: run-level distribution; "
+        "white bar: IQR; dot: median; "
+        "whiskers: 1.5×IQR."
+    )
+
+    if log_x:
+        footer += (
+            " Density is calculated in log space; "
+            f"zeros are displayed at {log_floor:.1e}."
+        )
 
     fig.text(
         0.5,
         0.025,
-        (
-            "Violin: run-level distribution; "
-            "white bar: IQR; dot: median; "
-            "whiskers: 1.5\u00d7IQR."
-        ),
+        footer,
         ha="center",
         va="bottom",
         fontsize=6.5,
@@ -4977,17 +5286,18 @@ def save_mlff_ranking_violin_plot(
 
     fig.subplots_adjust(
         left=0.25,
-        right=0.92,
+        right=0.90,
         top=0.84,
         bottom=0.20,
     )
 
     fig.savefig(
         output_path,
-        dpi=600,
+        dpi=300,
         bbox_inches="tight",
         facecolor="white",
     )
+
     plt.close(fig)
 
 
@@ -5315,10 +5625,17 @@ def make_mlff_rankings(records, output_dir):
     for metric in immediate_metrics:
         save_mlff_ranking_violin_plot(
             records=records,
-            output_path=immediate_dir / metric["filename"],
+            output_path=(
+                immediate_dir
+                / metric["filename"]
+            ),
             title=metric["title"],
             xlabel=metric["xlabel"],
             value_getter=metric["getter"],
+            log_x=(
+                metric["filename"]
+                == "delta_force.png"
+            ),
         )
 
     for metric in relaxed_metrics:
