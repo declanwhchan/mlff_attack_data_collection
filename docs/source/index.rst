@@ -8,7 +8,7 @@ mlff_attack_data_collection documentation
 
 Add your content using ``reStructuredText`` syntax. See the
 `reStructuredText <https://www.sphinx-doc.org/en/master/usage/restructuredtext/index.html>`_
-documentation for details.
+documentation for details. https://github.com/declanwhchan/mlff_attack_data_collection
 
 
 .. toctree::
