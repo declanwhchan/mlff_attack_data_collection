@@ -2612,7 +2612,15 @@ def epsilon_component_axis_specs(records, figure_name):
     )
 
 
-def make_ci_figure(records, output_dir, figure_name, ylabel, rows, axis_specs=None):
+def make_ci_figure(
+    records,
+    output_dir,
+    figure_name,
+    ylabel,
+    rows,
+    axis_specs=None,
+    y_log=False,
+):
     all_missing = []
 
     if axis_specs is None:
@@ -2628,7 +2636,7 @@ def make_ci_figure(records, output_dir, figure_name, ylabel, rows, axis_specs=No
                 ax = axes[row_index, col_index]
                 attack_missing = []
 
-                draw_grouped_ci(
+                panel_has_data = draw_grouped_ci(
                     ax=ax,
                     records=records,
                     attack=attack,
@@ -2638,6 +2646,27 @@ def make_ci_figure(records, output_dir, figure_name, ylabel, rows, axis_specs=No
                     x_col=x_col,
                     axis_mode=axis_mode,
                 )
+
+                if y_log and panel_has_data:
+                    # A true logarithmic axis cannot display exact zero.
+                    # Nonpositive values are clipped below the smallest
+                    # strictly positive value displayed by Matplotlib.
+                    ax.set_yscale(
+                        "log",
+                        nonpositive="clip",
+                    )
+
+                    ax.grid(
+                        True,
+                        which="both",
+                        axis="y",
+                        alpha=0.30,
+                    )
+
+                    ax.grid(
+                        False,
+                        axis="x",
+                    )
 
                 for missing in attack_missing:
                     missing["figure"] = output_figure_name
@@ -5740,6 +5769,7 @@ def make_lattice_axis_component_figures(epsilon_records, output_dir):
             epsilon_records,
             "figure_2_delta_force_ci_by_epsilon",
         ),
+        y_log=True,
     )
 
     make_whisker_span_figure(
