@@ -30,6 +30,8 @@ jobs:
 
       - name: Install docs dependencies
         run: uv pip install --system sphinx
+      - name: Setup Sphinx
+        run: pip install sphinx furo
 
       - name: Build Sphinx docs
         run: make -C docs html SPHINXOPTS="-W"
