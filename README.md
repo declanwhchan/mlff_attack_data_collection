@@ -17,19 +17,23 @@ This repo expects three separate Python environments because each MLFF have diff
 
 ## Expected Folder Layout
 
-After completing the following 3 steps:
+After completing the following 4 steps:
 
 ```text
 ~/project/
 ├── mlff_attack/
 ├── mlff_attack_data_collection/
-│   └── .env
+│   ├── .env
+│   ├── mace-mh-1.model
+│   ├── uma-s-1p1.pt
+│   ├── pot.almtp
+│   ├── pot.almtp.elements
+│   └── MACE_model.model
 ├── .venv-mace/
 ├── .venv-uma/
 ├── .venv-chgnet/
 ├── mlip-3/bin/mlp
 └── .venv-mtp/bin/mlp
-
 ```
 
 ## 1. Clone Repos
@@ -60,6 +64,16 @@ Then protect it:
 ```bash
 chmod 600 .env
 ```
+
+## 4. Import MLFFs
+
+Download models externally into `mlff_attack_data_collection` (CHGNet is already built-in):
+
+- [`MACE-MH`](https://huggingface.co/mace-foundations/mace-mh-1)
+- [`UMA`](https://huggingface.co/facebook/UMA)
+- [`MACE and MTP`](https://github.com/gitliwq/LiCOHPF_database_1).
+
+---
 
 # Workflow
 
