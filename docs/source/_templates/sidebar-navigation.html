@@ -1,0 +1,21 @@
+<nav
+  class="research-global-navigation"
+  aria-label="Documentation navigation"
+>
+  <a
+    class="research-overview-link"
+    href="{{ pathto('index') }}"
+  >
+    Project Overview
+  </a>
+
+  <div class="research-navigation-tree">
+    {{
+      toctree(
+        collapse=True,
+        includehidden=True,
+        maxdepth=1
+      )
+    }}
+  </div>
+</nav>

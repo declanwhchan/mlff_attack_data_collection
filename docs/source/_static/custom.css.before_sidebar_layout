@@ -1,0 +1,110 @@
+/*
+ * restrained scientific styling for the MLFF robustness website
+ */
+
+html[data-theme="light"] {
+    --pst-color-primary: #145f75;
+    --pst-color-secondary: #c7661a;
+    --pst-color-link: #116f8a;
+    --pst-color-link-hover: #93470f;
+    --pst-color-inline-code: #9b3a23;
+}
+
+html[data-theme="dark"] {
+    --pst-color-primary: #70c5dc;
+    --pst-color-secondary: #f2a45e;
+    --pst-color-link: #78cfe6;
+    --pst-color-link-hover: #ffc085;
+    --pst-color-inline-code: #f0a28f;
+}
+
+.bd-header {
+    border-bottom: 1px solid
+        color-mix(in srgb, var(--pst-color-primary) 30%, transparent);
+}
+
+.bd-main .bd-content .bd-article-container {
+    max-width: 940px;
+}
+
+.bd-article h1 {
+    font-weight: 720;
+    letter-spacing: -0.025em;
+    line-height: 1.12;
+}
+
+.bd-article h2 {
+    margin-top: 2.2rem;
+    padding-bottom: 0.3rem;
+    border-bottom: 1px solid
+        color-mix(in srgb, var(--pst-color-primary) 24%, transparent);
+}
+
+.bd-article p,
+.bd-article li {
+    line-height: 1.72;
+}
+
+.bd-article strong {
+    font-weight: 680;
+}
+
+.bd-article blockquote {
+    margin: 1.5rem 0;
+    padding: 1rem 1.25rem;
+    border-left: 0.3rem solid var(--pst-color-primary);
+    background:
+        color-mix(in srgb, var(--pst-color-primary) 7%, transparent);
+}
+
+.admonition {
+    border-radius: 0.35rem;
+}
+
+table.docutils {
+    width: 100%;
+    font-size: 0.94rem;
+}
+
+table.docutils th {
+    background:
+        color-mix(in srgb, var(--pst-color-primary) 12%, transparent);
+}
+
+img {
+    height: auto;
+}
+
+.caption-text {
+    font-weight: 650;
+}
+
+code.literal {
+    border-radius: 0.2rem;
+    padding: 0.08rem 0.25rem;
+}
+
+@media (max-width: 768px) {
+    .bd-main .bd-content .bd-article-container {
+        padding-left: 0.8rem;
+        padding-right: 0.8rem;
+    }
+
+    .bd-article h1 {
+        font-size: 2rem;
+    }
+}
+
+/* Keep the desktop research-site header compact and aligned. */
+@media (min-width: 960px) {
+    .bd-header .navbar-header-items {
+        min-height: 4rem;
+        flex-wrap: nowrap;
+        align-items: center;
+    }
+
+    .bd-header .navbar-brand {
+        white-space: nowrap;
+        font-size: 1.05rem;
+    }
+}

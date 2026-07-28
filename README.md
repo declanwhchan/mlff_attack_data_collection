@@ -6,7 +6,7 @@ This repo runs an HPC data-collection workflow from the `mlff_attack` package:
 
 This repo has two dataset workflows:
 
-- `run_2d_structures/`: [`20 Materials Project structures`](research/2d_structures.md).
+- `run_2d_structures/`: [`20 Materials Project structures`](docs/research/2d_structures.md).
 - `run_licohpf_database/`: [`LiCOHPF database`](https://github.com/gitliwq/LiCOHPF_database_1).
 
 ---
@@ -100,9 +100,11 @@ bash run_<dataset>/cifs.sh
 
 ```bash
 sbatch run_<dataset>/main.sh
+sbatch run_<dataset>/main_gpu.sh
 
 # Run contour exploration (OPTIONAL)
 sbatch run_<dataset>/contour.sh
+sbatch run_<dataset>/contour_gpu.sh
 ```
 
 ### Step 3 — Generate Plots
@@ -120,6 +122,7 @@ This submits a controller job that generates supercell CIFs, launches the full M
 
 ```bash
 sbatch run_<dataset>/supercell.sh
+sbatch run_<dataset>/supercell_gpu.sh
 ```
 
 ### Check Status of Jobs

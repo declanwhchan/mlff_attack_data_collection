@@ -1,0 +1,738 @@
+/*
+ * Scientific documentation layout
+ */
+
+html[data-theme="light"] {
+    --pst-color-primary: #145f75;
+    --pst-color-secondary: #c7661a;
+    --pst-color-link: #116f8a;
+    --pst-color-link-hover: #93470f;
+    --pst-color-inline-code: #9b3a23;
+}
+
+html[data-theme="dark"] {
+    --pst-color-primary: #70c5dc;
+    --pst-color-secondary: #f2a45e;
+    --pst-color-link: #78cfe6;
+    --pst-color-link-hover: #ffc085;
+    --pst-color-inline-code: #f0a28f;
+}
+
+/*
+ * Keep the utility header aligned with the documentation body.
+ * Navigation itself is displayed in the left sidebar.
+ */
+.bd-header .navbar-header-items {
+    width: 100%;
+    max-width: var(--pst-page-max-width);
+    min-height: 3.5rem;
+    margin-inline: auto;
+    padding-inline: 1rem;
+    justify-content: flex-end;
+    align-items: center;
+}
+
+.bd-header .navbar-header-items__start,
+.bd-header .navbar-header-items__center {
+    display: none;
+}
+
+.bd-header .navbar-header-items__end {
+    margin-left: auto;
+}
+
+/*
+ * Left documentation navigation.
+ */
+.bd-sidebar-primary {
+    padding-top: 1.25rem;
+}
+
+.bd-sidebar-primary .sidebar-header-items {
+    display: none;
+}
+
+.bd-sidebar-primary .sidebar-primary-items__start {
+    margin-bottom: 1rem;
+}
+
+.bd-sidebar-primary nav.bd-links {
+    font-size: 0.94rem;
+}
+
+.bd-sidebar-primary .bd-links__title {
+    font-weight: 700;
+    letter-spacing: 0.01em;
+}
+
+.bd-sidebar-primary li.toctree-l1 {
+    margin-bottom: 0.22rem;
+}
+
+.bd-sidebar-primary a.current {
+    color: var(--pst-color-primary);
+    font-weight: 680;
+}
+
+/*
+ * Main research article.
+ */
+.bd-main .bd-content .bd-article-container {
+    max-width: 940px;
+}
+
+.bd-article h1 {
+    font-weight: 720;
+    letter-spacing: -0.025em;
+    line-height: 1.12;
+}
+
+.bd-article h2 {
+    margin-top: 2.2rem;
+    padding-bottom: 0.3rem;
+    border-bottom: 1px solid
+        color-mix(
+            in srgb,
+            var(--pst-color-primary) 24%,
+            transparent
+        );
+}
+
+.bd-article h3 {
+    margin-top: 1.65rem;
+}
+
+.bd-article p,
+.bd-article li {
+    line-height: 1.72;
+}
+
+.bd-article strong {
+    font-weight: 680;
+}
+
+.bd-article blockquote {
+    margin: 1.5rem 0;
+    padding: 1rem 1.25rem;
+    border-left: 0.3rem solid var(--pst-color-primary);
+    background:
+        color-mix(
+            in srgb,
+            var(--pst-color-primary) 7%,
+            transparent
+        );
+}
+
+.admonition {
+    border-radius: 0.35rem;
+}
+
+table.docutils {
+    width: 100%;
+    font-size: 0.94rem;
+}
+
+table.docutils th {
+    background:
+        color-mix(
+            in srgb,
+            var(--pst-color-primary) 12%,
+            transparent
+        );
+}
+
+code.literal {
+    border-radius: 0.2rem;
+    padding: 0.08rem 0.25rem;
+}
+
+img {
+    height: auto;
+}
+
+/*
+ * Keep the right page contents visually secondary.
+ */
+.bd-sidebar-secondary {
+    font-size: 0.9rem;
+}
+
+.bd-sidebar-secondary .onthispage {
+    font-weight: 650;
+}
+
+/*
+ * Preserve PyData's responsive drawers on smaller screens.
+ */
+@media (max-width: 959.98px) {
+    .bd-header .navbar-header-items {
+        min-height: 3.5rem;
+        padding-inline: 0.75rem;
+    }
+
+    .bd-header .navbar-header-items__start {
+        display: flex;
+    }
+
+    .bd-main .bd-content .bd-article-container {
+        padding-inline: 0.8rem;
+    }
+
+    .bd-article h1 {
+        font-size: 2rem;
+    }
+}
+
+/* ==========================================================
+ * Header-free documentation layout
+ * ========================================================== */
+
+/* Remove the complete desktop and mobile top navigation bar. */
+.bd-header {
+    display: none !important;
+}
+
+/* Remove the space normally reserved for the header. */
+:root {
+    --pst-header-height: 0px;
+}
+
+/* Keep both documentation sidebars aligned with the viewport. */
+.bd-sidebar-primary,
+.bd-sidebar-secondary {
+    top: 0 !important;
+    height: 100vh;
+    max-height: 100vh;
+}
+
+/* Give the article comfortable spacing without a header. */
+.bd-main {
+    padding-top: 0;
+}
+
+.bd-main .bd-content {
+    padding-top: 1.75rem;
+}
+
+/* ==========================================================
+ * Left-sidebar controls
+ * ========================================================== */
+
+.research-sidebar-utilities {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 0.65rem;
+    margin: 0.65rem 0 1.35rem;
+    padding: 0.55rem 0;
+    border-top: 1px solid
+        color-mix(
+            in srgb,
+            var(--pst-color-primary) 18%,
+            transparent
+        );
+    border-bottom: 1px solid
+        color-mix(
+            in srgb,
+            var(--pst-color-primary) 18%,
+            transparent
+        );
+}
+
+.research-sidebar-utilities button,
+.research-sidebar-utilities a {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.25rem;
+    min-height: 2.25rem;
+    margin: 0;
+    border-radius: 0.3rem;
+}
+
+.research-sidebar-utilities ul {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.research-sidebar-utilities li {
+    margin: 0;
+    padding: 0;
+}
+
+.research-theme-control,
+.research-project-links {
+    display: flex;
+    align-items: center;
+}
+
+/* ==========================================================
+ * Complete global documentation navigation
+ * ========================================================== */
+
+.research-global-navigation {
+    margin-top: 0.25rem;
+    padding-bottom: 2rem;
+}
+
+.research-navigation-title {
+    margin: 0 0 0.7rem;
+    color: var(--pst-color-text-base);
+    font-size: 0.78rem;
+    font-weight: 750;
+    letter-spacing: 0.075em;
+    text-transform: uppercase;
+}
+
+.research-global-navigation ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.research-global-navigation li {
+    margin: 0.12rem 0;
+    padding: 0;
+}
+
+.research-global-navigation li > ul {
+    margin: 0.2rem 0 0.35rem 0.85rem;
+    padding-left: 0.75rem;
+    border-left: 1px solid
+        color-mix(
+            in srgb,
+            var(--pst-color-primary) 20%,
+            transparent
+        );
+}
+
+.research-global-navigation a {
+    display: block;
+    padding: 0.38rem 0.55rem;
+    color: var(--pst-color-text-base);
+    line-height: 1.35;
+    text-decoration: none;
+    border-left: 0.18rem solid transparent;
+    border-radius: 0.2rem;
+}
+
+.research-global-navigation a:hover {
+    color: var(--pst-color-primary);
+    background:
+        color-mix(
+            in srgb,
+            var(--pst-color-primary) 7%,
+            transparent
+        );
+}
+
+.research-global-navigation a.current,
+.research-global-navigation li.current > a {
+    color: var(--pst-color-primary);
+    font-weight: 680;
+    border-left-color: var(--pst-color-primary);
+    background:
+        color-mix(
+            in srgb,
+            var(--pst-color-primary) 10%,
+            transparent
+        );
+}
+
+/* Ensure the standard PyData sidebar does not add empty spacing. */
+.bd-sidebar-primary .sidebar-header-items {
+    display: none !important;
+}
+
+.bd-sidebar-primary .sidebar-primary-items__end {
+    margin-top: 0;
+}
+
+/*
+ * On narrow screens, keep the navigation visible as regular content
+ * because the top mobile bar has intentionally been removed.
+ */
+@media (max-width: 959.98px) {
+    .bd-container {
+        display: block;
+    }
+
+    .bd-sidebar-primary {
+        position: relative !important;
+        display: block !important;
+        width: auto;
+        height: auto;
+        max-height: none;
+        padding: 1rem;
+        border-bottom: 1px solid
+            color-mix(
+                in srgb,
+                var(--pst-color-primary) 20%,
+                transparent
+            );
+    }
+
+    .bd-sidebar-secondary {
+        display: none;
+    }
+
+    .bd-main .bd-content {
+        padding-top: 1rem;
+    }
+}
+
+/* ==========================================================
+ * Single-click theme toggle
+ * ========================================================== */
+
+.research-theme-toggle {
+    width: 2.35rem;
+    height: 2.35rem;
+    padding: 0.45rem;
+    color: var(--pst-color-text-base);
+    background: transparent;
+    border: 1px solid
+        color-mix(
+            in srgb,
+            var(--pst-color-text-base) 22%,
+            transparent
+        );
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+.research-theme-toggle:hover {
+    color: var(--pst-color-primary);
+    background:
+        color-mix(
+            in srgb,
+            var(--pst-color-primary) 9%,
+            transparent
+        );
+    border-color: var(--pst-color-primary);
+}
+
+.research-theme-toggle:focus-visible {
+    outline: 0.18rem solid var(--pst-color-primary);
+    outline-offset: 0.15rem;
+}
+
+.theme-icon {
+    display: none;
+    width: 100%;
+    height: 100%;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+html[data-theme="light"] .theme-icon-moon {
+    display: block;
+}
+
+html[data-theme="dark"] .theme-icon-sun {
+    display: block;
+}
+
+.research-project-links {
+    min-width: 2.35rem;
+}
+
+.research-project-links ul {
+    display: flex;
+    align-items: center;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+/* ==========================================================
+ * Floating mobile navigation control
+ * ========================================================== */
+
+.mobile-navigation-button,
+.mobile-navigation-backdrop {
+    display: none;
+}
+
+@media (max-width: 1100px) {
+    /*
+     * The top navigation remains completely removed.
+     * This floating button only opens the documentation drawer.
+     */
+    .mobile-navigation-button {
+        position: fixed;
+        top: 0.85rem;
+        left: 0.85rem;
+        z-index: 1200;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 2.75rem;
+        height: 2.75rem;
+        padding: 0.55rem;
+        color: var(--pst-color-text-base);
+        background: var(--pst-color-background);
+        border: 1px solid
+            color-mix(
+                in srgb,
+                var(--pst-color-text-base) 25%,
+                transparent
+            );
+        border-radius: 0.4rem;
+        box-shadow: 0 0.2rem 0.75rem
+            rgb(0 0 0 / 12%);
+        cursor: pointer;
+    }
+
+    .mobile-navigation-button svg {
+        width: 100%;
+        height: 100%;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 2;
+        stroke-linecap: round;
+    }
+
+    .mobile-navigation-button:hover {
+        color: var(--pst-color-primary);
+        border-color: var(--pst-color-primary);
+    }
+
+    .mobile-navigation-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 1090;
+        width: 100%;
+        height: 100%;
+        padding: 0;
+        background: rgb(0 0 0 / 45%);
+        border: 0;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 160ms ease;
+    }
+
+    /*
+     * Override the earlier small-screen sidebar rules.
+     */
+    .bd-sidebar-primary {
+        position: fixed !important;
+        top: 0 !important;
+        bottom: 0 !important;
+        left: 0 !important;
+        z-index: 1150;
+        display: block !important;
+        width: min(86vw, 340px) !important;
+        height: 100dvh !important;
+        max-height: 100dvh !important;
+        margin: 0 !important;
+        padding: 1.1rem !important;
+        overflow-x: hidden;
+        overflow-y: auto;
+        background: var(--pst-color-background);
+        border-right: 1px solid
+            color-mix(
+                in srgb,
+                var(--pst-color-text-base) 18%,
+                transparent
+            );
+        box-shadow: 0.4rem 0 1.4rem
+            rgb(0 0 0 / 16%);
+        transform: translateX(-105%);
+        visibility: hidden;
+        transition:
+            transform 180ms ease,
+            visibility 180ms ease;
+    }
+
+    body.mobile-sidebar-open {
+        overflow: hidden;
+    }
+
+    body.mobile-sidebar-open .bd-sidebar-primary {
+        transform: translateX(0);
+        visibility: visible;
+    }
+
+    body.mobile-sidebar-open
+    .mobile-navigation-backdrop {
+        display: block;
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    body.mobile-sidebar-open
+    .mobile-navigation-button {
+        left: min(calc(86vw - 3.65rem), 286px);
+        color: var(--pst-color-primary);
+        background: var(--pst-color-background);
+    }
+
+    /*
+     * Remove grid space previously reserved for sidebars.
+     */
+    .bd-container,
+    .bd-container__inner {
+        display: block !important;
+        width: 100% !important;
+        max-width: none !important;
+    }
+
+    .bd-main {
+        display: block !important;
+        width: 100% !important;
+        max-width: none !important;
+        margin: 0 !important;
+    }
+
+    .bd-content {
+        width: 100% !important;
+        max-width: none !important;
+        padding: 4.5rem 1rem 1.5rem !important;
+    }
+
+    .bd-main .bd-content .bd-article-container {
+        width: 100%;
+        max-width: 900px;
+        margin-inline: auto;
+        padding-inline: 0;
+    }
+
+    .bd-sidebar-secondary {
+        display: none !important;
+    }
+
+    .bd-article h1 {
+        font-size: clamp(2rem, 8vw, 3rem);
+        overflow-wrap: anywhere;
+    }
+
+    .bd-article h2 {
+        font-size: clamp(1.55rem, 6vw, 2.15rem);
+    }
+}
+
+@media (max-width: 480px) {
+    .bd-content {
+        padding-right: 0.8rem !important;
+        padding-left: 0.8rem !important;
+    }
+
+    .bd-article p,
+    .bd-article li {
+        line-height: 1.62;
+    }
+}
+
+/* ==========================================================
+ * Three-state icon theme control
+ * System -> Light -> Dark -> System
+ * ========================================================== */
+
+.research-theme-toggle .theme-icon {
+    display: none !important;
+}
+
+.research-theme-toggle[data-theme-mode="auto"]
+.theme-icon-system {
+    display: block !important;
+}
+
+.research-theme-toggle[data-theme-mode="light"]
+.theme-icon-light {
+    display: block !important;
+}
+
+.research-theme-toggle[data-theme-mode="dark"]
+.theme-icon-dark {
+    display: block !important;
+}
+
+.theme-icon-fill {
+    fill: currentColor;
+    stroke: none;
+}
+
+/*
+ * Preserve the research colours when system mode resolves
+ * to the user's light appearance.
+ */
+html[data-theme="auto"] {
+    --pst-color-primary: #145f75;
+    --pst-color-secondary: #c7661a;
+    --pst-color-link: #116f8a;
+    --pst-color-link-hover: #93470f;
+    --pst-color-inline-code: #9b3a23;
+}
+
+/*
+ * Preserve the research colours when system mode resolves
+ * to the user's dark appearance.
+ */
+@media (prefers-color-scheme: dark) {
+    html[data-theme="auto"] {
+        --pst-color-primary: #70c5dc;
+        --pst-color-secondary: #f2a45e;
+        --pst-color-link: #78cfe6;
+        --pst-color-link-hover: #ffc085;
+        --pst-color-inline-code: #f0a28f;
+    }
+}
+
+/* Borderless theme-mode button. */
+.research-theme-toggle,
+.research-theme-toggle:hover,
+.research-theme-toggle:active {
+    border: 0 !important;
+    box-shadow: none !important;
+}
+
+.research-theme-toggle {
+    background: transparent;
+}
+
+.research-theme-toggle:hover {
+    background:
+        color-mix(
+            in srgb,
+            var(--pst-color-primary) 9%,
+            transparent
+        );
+}
+
+/* Main documentation-page link above the section tree. */
+.research-overview-link {
+    display: block;
+    margin: 0 0 0.85rem;
+    padding: 0.5rem 0.55rem;
+    color: var(--pst-color-text-base);
+    font-size: 0.82rem;
+    font-weight: 750;
+    letter-spacing: 0.055em;
+    text-decoration: none;
+    text-transform: uppercase;
+    border-left: 0.18rem solid transparent;
+    border-radius: 0.2rem;
+}
+
+.research-overview-link:hover {
+    color: var(--pst-color-primary);
+    background:
+        color-mix(
+            in srgb,
+            var(--pst-color-primary) 8%,
+            transparent
+        );
+    border-left-color: var(--pst-color-primary);
+}
+
+.research-navigation-tree {
+    margin-top: 0;
+}
