@@ -6,10 +6,12 @@
 __pycache__/
 .pytest*
 
-# Structures
+# Calculations
 *.cif
 *.xyz
 *.elements
+*.traj
+*DFT*
 
 # MLFFs
 *.model
