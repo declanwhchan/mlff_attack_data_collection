@@ -80,3 +80,12 @@ html_sidebars = {
         "sidebar-navigation.html",
     ],
 }
+
+# reference-target-highlighting
+html_static_path = list(globals().get("html_static_path", []))
+if "_static" not in html_static_path:
+    html_static_path.append("_static")
+
+html_css_files = list(globals().get("html_css_files", []))
+if "custom.css" not in html_css_files:
+    html_css_files.append("custom.css")
