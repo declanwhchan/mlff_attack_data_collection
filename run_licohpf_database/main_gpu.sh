@@ -2,7 +2,7 @@
 #SBATCH --account=def-j3goals
 #SBATCH --time=12:00:00
 #SBATCH --mem=32G
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=4
 #SBATCH --gpus-per-node=nvidia_h100_80gb_hbm3_1g.10gb:1
 #SBATCH --array=1-200%40
 #SBATCH --output=main-gpu-%A_%a.out
