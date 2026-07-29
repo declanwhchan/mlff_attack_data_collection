@@ -7,8 +7,10 @@ import sys
 import matplotlib
 matplotlib.use("Agg")
 
+import math
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
+import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
 from ase.io import read as ase_read
@@ -1312,7 +1314,7 @@ def make_metric_figure(
             if row == 2:
                 ax.set_xlabel(
                     "Epsilon "
-                    "(% minimum lattice length)",
+                    "(% min lattice length)",
                     labelpad=6,
                 )
 
@@ -1404,6 +1406,8 @@ def make_metric_figure(
         exist_ok=True,
     )
 
+    harmonize_random_seed_axes(fig)
+
     fig.savefig(
         output_path,
         dpi=300,
@@ -1445,6 +1449,409 @@ def write_aggregate_table(records, output_path):
         output_path,
         index=False,
     )
+
+
+def harmonize_random_seed_axes(fig):
+    def finite_values(values):
+        array = np.asarray(values, dtype=float).reshape(-1)
+        return array[np.isfinite(array)]
+
+
+    def collect_axis_values(ax, coordinate):
+        values = []
+
+        for line in ax.lines:
+            if coordinate == "x":
+                current = finite_values(line.get_xdata())
+            else:
+                current = finite_values(line.get_ydata())
+
+            if current.size:
+                values.append(current)
+
+        for collection in ax.collections:
+            try:
+                offsets = np.asarray(
+                    collection.get_offsets(),
+                    dtype=float,
+                )
+
+                if (
+                    offsets.ndim == 2
+                    and offsets.shape[1] >= 2
+                    and offsets.size
+                ):
+                    current = finite_values(
+                        offsets[:, 0 if coordinate == "x" else 1]
+                    )
+
+                    if current.size:
+                        values.append(current)
+            except Exception:
+                pass
+
+            try:
+                for path in collection.get_paths():
+                    vertices = np.asarray(
+                        path.vertices,
+                        dtype=float,
+                    )
+
+                    if (
+                        vertices.ndim == 2
+                        and vertices.shape[1] >= 2
+                        and vertices.size
+                    ):
+                        current = finite_values(
+                            vertices[
+                                :,
+                                0 if coordinate == "x" else 1
+                            ]
+                        )
+
+                        if current.size:
+                            values.append(current)
+            except Exception:
+                pass
+
+        if not values:
+            return np.asarray([], dtype=float)
+
+        return np.concatenate(values)
+
+
+    def upper_125(value):
+        """
+        Round a positive upper limit upward to 1, 2, 5, or 10
+        times a power of ten.
+        """
+        if not np.isfinite(value) or value <= 0:
+            return 1.0
+
+        exponent = math.floor(math.log10(value))
+        scale = 10.0 ** exponent
+        fraction = value / scale
+
+        if fraction <= 1.0:
+            multiplier = 1.0
+        elif fraction <= 2.0:
+            multiplier = 2.0
+        elif fraction <= 5.0:
+            multiplier = 5.0
+        else:
+            multiplier = 10.0
+
+        return multiplier * scale
+
+
+    # Exclude empty/helper axes and group plotting axes by figure row.
+    plotting_axes = [
+        ax
+        for ax in fig.axes
+        if ax.get_visible() and ax.has_data()
+    ]
+
+    rows = []
+
+    for ax in sorted(
+        plotting_axes,
+        key=lambda current: (
+            -current.get_position().y0,
+            current.get_position().x0,
+        ),
+    ):
+        y_position = ax.get_position().y0
+
+        matching_row = None
+
+        for row in rows:
+            if abs(row["y_position"] - y_position) < 0.03:
+                matching_row = row
+                break
+
+        if matching_row is None:
+            matching_row = {
+                "y_position": y_position,
+                "axes": [],
+            }
+            rows.append(matching_row)
+
+        matching_row["axes"].append(ax)
+
+    for row in rows:
+        row_axes = sorted(
+            row["axes"],
+            key=lambda current: current.get_position().x0,
+        )
+
+        if len(row_axes) < 2:
+            continue
+
+        # Make every x-axis in this row identical.
+        x_limits = [
+            ax.get_xlim()
+            for ax in row_axes
+        ]
+
+        common_x_min = min(
+            min(limits)
+            for limits in x_limits
+        )
+        common_x_max = max(
+            max(limits)
+            for limits in x_limits
+        )
+
+        row_uses_log_x = any(
+            ax.get_xscale() == "log"
+            for ax in row_axes
+        )
+
+        for ax in row_axes:
+            if row_uses_log_x:
+                ax.set_xscale("log")
+                ax.xaxis.set_major_locator(
+                    mticker.LogLocator(base=10.0)
+                )
+                ax.xaxis.set_minor_locator(
+                    mticker.LogLocator(
+                        base=10.0,
+                        subs=np.arange(2, 10) * 0.1,
+                    )
+                )
+                ax.xaxis.set_minor_formatter(
+                    mticker.NullFormatter()
+                )
+
+            ax.set_xlim(
+                common_x_min,
+                common_x_max,
+            )
+
+        row_label = " ".join(
+            ax.get_ylabel().lower()
+            for ax in row_axes
+            if ax.get_ylabel()
+        )
+
+        y_values = [
+            collect_axis_values(ax, "y")
+            for ax in row_axes
+        ]
+
+        y_values = [
+            values
+            for values in y_values
+            if values.size
+        ]
+
+        if y_values:
+            combined_y = np.concatenate(y_values)
+        else:
+            combined_y = np.asarray([], dtype=float)
+
+        positive_y = combined_y[
+            combined_y > 0
+        ]
+
+        is_displacement = (
+            "displacement" in row_label
+        )
+
+        is_delta_force = (
+            "force" in row_label
+            and (
+                "delta" in row_label
+                or "Δ" in row_label
+                or "\u0394" in row_label
+            )
+        )
+
+        is_relaxation_steps = (
+            "relaxation step" in row_label
+            or "relax steps" in row_label
+        )
+
+        is_unit_interval = any(
+            phrase in row_label
+            for phrase in (
+                "jaccard",
+                "retention",
+                "fraction",
+            )
+        )
+
+        if is_delta_force:
+            # All force panels start at exactly 10^-2.
+            lower_limit = 1.0e-2
+
+            if positive_y.size:
+                upper_limit = upper_125(
+                    float(np.max(positive_y))
+                )
+            else:
+                upper_limit = 1.0
+
+            upper_limit = max(
+                upper_limit,
+                1.0e-1,
+            )
+
+            for ax in row_axes:
+                ax.set_yscale("log")
+                ax.set_ylim(
+                    lower_limit,
+                    upper_limit,
+                )
+                ax.yaxis.set_major_locator(
+                    mticker.LogLocator(base=10.0)
+                )
+                ax.yaxis.set_minor_locator(
+                    mticker.LogLocator(
+                        base=10.0,
+                        subs=np.arange(2, 10) * 0.1,
+                    )
+                )
+                ax.yaxis.set_minor_formatter(
+                    mticker.NullFormatter()
+                )
+
+        elif is_displacement:
+            if positive_y.size:
+                minimum_positive = float(
+                    np.min(positive_y)
+                )
+                maximum_positive = float(
+                    np.max(positive_y)
+                )
+
+                lower_limit = 10.0 ** math.floor(
+                    math.log10(minimum_positive)
+                )
+                upper_limit = upper_125(
+                    maximum_positive
+                )
+            else:
+                lower_limit = 1.0e-6
+                upper_limit = 1.0
+
+            if upper_limit <= lower_limit:
+                upper_limit = lower_limit * 10.0
+
+            for ax in row_axes:
+                ax.set_yscale("log")
+                ax.set_ylim(
+                    lower_limit,
+                    upper_limit,
+                )
+                ax.yaxis.set_major_locator(
+                    mticker.LogLocator(base=10.0)
+                )
+                ax.yaxis.set_minor_locator(
+                    mticker.LogLocator(
+                        base=10.0,
+                        subs=np.arange(2, 10) * 0.1,
+                    )
+                )
+                ax.yaxis.set_minor_formatter(
+                    mticker.NullFormatter()
+                )
+
+        elif is_relaxation_steps:
+            shared_ticks = np.arange(
+                0,
+                301,
+                50,
+            )
+
+            for ax in row_axes:
+                ax.set_yscale("linear")
+                ax.set_ylim(0, 600)
+                ax.set_yticks(shared_ticks)
+
+        elif is_unit_interval:
+            shared_ticks = np.linspace(
+                0.0,
+                1.0,
+                6,
+            )
+
+            for ax in row_axes:
+                ax.set_yscale("linear")
+                ax.set_ylim(0.0, 1.0)
+                ax.set_yticks(shared_ticks)
+
+        else:
+            current_limits = [
+                ax.get_ylim()
+                for ax in row_axes
+            ]
+
+            data_minimum = (
+                float(np.min(combined_y))
+                if combined_y.size
+                else min(
+                    limits[0]
+                    for limits in current_limits
+                )
+            )
+
+            data_maximum = (
+                float(np.max(combined_y))
+                if combined_y.size
+                else max(
+                    limits[1]
+                    for limits in current_limits
+                )
+            )
+
+            if data_minimum >= 0:
+                lower_limit = 0.0
+            else:
+                lower_limit = min(
+                    limits[0]
+                    for limits in current_limits
+                )
+
+            locator = mticker.MaxNLocator(
+                nbins=6,
+                min_n_ticks=4,
+            )
+
+            shared_ticks = locator.tick_values(
+                lower_limit,
+                data_maximum,
+            )
+
+            if data_minimum >= 0:
+                shared_ticks = shared_ticks[
+                    shared_ticks >= 0
+                ]
+
+                if (
+                    shared_ticks.size == 0
+                    or shared_ticks[0] != 0
+                ):
+                    shared_ticks = np.insert(
+                        shared_ticks,
+                        0,
+                        0.0,
+                    )
+
+            shared_lower = float(
+                shared_ticks[0]
+            )
+            shared_upper = float(
+                shared_ticks[-1]
+            )
+
+            for ax in row_axes:
+                ax.set_yscale("linear")
+                ax.set_ylim(
+                    shared_lower,
+                    shared_upper,
+                )
+                ax.set_yticks(shared_ticks)
 
 
 def main():
@@ -1565,7 +1972,7 @@ def main():
             "before_attack_after_relaxation.png"
         ),
         "Random-seed comparison: physical response "
-        "during relaxation before attack",
+        "pre-relaxation",
         panel_scales={
             "D": "symlog",
             "E": "symlog",
@@ -1582,7 +1989,7 @@ def main():
             "before_attack_after_relaxation.png"
         ),
         "Random-seed comparison: topology response "
-        "during relaxation before attack",
+        "pre-relaxation",
     )
 
     print(

@@ -220,7 +220,7 @@ def run_relaxation_and_save_data(
 
         # Reaching the optimizer limit is a valid nonconverged result,
         # not a failed calculation. Store the configured maximum so
-        # rankings and convergence plots retain this run as 300 steps.
+        # rankings and convergence plots retain this run as 600 steps.
         steps[-1] = maximum_steps
 
         print(
@@ -709,7 +709,7 @@ def run_one(row):
 
     relax_max_steps = as_int_or_none(row["relax_max_steps"])
     if relax_max_steps is None:
-        relax_max_steps = 300
+        relax_max_steps = 600
 
     relax_optimizer = str(value_or_default(row["relax_optimizer"], "LBFGS")).upper()
 
