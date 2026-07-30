@@ -256,7 +256,7 @@ The files move through four stages:
    summaries.
 
 ``contour.sh`` and ``contour_gpu.sh``
-   Generate contour-exploration outputs and write contour array summaries.
+   Generate contour exploration outputs and write contour array summaries.
 
 ``supercell.sh`` and ``supercell_gpu.sh``
    Generate expanded-cell calculations under the supercell output root.

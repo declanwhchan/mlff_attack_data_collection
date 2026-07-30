@@ -248,7 +248,7 @@ Submit the relaxation and adversarial-attack jobs:
 If the dataset provides separate CPU and GPU launchers, submit the required
 launcher according to the model allocation documented by that workflow.
 
-Optionally submit the contour-exploration baseline:
+Optionally submit the contour exploration baseline:
 
 .. code-block:: bash
 

@@ -736,3 +736,86 @@ html[data-theme="auto"] {
 .research-navigation-tree {
     margin-top: 0;
 }
+
+/* specific-reference-targets */
+
+/* Make links to individual references visibly clickable. */
+a.reference.internal[href*="references.html#method-ref-"] {
+    color: var(--pst-color-primary);
+    font-weight: 600;
+    text-decoration: underline;
+    text-decoration-thickness: 0.08em;
+    text-underline-offset: 0.18em;
+}
+
+a.reference.internal[href*="references.html#method-ref-"]:hover,
+a.reference.internal[href*="references.html#method-ref-"]:focus {
+    color: var(--pst-color-secondary);
+    text-decoration-thickness: 0.14em;
+}
+
+/* Leave room above a reference when navigating to its anchor. */
+span.target[id^="method-ref-"],
+section[id^="method-ref-"] {
+    scroll-margin-top: 2rem;
+}
+
+/* Highlight targets when the ID is attached directly to a section. */
+section[id^="method-ref-"]:target {
+    margin-inline: -1rem;
+    padding: 0.75rem 1rem;
+    border-left: 0.3rem solid var(--pst-color-primary);
+    border-radius: 0.25rem;
+    background: color-mix(
+        in srgb,
+        var(--pst-color-primary) 12%,
+        transparent
+    );
+}
+
+/* Highlight headings when Sphinx emits a separate target span. */
+span.target[id^="method-ref-"]:target + h1,
+span.target[id^="method-ref-"]:target + h2,
+span.target[id^="method-ref-"]:target + h3,
+span.target[id^="method-ref-"]:target + h4 {
+    margin-inline: -1rem;
+    padding: 0.75rem 1rem;
+    border-left: 0.3rem solid var(--pst-color-primary);
+    border-radius: 0.25rem;
+    background: color-mix(
+        in srgb,
+        var(--pst-color-primary) 12%,
+        transparent
+    );
+}
+
+/* Modern-browser fallback for targets nested inside sections. */
+section:has(> span.target[id^="method-ref-"]:target) {
+    margin-inline: -1rem;
+    padding-inline: 1rem;
+    border-left: 0.3rem solid var(--pst-color-primary);
+    border-radius: 0.25rem;
+    background: color-mix(
+        in srgb,
+        var(--pst-color-primary) 12%,
+        transparent
+    );
+}
+
+/* reference-list-target-highlighting */
+
+span.target[id^="method-ref-"] {
+    scroll-margin-top: 2rem;
+}
+
+span.target[id^="method-ref-"]:target + ul {
+    margin: 0.5rem -0.75rem 1rem;
+    padding: 0.75rem 1rem 0.75rem 2.5rem;
+    border-left: 0.3rem solid var(--pst-color-primary);
+    border-radius: 0.25rem;
+    background: color-mix(
+        in srgb,
+        var(--pst-color-primary) 12%,
+        transparent
+    );
+}

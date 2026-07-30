@@ -411,7 +411,7 @@ def make_row(
             "relax_fmax": config.get("relax_fmax", 0.01),
             "relax_max_steps": config.get(
                 "relax_max_steps",
-                300,
+                600,
             ),
             "relax_optimizer": config.get(
                 "relax_optimizer",

@@ -1,16 +1,15 @@
-Machine Learning Force Fields Data Collection
+Machine Learning Force Fields Data Collection Docs
 ==========================================================
 
-Adversarial Attacks on MLFFs
+Project overview
 ----------------------------------------------------------
 
-*Fast predictions != Reliable predictions*: Machine learning force fields (MLFFs) can accelerate atomic simulations by
+Machine learning force fields (MLFFs) can accelerate atomic simulations by
 serving as computationally efficient surrogates for density functional theory
 (DFT). Their usefulness, however, depends on whether they remain reliable when
 atomic structures move beyond familiar training configurations.
 
-This project asks: **When an MLFF is deliberately pushed away from equilibrium, does relaxation
-return the material to its original structure?**
+This project asks: **When an atomic structure is pushed away from equilibrium, can the model recover its original structure?**
 
 The study applies controlled adversarial perturbations to 20 two-dimensional
 Materials Project structures and 20 Li-C-O configurations. Recovery is
@@ -21,8 +20,8 @@ FGSM, I-FGSM, and PGD are compared with non-adversarial contour exploration.
 The experiments also examine perturbation magnitude, numerical precision,
 random seeds, and supercells.
 
-Findings
-------------
+What we found
+-------------
 
 Perturbations approaching 10% of the minimum lattice parameter increasingly
 prevent structures from recovering their pre-attack configurations. At this
@@ -42,8 +41,10 @@ the next atomic configuration.
    :hidden:
 
    Motivation <motivation>
+   Concepts <concepts>
    Experiment Design <experimental_design>
    Getting Started <getting_started>
+   Metrics <metrics>
    Outputs <outputs>
    Plot Methods <plot_methods>
    Results <results_index>

@@ -14,7 +14,7 @@
   "dtypes": ["float32", "float64"],
 
   "relax_fmax": 0.01,
-  "relax_max_steps": 300,
+  "relax_max_steps": 600,
   "relax_optimizer": "LBFGS",
 
   "epsilons": [

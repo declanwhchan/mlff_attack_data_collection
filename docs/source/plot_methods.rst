@@ -74,7 +74,7 @@ the pre-attack relaxed reference. A small immediate change followed by a small
 final change indicates recovery. A persistent final change indicates that the
 relaxation ended in a structurally different configuration.
 
-Contour-exploration plots
+Contour exploration plots
 -------------------------
 
 Contour trajectories are grouped by model, material, and contour parameter.

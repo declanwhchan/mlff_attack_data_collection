@@ -5381,7 +5381,7 @@ def make_mlff_rankings(records, output_dir):
             "filename": "delta_force.png",
             "title": (
                 "MLFF ranking: delta force "
-                "during relaxation before attack"
+                "pre-relaxation"
             ),
             "xlabel": (
                 r"Median $\Delta$ force "
@@ -5396,7 +5396,7 @@ def make_mlff_rankings(records, output_dir):
             "filename": "delta_force_angle.png",
             "title": (
                 "MLFF ranking: force-vector angle "
-                "during relaxation before attack"
+                "pre-relaxation"
             ),
             "xlabel": (
                 "Median force-vector angle (degrees)"
@@ -5410,7 +5410,7 @@ def make_mlff_rankings(records, output_dir):
             "filename": "displacement.png",
             "title": (
                 "MLFF ranking: displacement "
-                "during relaxation before attack"
+                "pre-relaxation"
             ),
             "xlabel": (
                 r"Median displacement ($\AA$)"
@@ -5424,7 +5424,7 @@ def make_mlff_rankings(records, output_dir):
             "filename": "neighbor_jaccard_distance.png",
             "title": (
                 "MLFF ranking: neighbor Jaccard distance "
-                "during relaxation before attack"
+                "pre-relaxation"
             ),
             "xlabel": (
                 "Median neighbor Jaccard distance"
@@ -5438,7 +5438,7 @@ def make_mlff_rankings(records, output_dir):
             "filename": "rdf_l1_distance.png",
             "title": (
                 "MLFF ranking: RDF L1 distance "
-                "during relaxation before attack"
+                "pre-relaxation"
             ),
             "xlabel": "Median RDF L1 distance",
             "getter": lambda row: baseline_ranking_value(
@@ -5450,7 +5450,7 @@ def make_mlff_rankings(records, output_dir):
             "filename": "coordination_change.png",
             "title": (
                 "MLFF ranking: coordination-number change "
-                "during relaxation before attack"
+                "pre-relaxation"
             ),
             "xlabel": (
                 "Median maximum coordination-number change"
