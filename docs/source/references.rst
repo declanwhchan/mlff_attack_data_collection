@@ -60,6 +60,8 @@ Validation and failure analysis
   <https://pmc.ncbi.nlm.nih.gov/articles/PMC12451742/>`_
 * `MLFFs for material properties
   <https://arxiv.org/html/2412.10516v4>`_
+* `Correct energies does not guarantee the correct trajectory
+  <https://arxiv.org/abs/2401.00096>`_
 * `Fine-tuning machine-learned interatomic potentials
   <https://arxiv.org/html/2606.12704v1>`_
 * `Variance in machine learning force fields
@@ -146,7 +148,7 @@ Contour exploration
 
 .. _method-ref-contour:
 
-* `ASE contour-exploration documentation
+* `ASE contour exploration documentation
   <https://ase-lib.org/ase/md.html#module-ase.md.contour_exploration>`_
 * `Contour exploration method
   <https://arxiv.org/abs/2103.08054>`_

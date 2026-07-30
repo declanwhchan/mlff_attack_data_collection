@@ -8,9 +8,9 @@ comparison, ``initial`` means the pre-attack relaxed reference and ``final``
 means either the immediately perturbed or post-relaxation structure,
 depending on the evaluation stage.
 
-.. _metric-attack-definitions:
+.. _metric-attack-methods:
 
-Attack definitions
+Attack methods
 ------------------
 
 FGSM
@@ -33,7 +33,7 @@ FGSM applies one sign-gradient update to the atomic coordinates:
 Here, :math:`J_\theta` is the configured attack objective and the model
 parameters :math:`\theta` remain fixed.
 
-:ref:`FGSM reference <method-ref-fgsm>`
+:ref:`FGSM <method-ref-fgsm>`
 
 I-FGSM
 ~~~~~~
@@ -58,7 +58,7 @@ I-FGSM applies repeated sign-gradient updates:
 :math:`\alpha` is the step size and :math:`\Pi_\epsilon` keeps the coordinates
 inside the permitted perturbation region.
 
-:ref:`I-FGSM reference <method-ref-ifgsm>`
+:ref:`I-FGSM <method-ref-ifgsm>`
 
 PGD
 ~~~
@@ -82,7 +82,7 @@ PGD applies iterative updates projected into the allowed region:
 
 PGD can use a randomized starting point inside the allowed region.
 
-:ref:`PGD reference <method-ref-pgd>`
+:ref:`PGD <method-ref-pgd>`
 
 Normalized epsilon
 ------------------
@@ -107,7 +107,7 @@ The attack budget is normalized by the shortest lattice-vector length:
 
 This is the nominal attack budget, not the final post-relaxation displacement.
 
-:ref:`NumPy norm reference <method-ref-numpy-norm>`
+:ref:`NumPy norm <method-ref-numpy-norm>`
 
 Relaxation convergence
 ----------------------
@@ -125,7 +125,7 @@ A relaxation converges when the largest atomic force norm satisfies:
 
 The optimizer is limited to 300 steps.
 
-:ref:`ASE optimization reference <method-ref-ase-optimize>`
+:ref:`ASE optimization <method-ref-ase-optimize>`
 
 Displacement
 ------------
@@ -145,7 +145,7 @@ Atomic displacement is the magnitude of the final-minus-initial position:
 The pipeline summarizes these per-atom values using the configured mean,
 median, or maximum.
 
-:ref:`NumPy norm reference <method-ref-numpy-norm>`
+:ref:`NumPy norm <method-ref-numpy-norm>`
 
 Delta force
 -----------
@@ -164,7 +164,7 @@ Delta force is the magnitude of the final-minus-initial force:
 
 This compares two predictions from the same model. It is not a DFT force error.
 
-:ref:`NumPy norm reference <method-ref-numpy-norm>`
+:ref:`NumPy norm <method-ref-numpy-norm>`
 
 Delta-force angle
 -----------------
@@ -190,7 +190,7 @@ The force-angle change is:
 The implementation clips the cosine to :math:`[-1,1]` and handles zero-force
 cases separately.
 
-:ref:`NumPy norm reference <method-ref-numpy-norm>`
+:ref:`NumPy norm <method-ref-numpy-norm>`
 
 Relaxation steps
 ----------------
@@ -209,7 +209,7 @@ The recorded step count is limited to 300:
 
 A value of 300 means the configured maximum was reached.
 
-:ref:`ASE optimization reference <method-ref-ase-optimize>`
+:ref:`ASE optimization <method-ref-ase-optimize>`
 
 Neighbour-set Jaccard distance
 ------------------------------
@@ -240,7 +240,7 @@ neighbour-edge sets. Their Jaccard distance is:
 Zero means identical connectivity; one means that no neighbour edges are
 shared.
 
-:ref:`SciPy Jaccard reference <method-ref-jaccard>`
+:ref:`SciPy Jaccard <method-ref-jaccard>`
 
 Coordination change
 -------------------
@@ -259,7 +259,7 @@ For coordination number :math:`z_i`, the per-atom coordination change is:
 
 The pipeline reports the configured mean or maximum across atoms.
 
-:ref:`Coordination reference <method-ref-coordination>`
+:ref:`Coordination <method-ref-coordination>`
 
 RDF L1 distance
 ---------------
@@ -284,7 +284,7 @@ cutoff, binning, and normalization.
 
 The RDF is generated using ``ase.geometry.rdf.get_rdf``.
 
-:ref:`ASE RDF reference <method-ref-rdf>`
+:ref:`ASE RDF <method-ref-rdf>`
 
 
 Symmetry-operation retention
@@ -310,7 +310,7 @@ The retained fraction of initial symmetry operations is:
 
 The result depends on the symmetry and operation-matching tolerances.
 
-:ref:`Symmetry reference <method-ref-symmetry>`
+:ref:`Symmetry <method-ref-symmetry>`
 
 Unique-site change
 ------------------
@@ -329,7 +329,7 @@ The absolute change in the number of crystallographically unique sites is:
 
 The result depends on the symmetry tolerance.
 
-:ref:`Symmetry reference <method-ref-symmetry>`
+:ref:`Symmetry <method-ref-symmetry>`
 
 Cross-seed variability
 ----------------------
@@ -347,4 +347,4 @@ The random-seed shaded region uses the interquartile range:
 Thin lines represent individual available seeds and thick lines represent the
 available-seed median.
 
-:ref:`NumPy quantile reference <method-ref-numpy-quantile>`
+:ref:`NumPy quantile <method-ref-numpy-quantile>`

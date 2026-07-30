@@ -57,15 +57,15 @@ Models
 Five MLFFs are compared:
 
 * **MACE**, trained using LiCOHPF data
-  (:ref:`MACE reference <method-ref-mace>`).
+  (:ref:`MACE <method-ref-mace>`).
 * **MTP**, trained using LiCOHPF data
-  (:ref:`MTP reference <method-ref-mtp>`).
+  (:ref:`MTP <method-ref-mtp>`).
 * **MACE-MH**, a pretrained MACE-family model
-  (:ref:`MACE-MH reference <method-ref-mace-mh>`).
+  (:ref:`MACE-MH <method-ref-mace-mh>`).
 * **UMA**, Meta's pretrained Universal Model for Atoms
-  (:ref:`UMA reference <method-ref-uma>`).
+  (:ref:`UMA <method-ref-uma>`).
 * **CHGNet**, a pretrained crystal graph neural network
-  (:ref:`CHGNet reference <method-ref-chgnet>`).
+  (:ref:`CHGNet <method-ref-chgnet>`).
 
 The experiment compares model behaviour, not only computational speed or
 ordinary test-set accuracy.
@@ -76,11 +76,11 @@ Adversarial attacks
 Three coordinate attacks are evaluated:
 
 * **FGSM:** one sign-gradient update
-  (:ref:`FGSM reference <method-ref-fgsm>`).
+  (:ref:`FGSM <method-ref-fgsm>`).
 * **I-FGSM:** repeated sign-gradient updates
-  (:ref:`I-FGSM reference <method-ref-ifgsm>`).
+  (:ref:`I-FGSM <method-ref-ifgsm>`).
 * **PGD:** repeated updates projected into the allowed perturbation region
-  (:ref:`PGD reference <method-ref-pgd>`).
+  (:ref:`PGD <method-ref-pgd>`).
 
 The attacks modify atomic coordinates. Model parameters remain fixed.
 
@@ -92,7 +92,7 @@ Attack variables include:
 * attack step size;
 * random seed.
 
-The attack equations are defined in :ref:`metric-attack-definitions`.
+The attack equations are defined in :ref:`metric-attack-methods`.
 
 Relaxation
 ----------
@@ -116,7 +116,7 @@ A run reaching 300 steps reached the configured limit and should not
 automatically be described as converged.
 
 Relaxation uses the Atomic Simulation Environment optimization interface
-(:ref:`ASE optimization reference <method-ref-ase-optimize>`).
+(:ref:`ASE optimization <method-ref-ase-optimize>`).
 
 Evaluation stages
 -----------------
@@ -140,7 +140,7 @@ Contour exploration is the non-adversarial baseline. It explores a targeted
 energy contour instead of selecting an adversarial gradient direction.
 
 The implementation uses ASE contour exploration
-(:ref:`contour exploration reference <method-ref-contour>`).
+(:ref:`contour exploration <method-ref-contour>`).
 
 Contour exploration is a structured baseline, not a random-noise baseline.
 
@@ -186,7 +186,7 @@ structures. It tests whether observed behaviour persists when the represented
 atomic system becomes larger.
 
 Supercells are constructed using ASE structure-building operations
-(:ref:`ASE supercell reference <method-ref-supercell>`).
+(:ref:`ASE supercell <method-ref-supercell>`).
 
 Measured outcomes
 -----------------
@@ -207,6 +207,10 @@ The analysis includes:
 * float32/float64 agreement;
 * cross-seed variability.
 
+Energy agreement alone does not guarantee correct structural recovery, as
+small errors in the learned potential energy surface can alter relaxation
+trajectories and lead to different local minima (:ref:`ASE supercell <method-ref-supercell>`). Structure-based metrics were chosen to be more approxpriate metrics for evaluating MLFFs.
+
 Every mathematical definition is listed on the :doc:`metrics` page.
 
 Interpretation
@@ -221,5 +225,5 @@ pre-attack relaxed configuration under the selected model and settings. It
 does not, by itself, prove that the final structure is physically impossible.
 
 The validation context is discussed in the
-:ref:`MLFF validation reference <method-ref-validation>`.
+:ref:`MLFF validation <method-ref-validation>`.
 
