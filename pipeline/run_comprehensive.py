@@ -1614,6 +1614,61 @@ def exact_min_lattice_axis_specs(records, figure_name, version=1):
     )]
 
 
+def normalized_epsilon_parametric_getters():
+    """
+    Return normalized epsilon for both comparison stages.
+
+    epsilon_percent_displacement is:
+
+        100 * epsilon / minimum lattice-vector length
+    """
+    return [
+        lambda row: scalar_distribution(
+            row,
+            "epsilon_percent_displacement",
+        ),
+        lambda row: scalar_distribution(
+            row,
+            "epsilon_percent_displacement",
+        ),
+    ]
+
+
+def use_normalized_epsilon_for_displacement_x(
+    title,
+    x_label,
+    x_getters,
+    x_log,
+):
+    """
+    Replace parametric median-displacement x-axes with normalized epsilon.
+    """
+    if "median displacement" not in str(x_label).lower():
+        return (
+            title,
+            x_label,
+            x_getters,
+            x_log,
+        )
+
+    updated_title = str(title).replace(
+        "displacement",
+        "epsilon (% min lattice)",
+    ).replace(
+        "Displacement",
+        "Epsilon (% min lattice)",
+    )
+
+    return (
+        updated_title,
+        EPSILON_PERCENT_AXIS_LABELS[
+            EPSILON_AXIS_PERCENT
+        ],
+        normalized_epsilon_parametric_getters(),
+        True,
+    )
+
+
 def make_parametric_state_figure(
     records,
     output_dir,
@@ -1628,6 +1683,18 @@ def make_parametric_state_figure(
     x_log=False,
     y_log=False,
 ):
+    (
+        title,
+        x_label,
+        x_getters,
+        x_log,
+    ) = use_normalized_epsilon_for_displacement_x(
+        title,
+        x_label,
+        x_getters,
+        x_log,
+    )
+
     missing_rows = []
     rows = [
         ("After attack, before relaxation", x_getters[0], y_getters[0]),
@@ -1862,6 +1929,18 @@ def make_paired_relaxation_figure(
     y_log=False,
 ):
     """Show both relaxation states and summarize paired changes."""
+
+    (
+        title,
+        x_label,
+        x_getters,
+        x_log,
+    ) = use_normalized_epsilon_for_displacement_x(
+        title,
+        x_label,
+        x_getters,
+        x_log,
+    )
 
     missing_rows = []
     paired = paired_relaxation_rows(
