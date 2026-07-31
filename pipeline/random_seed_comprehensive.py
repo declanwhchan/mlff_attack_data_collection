@@ -1940,6 +1940,8 @@ def harmonize_random_seed_axes(fig):
                 "delta" in row_label
                 or "Δ" in row_label
                 or "\u0394" in row_label
+                or "δ" in row_label
+                or "\u03b4" in row_label
             )
         )
 
@@ -1957,42 +1959,7 @@ def harmonize_random_seed_axes(fig):
             )
         )
 
-        if is_delta_force:
-            # All force panels start at exactly 10^-2.
-            lower_limit = 1.0e-2
-
-            if positive_y.size:
-                upper_limit = upper_125(
-                    float(np.max(positive_y))
-                )
-            else:
-                upper_limit = 1.0
-
-            upper_limit = max(
-                upper_limit,
-                1.0e-1,
-            )
-
-            for ax in row_axes:
-                ax.set_yscale("log")
-                ax.set_ylim(
-                    lower_limit,
-                    upper_limit,
-                )
-                ax.yaxis.set_major_locator(
-                    mticker.LogLocator(base=10.0)
-                )
-                ax.yaxis.set_minor_locator(
-                    mticker.LogLocator(
-                        base=10.0,
-                        subs=np.arange(2, 10) * 0.1,
-                    )
-                )
-                ax.yaxis.set_minor_formatter(
-                    mticker.NullFormatter()
-                )
-
-        elif is_displacement:
+        if is_delta_force or is_displacement:
             if positive_y.size:
                 minimum_positive = float(
                     np.min(positive_y)
@@ -2001,48 +1968,74 @@ def harmonize_random_seed_axes(fig):
                     np.max(positive_y)
                 )
 
+                # Round downward and upward to exact powers of ten.
                 lower_limit = 10.0 ** math.floor(
                     math.log10(minimum_positive)
                 )
-                upper_limit = upper_125(
-                    maximum_positive
+                upper_limit = 10.0 ** math.ceil(
+                    math.log10(maximum_positive)
                 )
             else:
-                lower_limit = 1.0e-6
+                lower_limit = 1.0e-2
                 upper_limit = 1.0
+
+            if is_delta_force:
+                # Delta-force figures always begin at 10^-2.
+                lower_limit = 1.0e-2
 
             if upper_limit <= lower_limit:
                 upper_limit = lower_limit * 10.0
 
             for ax in row_axes:
                 ax.set_yscale("log")
+
                 ax.set_ylim(
                     lower_limit,
                     upper_limit,
                 )
+
                 ax.yaxis.set_major_locator(
-                    mticker.LogLocator(base=10.0)
+                    mticker.LogLocator(
+                        base=10.0,
+                    )
                 )
+
                 ax.yaxis.set_minor_locator(
                     mticker.LogLocator(
                         base=10.0,
                         subs=np.arange(2, 10) * 0.1,
                     )
                 )
+
                 ax.yaxis.set_minor_formatter(
                     mticker.NullFormatter()
                 )
 
         elif is_relaxation_steps:
+            maximum_steps = max(
+                600.0,
+                float(np.max(combined_y))
+                if combined_y.size
+                else 600.0,
+            )
+
+            upper_limit = (
+                math.ceil(maximum_steps / 100.0)
+                * 100.0
+            )
+
             shared_ticks = np.arange(
-                0,
-                301,
-                50,
+                0.0,
+                upper_limit + 1.0,
+                100.0,
             )
 
             for ax in row_axes:
                 ax.set_yscale("linear")
-                ax.set_ylim(0, 600)
+                ax.set_ylim(
+                    0.0,
+                    upper_limit,
+                )
                 ax.set_yticks(shared_ticks)
 
         elif is_unit_interval:
