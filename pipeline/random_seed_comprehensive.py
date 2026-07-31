@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-
+import re
 from pathlib import Path
 import argparse
 import sys
@@ -1449,6 +1449,282 @@ def write_aggregate_table(records, output_path):
         output_path,
         index=False,
     )
+
+
+def save_exact_random_seed_panels(fig):
+    """
+    Save exact crops of the nine axes displayed in each random-seed
+    comprehensive figure.
+
+    Six comprehensive figures are organized as:
+
+        3 experimental stages
+        x
+        2 figure families: physical and topology
+
+    Each stage folder therefore receives 18 panels.
+    """
+
+    def get_output_directory():
+        arguments = sys.argv[1:]
+
+        for index, argument in enumerate(arguments):
+            if argument == "--output-dir":
+                if index + 1 >= len(arguments):
+                    raise RuntimeError(
+                        "--output-dir has no value"
+                    )
+
+                return Path(
+                    arguments[index + 1]
+                ).resolve()
+
+            if argument.startswith("--output-dir="):
+                return Path(
+                    argument.split("=", 1)[1]
+                ).resolve()
+
+        raise RuntimeError(
+            "random_seed_comprehensive.py must be called "
+            "with --output-dir"
+        )
+
+    def slugify(value):
+        value = value.strip().lower()
+
+        replacements = {
+            "Δ": "delta",
+            "δ": "delta",
+            "Å": "angstrom",
+            "å": "angstrom",
+            "²": "2",
+            "³": "3",
+        }
+
+        for old, new in replacements.items():
+            value = value.replace(
+                old,
+                new,
+            )
+
+        value = re.sub(
+            r"[^a-z0-9]+",
+            "_",
+            value,
+        )
+
+        return value.strip("_")
+
+    plotting_axes = [
+        axis
+        for axis in fig.axes
+        if axis.get_visible()
+        and axis.has_data()
+    ]
+
+    plotting_axes = sorted(
+        plotting_axes,
+        key=lambda axis: (
+            -axis.get_position().y0,
+            axis.get_position().x0,
+        ),
+    )
+
+    if len(plotting_axes) != 9:
+        raise RuntimeError(
+            "Expected 9 axes in the random-seed comprehensive "
+            f"figure, but found {len(plotting_axes)}"
+        )
+
+    if fig._suptitle is None:
+        raise RuntimeError(
+            "The random-seed figure has no title, so its "
+            "experimental stage cannot be identified"
+        )
+
+    figure_title = (
+        fig._suptitle.get_text()
+        .strip()
+        .lower()
+        .replace("-", " ")
+    )
+
+    axis_label_text = " ".join(
+        axis.get_ylabel().strip().lower()
+        for axis in plotting_axes
+        if axis.get_ylabel().strip()
+    )
+
+    classification_text = (
+        figure_title
+        + " "
+        + axis_label_text
+    )
+
+    # Classify the figure as physical or topology.
+    if any(
+        phrase in classification_text
+        for phrase in (
+            "displacement",
+            "force",
+            "relaxation step",
+            "relax steps",
+            "physical response",
+        )
+    ):
+        figure_family = "physical"
+
+    elif any(
+        phrase in classification_text
+        for phrase in (
+            "jaccard",
+            "rdf",
+            "coordination",
+            "topology",
+            "neighbor",
+            "neighbour",
+        )
+    ):
+        figure_family = "topology"
+
+    else:
+        raise RuntimeError(
+            "Could not classify the figure as physical or "
+            "topology.\n"
+            f"Figure title: {figure_title!r}\n"
+            f"Axis labels: {axis_label_text!r}"
+        )
+
+    # Classify the experimental stage.
+    if (
+        "before attack" in figure_title
+        and "after relaxation" in figure_title
+    ):
+        stage = "before_attack_after_relaxation"
+
+    elif (
+        "after attack" in figure_title
+        and "before relaxation" in figure_title
+    ):
+        stage = "after_attack_before_relaxation"
+
+    elif (
+        "immediate" in figure_title
+        and "after attack" in figure_title
+    ):
+        stage = "after_attack_before_relaxation"
+
+    elif (
+        "after attack and relaxation" in figure_title
+        or (
+            "after attack" in figure_title
+            and "post relaxation" in figure_title
+        )
+    ):
+        stage = "after_attack_after_relaxation"
+
+    else:
+        raise RuntimeError(
+            "Could not identify the experimental stage from "
+            f"the figure title: {figure_title!r}"
+        )
+
+    stage_directory = (
+        get_output_directory()
+        / stage
+    )
+
+    stage_directory.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    row_metric_names = []
+
+    for row_index in range(3):
+        row_axes = plotting_axes[
+            row_index * 3:
+            (row_index + 1) * 3
+        ]
+
+        metric_name = next(
+            (
+                axis.get_ylabel().strip()
+                for axis in row_axes
+                if axis.get_ylabel().strip()
+            ),
+            "",
+        )
+
+        if not metric_name:
+            raise RuntimeError(
+                "Could not identify the metric for row "
+                f"{row_index + 1}"
+            )
+
+        row_metric_names.append(
+            metric_name
+        )
+
+    attack_names = (
+        "fgsm",
+        "ifgsm",
+        "pgd",
+    )
+
+    panel_letters = "ABCDEFGHI"
+
+    # Render the comprehensive layout before calculating crop boxes.
+    fig.canvas.draw()
+
+    renderer = (
+        fig.canvas.get_renderer()
+    )
+
+    for panel_index, axis in enumerate(
+        plotting_axes
+    ):
+        row_index = panel_index // 3
+        column_index = panel_index % 3
+
+        metric_slug = slugify(
+            row_metric_names[row_index]
+        )
+
+        attack_slug = (
+            attack_names[column_index]
+        )
+
+        output_filename = (
+            f"{figure_family}_"
+            f"{panel_letters[panel_index]}_"
+            f"{metric_slug}_"
+            f"{attack_slug}.png"
+        )
+
+        output_path = (
+            stage_directory
+            / output_filename
+        )
+
+        # get_tightbbox includes exactly what belongs to this axis:
+        # title, panel letter, tick labels, and axis labels where shown
+        # in the comprehensive figure.
+        bounding_box = (
+            axis.get_tightbbox(renderer)
+            .transformed(
+                fig.dpi_scale_trans.inverted()
+            )
+            .padded(0.04)
+        )
+
+        fig.savefig(
+            output_path,
+            dpi=300,
+            bbox_inches=bounding_box,
+            facecolor=fig.get_facecolor(),
+            edgecolor="none",
+        )
 
 
 def harmonize_random_seed_axes(fig):
