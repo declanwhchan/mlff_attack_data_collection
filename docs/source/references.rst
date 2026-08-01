@@ -25,7 +25,6 @@ Machine learning force fields
 .. _method-ref-mace:
 
 * `MACE architecture paper <https://arxiv.org/abs/2206.07697>`_
-* `MACE software repository <https://github.com/ACEsuit/mace>`_
 
 .. _method-ref-mace-mh:
 
@@ -44,7 +43,7 @@ Machine learning force fields
 
 .. _method-ref-mtp:
 
-* `LiCOHPF database and MTP repository
+* `LiCOHPF database with pre-trained MACE + MTP
   <https://github.com/gitliwq/LiCOHPF_database_1>`_
 
 Validation and failure analysis
