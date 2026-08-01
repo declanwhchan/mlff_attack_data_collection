@@ -364,6 +364,52 @@ def median_force_angle(initial_forces, current_forces):
     return float(np.median(angles))
 
 
+def minimum_lattice_length_a(atoms):
+    lengths = np.linalg.norm(
+        np.asarray(
+            atoms.cell.array,
+            dtype=float,
+        ),
+        axis=1,
+    )
+
+    lengths = lengths[
+        np.isfinite(lengths)
+        & (lengths > 1.0e-12)
+    ]
+
+    if lengths.size == 0:
+        return np.nan
+
+    return float(np.min(lengths))
+
+
+def displacement_percent_min_lattice(
+    displacement_a,
+    reference_length_a,
+):
+    displacement_a = pd.to_numeric(
+        displacement_a,
+        errors="coerce",
+    )
+
+    if (
+        not np.isfinite(reference_length_a)
+        or reference_length_a <= 0.0
+    ):
+        return np.full(
+            np.asarray(displacement_a).shape,
+            np.nan,
+            dtype=float,
+        )
+
+    return (
+        100.0
+        * displacement_a
+        / reference_length_a
+    )
+
+
 def contour_topology_metrics(initial_atoms, current_atoms):
     initial_edges = neighbor_edge_set(initial_atoms)
     current_edges = neighbor_edge_set(current_atoms)
@@ -543,6 +589,22 @@ def contour_frame_table(summary_row, max_frames=101):
     selected["contour_median_displacement_a"] = (
         median_displacements
     )
+
+    reference_length_a = minimum_lattice_length_a(
+        initial_atoms
+    )
+
+    selected[
+        "contour_reference_min_lattice_a"
+    ] = reference_length_a
+
+    selected[
+        "contour_median_displacement_percent_min_lattice"
+    ] = displacement_percent_min_lattice(
+        selected["contour_median_displacement_a"],
+        reference_length_a,
+    )
+
     selected["contour_median_force_delta_ev_a"] = (
         median_force_changes
     )
@@ -645,7 +707,7 @@ CONTOUR_DISPLACEMENT_PLOTS = [
         "Neighbor Jaccard distance",
         "Neighbor Jaccard distance",
         "jaccard_vs_displacement.png",
-        "Neighbor Jaccard distance vs median displacement",
+        "Neighbor Jaccard distance vs displacement (% min lattice)",
     ),
     (
         "contour_rdf_l1_distance",
@@ -653,7 +715,7 @@ CONTOUR_DISPLACEMENT_PLOTS = [
         "RDF L1 distance",
         "RDF L1 distance",
         "rdf_vs_displacement.png",
-        "RDF L1 distance vs median displacement",
+        "RDF L1 distance vs displacement (% min lattice)",
     ),
     (
         "contour_coordination_change_max",
@@ -661,7 +723,7 @@ CONTOUR_DISPLACEMENT_PLOTS = [
         "Maximum coordination-number change",
         "Maximum coordination-number change",
         "coordination_vs_displacement.png",
-        "Coordination change vs median displacement",
+        "Coordination change vs displacement (% min lattice)",
     ),
     (
         "contour_median_force_delta_ev_a",
@@ -669,7 +731,7 @@ CONTOUR_DISPLACEMENT_PLOTS = [
         r"Median force change (eV/$\AA$)",
         r"Median force change (eV/$\AA$)",
         "delta_force_vs_displacement.png",
-        "Median force change vs median displacement",
+        "Median force change vs displacement (% min lattice)",
     ),
     (
         "contour_convergence_mev_per_atom",
@@ -685,7 +747,7 @@ CONTOUR_DISPLACEMENT_PLOTS = [
         "Median force-vector angle change (degrees)",
         "Median force-vector angle change (degrees)",
         "delta_force_angle_vs_displacement.png",
-        "Force-angle change vs median displacement",
+        "Force-angle change vs displacement (% min lattice)",
     ),
 ]
 
@@ -697,7 +759,7 @@ SPACE_GROUP_DISPLACEMENT_PLOTS = [
         "Space-group change fraction",
         "Space-group change fraction",
         "space_group_change_fraction_vs_displacement.png",
-        "Space-group change vs median displacement",
+        "Space-group change vs displacement (% min lattice)",
     ),
     (
         "contour_symmetry_operation_retention",
@@ -705,7 +767,7 @@ SPACE_GROUP_DISPLACEMENT_PLOTS = [
         "Symmetry-operation retention",
         "Symmetry-operation retention",
         "symmetry_operation_retention_vs_displacement.png",
-        "Symmetry-operation retention vs median displacement",
+        "Symmetry-operation retention vs displacement (% min lattice)",
     ),
     (
         "contour_unique_site_change",
@@ -713,7 +775,7 @@ SPACE_GROUP_DISPLACEMENT_PLOTS = [
         "Unique symmetry-site change",
         "Unique symmetry-site change",
         "unique_site_change_vs_displacement.png",
-        "Unique symmetry-site change vs median displacement",
+        "Unique symmetry-site change vs displacement (% min lattice)",
     ),
 ]
 
@@ -762,7 +824,7 @@ def draw_contour_scatter(
             beta_data[
                 beta_data["calculator"] == calculator
             ],
-            "contour_median_displacement_a",
+            "contour_median_displacement_percent_min_lattice",
             metric,
         )
 
@@ -770,7 +832,9 @@ def draw_contour_scatter(
             continue
 
         axis.scatter(
-            selected["contour_median_displacement_a"],
+            selected[
+                "contour_median_displacement_percent_min_lattice"
+            ],
             selected[metric],
             s=18,
             alpha=0.28,
@@ -782,7 +846,7 @@ def draw_contour_scatter(
 
     axis.set_title(rf"$\beta={beta:.2f}$")
     axis.set_xlabel(
-        r"Median displacement from initial structure ($\AA$)"
+        "Displacement (% min lattice)"
     )
     axis.set_ylabel(ylabel)
     axis.grid(True, alpha=0.30)
@@ -809,7 +873,7 @@ def draw_relaxed_contour_scatter(
             beta_data[
                 beta_data["calculator"] == calculator
             ],
-            "contour_relaxed_median_displacement_a",
+            "contour_relaxed_displacement_percent_min_lattice",
             metric,
         )
 
@@ -818,7 +882,7 @@ def draw_relaxed_contour_scatter(
 
         axis.scatter(
             selected[
-                "contour_relaxed_median_displacement_a"
+                "contour_relaxed_displacement_percent_min_lattice"
             ],
             selected[metric],
             s=28,
@@ -832,7 +896,7 @@ def draw_relaxed_contour_scatter(
 
     axis.set_title(rf"$\beta={beta:.2f}$")
     axis.set_xlabel(
-        r"Median displacement from initial structure ($\AA$)"
+        "Displacement (% min lattice)"
     )
     axis.set_ylabel(ylabel)
     axis.grid(True, alpha=0.30)
@@ -2011,6 +2075,57 @@ def main():
         all_rows
     )
 
+    if (
+        not contour_frames.empty
+        and not relaxed_endpoints.empty
+    ):
+        reference_lengths = (
+            contour_frames[
+                [
+                    "material_slug",
+                    "calculator",
+                    "beta",
+                    "contour_reference_min_lattice_a",
+                ]
+            ]
+            .groupby(
+                [
+                    "material_slug",
+                    "calculator",
+                    "beta",
+                ],
+                as_index=False,
+            )
+            .agg(
+                contour_reference_min_lattice_a=(
+                    "contour_reference_min_lattice_a",
+                    "median",
+                )
+            )
+        )
+
+        relaxed_endpoints = relaxed_endpoints.merge(
+            reference_lengths,
+            on=[
+                "material_slug",
+                "calculator",
+                "beta",
+            ],
+            how="left",
+        )
+
+        relaxed_endpoints[
+            "contour_relaxed_displacement_percent_min_lattice"
+        ] = (
+            100.0
+            * relaxed_endpoints[
+                "contour_relaxed_median_displacement_a"
+            ]
+            / relaxed_endpoints[
+                "contour_reference_min_lattice_a"
+            ]
+        )
+
     relaxed_symmetry_columns = [
         "material_slug",
         "calculator",
@@ -2072,34 +2187,6 @@ def main():
             args.output_dir / "space_group",
             plot_specs=SPACE_GROUP_DISPLACEMENT_PLOTS,
         )
-
-        for material_slug, material_frames in (
-            contour_frames.groupby("material_slug")
-        ):
-            if (
-                relaxed_endpoints.empty
-                or "material_slug"
-                not in relaxed_endpoints.columns
-            ):
-                material_relaxed = pd.DataFrame()
-            else:
-                material_relaxed = relaxed_endpoints[
-                    relaxed_endpoints["material_slug"]
-                    == material_slug
-                ].copy()
-
-            make_contour_displacement_plots(
-                material_frames,
-                material_relaxed,
-                args.output_dir / str(material_slug),
-            )
-
-            make_contour_displacement_plots(
-                material_frames,
-                material_relaxed,
-                args.output_dir / "space_group" / str(material_slug),
-                plot_specs=SPACE_GROUP_DISPLACEMENT_PLOTS,
-            )
 
     else:
         print("No contour trajectory frames were available.")

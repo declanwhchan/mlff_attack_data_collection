@@ -471,6 +471,7 @@ for dtype_str, models in models_by_dtype.items():
         duplicate_columns = [
             column
             for column in [
+                "material_slug",
                 "run_id",
                 "beta",
             ]
