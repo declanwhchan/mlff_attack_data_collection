@@ -684,15 +684,7 @@ for record in recovery_records:
         zorder=5,
     )
 
-recovery_x_upper = max(
-    200,
-    int(
-        math.ceil(
-            maximum_recovery_step / 200.0
-        )
-        * 200
-    ),
-)
+recovery_x_upper = 360
 
 recovery_axis.set_xlim(
     0,
@@ -700,11 +692,7 @@ recovery_axis.set_xlim(
 )
 
 recovery_axis.set_xticks(
-    np.arange(
-        0,
-        recovery_x_upper + 1,
-        200,
-    )
+    [0, 100, 200, 300]
 )
 
 # The y-axis is shared, so labels are needed only on the left panel.
@@ -725,7 +713,7 @@ recovery_axis.spines["left"].set_visible(
 # ---------------------------------------------------------------------
 
 recovery_axis.text(
-    1.06,
+    -0.1,
     fmax * 2.0,
     r"$f_{\max}=0.01\mathrm{eV\AA^{-1}}$",
     transform=recovery_axis.get_yaxis_transform(),
