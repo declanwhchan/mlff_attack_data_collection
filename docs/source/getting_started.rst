@@ -120,13 +120,7 @@ Run the dependency installer for the selected dataset:
 
 .. code-block:: bash
 
-   bash run_<dataset>/dependencies.sh
-
-For example:
-
-.. code-block:: bash
-
-   bash run_licohpf_database/dependencies.sh
+   bash mlff_venvs_for_hpc.sh
 
 The installer prepares the model-specific Python environments and MTP
 executables expected by the Slurm scripts.

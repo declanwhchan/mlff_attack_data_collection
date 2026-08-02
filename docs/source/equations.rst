@@ -1,6 +1,6 @@
 .. _metrics:
 
-Metrics and Equations
+Equations
 =====================
 
 This page defines the attack updates and reported metrics. In every structural

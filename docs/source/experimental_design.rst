@@ -5,7 +5,7 @@ Experimental Design
 
 This study tests whether machine-learning force fields recover after their
 input atomic coordinates are deliberately perturbed. Mathematical definitions
-are provided separately in :doc:`metrics`.
+are provided separately in :doc:`equations`.
 
 Workflow
 --------
@@ -211,7 +211,7 @@ Energy agreement alone does not guarantee correct structural recovery, as
 small errors in the learned potential energy surface can alter relaxation
 trajectories and lead to different local minima (:ref:`ASE supercell <method-ref-supercell>`). Structure-based metrics were chosen to be more approxpriate metrics for evaluating MLFFs.
 
-Every mathematical definition is listed on the :doc:`metrics` page.
+Every mathematical definition is listed on the :doc:`equations` page.
 
 Interpretation
 --------------

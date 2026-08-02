@@ -23,7 +23,7 @@ random seeds, and supercells.
 What we found
 -------------
 
-Perturbations approaching 10% of the minimum lattice parameter increasingly
+Perturbations approaching 5% of the minimum lattice parameter increasingly
 prevent structures from recovering their pre-attack configurations. At this
 magnitude, the largest post-relaxation force changes observed for the
 LiCOHPF-trained MACE and MTP models reach approximately five orders of
@@ -44,7 +44,7 @@ the next atomic configuration.
    Concepts <concepts>
    Experiment Design <experimental_design>
    Getting Started <getting_started>
-   Metrics <metrics>
+   Equations <equations>
    Outputs <outputs>
    Plot Methods <plot_methods>
    Results <results_index>
