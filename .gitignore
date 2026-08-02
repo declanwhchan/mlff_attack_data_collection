@@ -23,5 +23,5 @@ outputs*/
 *.png
 *.tar*
 
-#docs
+# docs
 docs/build
