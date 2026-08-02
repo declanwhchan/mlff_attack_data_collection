@@ -98,11 +98,11 @@ TOPOLOGY_METRICS = [
     ),
     (
         "rdf_l1_distance",
-        "RDF L1 distance",
+        "RDF L1 distance (Å)",
     ),
     (
         "coordination_change_max",
-        "Maximum coordination change",
+        "Max CN change",
     ),
 ]
 
@@ -1562,7 +1562,7 @@ def figure_legend(records):
             )[1],
             markersize=4,
             linewidth=1,
-            label=f"Seed {seed}",
+            label=f"{seed}",
         )
         for seed in sorted(
             present_seeds
@@ -1633,7 +1633,7 @@ def make_metric_figure(
                 )
 
             ax.set_xlabel(
-                "Perturbation strength (% min. lattice)",
+                "ε strength (% min lattice parameter)",
                 labelpad=6,
             )
 
@@ -1786,6 +1786,14 @@ def save_exact_random_seed_panels(fig):
     Each stage folder therefore receives 24 panels.
     """
 
+    # The comprehensive figure has already been saved. Increase only
+    # the physical height used for standalone panel exports by 40%.
+    fig.set_size_inches(
+        fig.get_figwidth(),
+        fig.get_figheight() * 1.40,
+        forward=True,
+    )
+
     def get_output_directory():
         arguments = sys.argv[1:]
 
@@ -1835,6 +1843,63 @@ def save_exact_random_seed_panels(fig):
         )
 
         return value.strip("_")
+
+    def individual_y_values(axis):
+        """Collect data-space y values from one plotted panel."""
+        values = []
+
+        for line in axis.lines:
+            current = np.asarray(
+                line.get_ydata(),
+                dtype=float,
+            ).reshape(-1)
+            current = current[np.isfinite(current)]
+
+            if current.size:
+                values.append(current)
+
+        for collection in axis.collections:
+            try:
+                offsets = np.asarray(
+                    collection.get_offsets(),
+                    dtype=float,
+                )
+
+                if (
+                    offsets.ndim == 2
+                    and offsets.shape[1] >= 2
+                ):
+                    current = offsets[:, 1]
+                    current = current[np.isfinite(current)]
+
+                    if current.size:
+                        values.append(current)
+            except Exception:
+                pass
+
+            try:
+                for path_item in collection.get_paths():
+                    vertices = np.asarray(
+                        path_item.vertices,
+                        dtype=float,
+                    )
+
+                    if (
+                        vertices.ndim == 2
+                        and vertices.shape[1] >= 2
+                    ):
+                        current = vertices[:, 1]
+                        current = current[np.isfinite(current)]
+
+                        if current.size:
+                            values.append(current)
+            except Exception:
+                pass
+
+        if not values:
+            return np.asarray([], dtype=float)
+
+        return np.concatenate(values)
 
     plotting_axes = [
         axis
@@ -1989,6 +2054,44 @@ def save_exact_random_seed_panels(fig):
             metric_name
         )
 
+    # Use one shared Max CN scale across its standalone panels, while
+    # expanding beyond 12 when necessary so no plotted values are clipped.
+    max_cn_upper_limit = 12.0
+
+    for row_index, metric_name in enumerate(row_metric_names):
+        if metric_name != "Max CN change":
+            continue
+
+        row_value_sets = [
+            individual_y_values(axis)
+            for axis in plotting_axes[
+                row_index * 4:
+                (row_index + 1) * 4
+            ]
+        ]
+        row_value_sets = [
+            values[np.isfinite(values)]
+            for values in row_value_sets
+            if values.size
+        ]
+
+        if row_value_sets:
+            maximum_cn_change = float(
+                np.max(np.concatenate(row_value_sets))
+            )
+            candidate_upper = 2.0 * float(
+                np.ceil(maximum_cn_change / 2.0)
+            )
+
+            # Add headroom if the maximum lies exactly on a tick.
+            if candidate_upper <= maximum_cn_change:
+                candidate_upper += 2.0
+
+            max_cn_upper_limit = max(
+                12.0,
+                candidate_upper,
+            )
+
     attack_names = (
         "contour",
         "fgsm",
@@ -2045,6 +2148,24 @@ def save_exact_random_seed_panels(fig):
             item[1]
             for item in paired_items
         ]
+
+    model_legend_items = [
+        (handle, label)
+        for handle, label in zip(
+            individual_legend_handles,
+            individual_legend_labels,
+        )
+        if not label.startswith("Seed ")
+    ]
+
+    seed_legend_items = [
+        (handle, label)
+        for handle, label in zip(
+            individual_legend_handles,
+            individual_legend_labels,
+        )
+        if label.startswith("Seed ")
+    ]
 
     # The comprehensive figure has already been saved. Hide its global
     # legend, title and footer so they cannot leak into panel crops.
@@ -2111,29 +2232,90 @@ def save_exact_random_seed_panels(fig):
         )
 
         axis.set_xlabel(
-            "Perturbation strength (% min. lattice)",
+            "ε strength (% min lattice parameter)",
             labelpad=7,
         )
 
-        panel_legend = None
+        # The comprehensive figure was already saved with harmonized
+        # row limits. Only standalone panels are rescaled here using
+        # the data actually visible in the current axis.
+        panel_values = individual_y_values(axis)
 
-        if (
-            individual_legend_handles
-            and individual_legend_labels
-        ):
-            panel_legend = axis.legend(
-                handles=individual_legend_handles,
-                labels=individual_legend_labels,
+        if panel_values.size:
+            configure_y_axis(
+                axis,
+                panel_values,
+                scale=axis.get_yscale(),
+            )
+
+        # Keep all standalone maximum coordination-number panels on
+        # the same simple integer scale for direct comparison.
+        if row_metric_names[row_index] == "Max CN change":
+            axis.set_yscale("linear")
+            axis.set_ylim(
+                0,
+                max_cn_upper_limit,
+            )
+            axis.set_yticks(
+                np.arange(
+                    0,
+                    max_cn_upper_limit + 0.1,
+                    2,
+                )
+            )
+
+        panel_legends = []
+
+        if model_legend_items:
+            model_legend = axis.legend(
+                handles=[
+                    item[0]
+                    for item in model_legend_items
+                ],
+                labels=[
+                    item[1]
+                    for item in model_legend_items
+                ],
                 loc="lower center",
-                bbox_to_anchor=(0.5, 1.30),
-                ncol=4,
+                bbox_to_anchor=(0.28, 1.30),
+                ncol=2,
                 frameon=False,
                 fontsize=7.2,
                 handlelength=2.2,
                 columnspacing=1.0,
                 handletextpad=0.45,
                 borderaxespad=0.0,
+                title="Models",
+                title_fontsize=7.4,
             )
+
+            axis.add_artist(model_legend)
+            panel_legends.append(model_legend)
+
+        if seed_legend_items:
+            seed_legend = axis.legend(
+                handles=[
+                    item[0]
+                    for item in seed_legend_items
+                ],
+                labels=[
+                    item[1]
+                    for item in seed_legend_items
+                ],
+                loc="lower center",
+                bbox_to_anchor=(0.78, 1.30),
+                ncol=2,
+                frameon=False,
+                fontsize=7.2,
+                handlelength=2.2,
+                columnspacing=1.0,
+                handletextpad=0.45,
+                borderaxespad=0.0,
+                title="Seeds",
+                title_fontsize=7.4,
+            )
+
+            panel_legends.append(seed_legend)
 
         # Redraw so the legend has a valid bounding box.
         fig.canvas.draw()
@@ -2143,7 +2325,7 @@ def save_exact_random_seed_panels(fig):
             axis.get_tightbbox(renderer),
         ]
 
-        if panel_legend is not None:
+        for panel_legend in panel_legends:
             bounding_boxes.append(
                 panel_legend.get_window_extent(renderer)
             )
@@ -2166,7 +2348,7 @@ def save_exact_random_seed_panels(fig):
             edgecolor="none",
         )
 
-        if panel_legend is not None:
+        for panel_legend in panel_legends:
             panel_legend.remove()
 
 
