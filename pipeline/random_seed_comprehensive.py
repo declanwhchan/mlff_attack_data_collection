@@ -957,11 +957,11 @@ def prepare_records(records):
 
 def physical_metrics(stage):
     if stage == "before_attack_after_relaxation":
-        step_label = "Initial relaxation steps"
+        step_label = "Relaxation steps"
     elif stage == "after_attack_before_relaxation":
         step_label = "Subsequent post-attack relaxation steps"
     else:
-        step_label = "Post-attack relaxation steps"
+        step_label = "Relaxation steps"
 
     return [
         (
@@ -2054,44 +2054,6 @@ def save_exact_random_seed_panels(fig):
             metric_name
         )
 
-    # Use one shared Max CN scale across its standalone panels, while
-    # expanding beyond 12 when necessary so no plotted values are clipped.
-    max_cn_upper_limit = 12.0
-
-    for row_index, metric_name in enumerate(row_metric_names):
-        if metric_name != "Max CN change":
-            continue
-
-        row_value_sets = [
-            individual_y_values(axis)
-            for axis in plotting_axes[
-                row_index * 4:
-                (row_index + 1) * 4
-            ]
-        ]
-        row_value_sets = [
-            values[np.isfinite(values)]
-            for values in row_value_sets
-            if values.size
-        ]
-
-        if row_value_sets:
-            maximum_cn_change = float(
-                np.max(np.concatenate(row_value_sets))
-            )
-            candidate_upper = 2.0 * float(
-                np.ceil(maximum_cn_change / 2.0)
-            )
-
-            # Add headroom if the maximum lies exactly on a tick.
-            if candidate_upper <= maximum_cn_change:
-                candidate_upper += 2.0
-
-            max_cn_upper_limit = max(
-                12.0,
-                candidate_upper,
-            )
-
     attack_names = (
         "contour",
         "fgsm",
@@ -2248,22 +2210,147 @@ def save_exact_random_seed_panels(fig):
                 scale=axis.get_yscale(),
             )
 
-        # Keep all standalone maximum coordination-number panels on
-        # the same simple integer scale for direct comparison.
+        # Standalone linear panels must include every visible seed and
+        # IQR value. The general helper uses robust percentiles, which
+        # is useful for comprehensive figures but can crop the largest
+        # value in a single extracted panel. Round upward to the next
+        # clean major tick, with an extra tick when the maximum lies
+        # exactly on a boundary.
+        if (
+            panel_values.size
+            and axis.get_yscale() == "linear"
+            and row_metric_names[row_index] != "Max CN change"
+        ):
+            finite_panel_values = panel_values[
+                np.isfinite(panel_values)
+            ]
+
+            if finite_panel_values.size:
+                panel_minimum = float(
+                    np.min(finite_panel_values)
+                )
+                panel_maximum = float(
+                    np.max(finite_panel_values)
+                )
+
+                panel_lower_limit = (
+                    0.0
+                    if panel_minimum >= 0
+                    else panel_minimum
+                )
+
+                locator = mticker.MaxNLocator(
+                    nbins=6,
+                    min_n_ticks=4,
+                    steps=[1, 2, 2.5, 4, 5, 10],
+                )
+
+                shared_ticks = locator.tick_values(
+                    panel_lower_limit,
+                    panel_maximum,
+                )
+
+                if panel_minimum >= 0:
+                    shared_ticks = shared_ticks[
+                        shared_ticks >= 0
+                    ]
+
+                    if (
+                        shared_ticks.size == 0
+                        or not np.isclose(
+                            shared_ticks[0],
+                            0.0,
+                        )
+                    ):
+                        shared_ticks = np.insert(
+                            shared_ticks,
+                            0,
+                            0.0,
+                        )
+
+                if shared_ticks.size >= 2:
+                    tick_step = float(
+                        shared_ticks[-1]
+                        - shared_ticks[-2]
+                    )
+
+                    if (
+                        shared_ticks[-1]
+                        <= panel_maximum
+                        or np.isclose(
+                            shared_ticks[-1],
+                            panel_maximum,
+                        )
+                    ):
+                        shared_ticks = np.append(
+                            shared_ticks,
+                            shared_ticks[-1] + tick_step,
+                        )
+
+                    axis.set_ylim(
+                        float(shared_ticks[0]),
+                        float(shared_ticks[-1]),
+                    )
+                    axis.set_yticks(shared_ticks)
+        # Attack relaxation runs are capped at 600 steps. Keep a small
+        # amount of headroom above capped curves, but do not display a
+        # misleading 700-step tick. Contour panels retain their own
+        # independently scaled axes.
+        if (
+            column_index > 0
+            and "relaxation steps"
+            in row_metric_names[row_index].lower()
+        ):
+            axis.set_yscale("linear")
+            axis.set_ylim(0, 620)
+            axis.set_yticks(
+                np.arange(0, 601, 100)
+            )
+
+
+        # Give each standalone Max CN panel its own compact integer
+        # scale. End one unit above the largest plotted value while
+        # retaining even-numbered ticks below the ceiling. For example,
+        # a maximum of 12 produces limits of 0--13 and ticks through 12.
         if row_metric_names[row_index] == "Max CN change":
+            line_value_sets = []
+
+            for line in axis.lines:
+                values = np.asarray(
+                    line.get_ydata(),
+                    dtype=float,
+                ).reshape(-1)
+                values = values[np.isfinite(values)]
+
+                if values.size:
+                    line_value_sets.append(values)
+
+            maximum_cn_change = (
+                float(np.max(np.concatenate(line_value_sets)))
+                if line_value_sets
+                else 10.0
+            )
+            panel_cn_upper_limit = max(
+                2.0,
+                float(
+                    math.ceil(
+                        maximum_cn_change + 1.0
+                    )
+                ),
+            )
+
             axis.set_yscale("linear")
             axis.set_ylim(
                 0,
-                max_cn_upper_limit,
+                panel_cn_upper_limit,
             )
             axis.set_yticks(
                 np.arange(
                     0,
-                    max_cn_upper_limit + 0.1,
+                    panel_cn_upper_limit,
                     2,
                 )
             )
-
         panel_legends = []
 
         if model_legend_items:
