@@ -54,37 +54,12 @@
       ]
     },
     {
-      "model_id": "mtp",
-      "display_name": "MTP",
-      "calculator": "mtp",
-      "calculator_backend": "mtp",
-      "model_path": "pot.almtp",
-      "elements_path": "pot.almtp.elements",
-      "device": "cpu",
-      "dtypes": [
-        "float64"
-      ]
-    },
-    {
       "model_id": "chgnet",
       "display_name": "CHGNet",
       "calculator": "chgnet",
       "calculator_backend": "chgnet",
       "model_path": "chgnet-0.3.0",
       "device": "cpu",
-      "dtypes": [
-        "float32",
-        "float64"
-      ]
-    },
-    {
-      "model_id": "mace_model",
-      "display_name": "MACE Model",
-      "calculator": "mace",
-      "calculator_backend": "mace",
-      "model_path": "MACE_model.model",
-      "mace_head": null,
-      "device": "cuda",
       "dtypes": [
         "float32",
         "float64"
