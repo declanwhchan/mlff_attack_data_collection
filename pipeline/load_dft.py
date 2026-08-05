@@ -229,7 +229,13 @@ def load_dft_records(
 ):
     """Convert clean fixed-cell DFT relaxations into normal plot records."""
     dft_root = Path(dft_root)
-    manifest_path = dft_root / "manifests" / "preliminary_manifest.csv"
+    combined_manifest = dft_root / "manifests" / "combined_manifest.csv"
+    preliminary_manifest = dft_root / "manifests" / "preliminary_manifest.csv"
+    manifest_path = (
+        combined_manifest
+        if combined_manifest.is_file()
+        else preliminary_manifest
+    )
     manifest = _read_csv(manifest_path)
     if manifest is None or manifest.empty:
         return [], [f"Missing or empty DFT manifest: {manifest_path}"]
