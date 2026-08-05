@@ -3,7 +3,6 @@ from pathlib import Path
 import argparse
 import csv
 import math
-from io import StringIO
 import re
 
 import matplotlib.pyplot as plt
@@ -12,6 +11,7 @@ from matplotlib.ticker import MaxNLocator, ScalarFormatter, FuncFormatter, Fixed
 import numpy as np
 import pandas as pd
 from ase.io import read as read_structure
+from load_dft import load_dft_records
 from run_tests import (
     coordination_by_atom,
     edge_jaccard_distance,
@@ -36,9 +36,9 @@ MODEL_LABELS = {
     "mtp": "MTP",
     "chgnet": "CHGNet",
     "mace_model": "MACE Model",
-    "dft_mace_mh": "DFT (MACE-MH attack)",
-    "dft_uma": "DFT (UMA attack)",
-    "dft_chgnet": "DFT (CHGNet attack)",
+    "dft_mace_mh": "DFT (MACE-MH)",
+    "dft_uma": "DFT (UMA)",
+    "dft_chgnet": "DFT (CHGNet)",
 }
 
 def model_label(model_id):
@@ -319,44 +319,6 @@ def as_float(value):
     if value is None:
         return None
     return float(value)
-
-
-def read_dft_structure(path, index=-1):
-    """Read DFT data, including POSCAR text stored with a .cif name."""
-    path = Path(path)
-    try:
-        return read_structure(path, index=index)
-    except Exception as original_error:
-        try:
-            lines = path.read_text(encoding="utf-8").splitlines()
-        except Exception:
-            raise original_error
-
-        if len(lines) < 8:
-            raise original_error
-
-        count_tokens = lines[6].split()
-        try:
-            valid_counts = bool(count_tokens) and all(
-                int(token) >= 0 for token in count_tokens
-            )
-        except ValueError:
-            valid_counts = False
-
-        symbols = [token.rstrip("/") for token in lines[5].split()]
-        if (
-            not valid_counts
-            or len(symbols) != len(count_tokens)
-            or any(not symbol for symbol in symbols)
-        ):
-            raise original_error
-
-        lines[5] = "  " + "  ".join(symbols)
-        return read_structure(
-            StringIO("\n".join(lines) + "\n"),
-            format="vasp",
-            index=index,
-        )
 
 
 def epsilon_lattice_lengths_from_summary_row(row):
@@ -1073,266 +1035,6 @@ def load_summary(
             "perturbed_unique_site_change": as_float(row.get("perturbed_unique_site_change")),
             "unique_site_change": as_float(row.get("unique_site_change")),
         })
-
-    return records, missing
-
-
-DFT_SOURCE_MODELS = {
-    "mace": "mace_mh",
-    "mace_mh": "mace_mh",
-    "uma": "uma",
-    "chgnet": "chgnet",
-}
-
-
-def normalized_material_name(value):
-    return re.sub(r"[^a-z0-9]", "", str(value).lower())
-
-
-def epsilon_from_dft_token(token):
-    token = str(token)
-    if token.startswith("0"):
-        return float(f"0.{token[1:]}")
-    return float(token)
-
-
-def parse_dft_structure_name(structure_name):
-    match = re.match(
-        r"^(mace_mh|mace|uma|chgnet)_(.+)_"
-        r"(fgsm|ifgsm|pgd)_eps([0-9]+)"
-        r"(?:_steps([0-9]+))?_perturbed$",
-        str(structure_name).lower(),
-    )
-    if match is None:
-        return None
-
-    source_name, material_slug, attack_name, epsilon_token, steps_token = (
-        match.groups()
-    )
-    return {
-        "source_model": DFT_SOURCE_MODELS[source_name],
-        "material_slug": material_slug,
-        "attack_label": {
-            "fgsm": "FGSM",
-            "ifgsm": "I-FGSM",
-            "pgd": "PGD",
-        }[attack_name],
-        "epsilon": epsilon_from_dft_token(epsilon_token),
-        "n_steps": int(steps_token) if steps_token else None,
-    }
-
-
-def structure_change_metrics(reference, target):
-    if reference is None or target is None or len(reference) != len(target):
-        return {
-            "displacements": np.asarray([], dtype=float),
-            "neighbor_jaccard_distance": np.nan,
-            "coordination_change_mean": np.nan,
-            "coordination_change_max": np.nan,
-            "rdf_l1_distance": np.nan,
-        }
-
-    displacements = np.linalg.norm(
-        target.positions - reference.positions,
-        axis=1,
-    )
-
-    try:
-        reference_edges = neighbor_edge_set(reference)
-        target_edges = neighbor_edge_set(target)
-        reference_coordination = coordination_by_atom(
-            reference_edges,
-            reference,
-        )
-        target_coordination = coordination_by_atom(
-            target_edges,
-            target,
-        )
-        atom_keys = set(reference_coordination) | set(target_coordination)
-        coordination_changes = np.asarray([
-            abs(
-                target_coordination.get(atom, 0)
-                - reference_coordination.get(atom, 0)
-            )
-            for atom in atom_keys
-        ], dtype=float)
-
-        return {
-            "displacements": displacements,
-            "neighbor_jaccard_distance": edge_jaccard_distance(
-                reference_edges,
-                target_edges,
-            ),
-            "coordination_change_mean": (
-                float(np.mean(coordination_changes))
-                if len(coordination_changes)
-                else 0.0
-            ),
-            "coordination_change_max": (
-                float(np.max(coordination_changes))
-                if len(coordination_changes)
-                else 0.0
-            ),
-            "rdf_l1_distance": float(rdf_l1_distance(reference, target)),
-        }
-    except Exception:
-        return {
-            "displacements": displacements,
-            "neighbor_jaccard_distance": np.nan,
-            "coordination_change_mean": np.nan,
-            "coordination_change_max": np.nan,
-            "rdf_l1_distance": np.nan,
-        }
-
-
-def write_structure_force_csv(structure, path):
-    frame = pd.DataFrame({
-        "atom_index": np.arange(len(structure), dtype=int),
-        "x": structure.positions[:, 0],
-        "y": structure.positions[:, 1],
-        "z": structure.positions[:, 2],
-        "fx": np.nan,
-        "fy": np.nan,
-        "fz": np.nan,
-    })
-    frame.to_csv(path, index=False)
-
-
-def load_dft_records(dft_root, source_records, cache_root):
-    """Convert clean fixed-cell DFT relaxations into normal plot records."""
-    dft_root = Path(dft_root)
-    manifest_path = dft_root / "manifests" / "preliminary_manifest.csv"
-    manifest = read_csv(manifest_path)
-
-    if manifest is None or manifest.empty:
-        return [], [f"Missing or empty DFT manifest: {manifest_path}"]
-
-    source = pd.DataFrame(source_records)
-    if source.empty:
-        return [], ["No MLFF records were available for matching DFT structures"]
-
-    cache_root = Path(cache_root)
-    cache_root.mkdir(parents=True, exist_ok=True)
-    records = []
-    missing = []
-
-    for _, manifest_row in manifest.iterrows():
-        if str(manifest_row.get("delivery_group", "")).upper() != "FORCE_CONVERGED_CLEAN":
-            continue
-
-        structure_name = str(manifest_row.get("structure_name", ""))
-        parsed = parse_dft_structure_name(structure_name)
-        if parsed is None:
-            missing.append(f"Unrecognized DFT structure name: {structure_name}")
-            continue
-
-        candidates = source[
-            (source["calculator"] == parsed["source_model"])
-            & (source["attack_label"] == parsed["attack_label"])
-        ].copy()
-        candidates = candidates[
-            candidates["material_slug"].map(normalized_material_name)
-            == normalized_material_name(parsed["material_slug"])
-        ]
-        candidate_epsilon = pd.to_numeric(
-            candidates.get("epsilon"),
-            errors="coerce",
-        )
-        candidates = candidates[
-            np.isclose(
-                candidate_epsilon,
-                parsed["epsilon"],
-                rtol=1.0e-8,
-                atol=1.0e-12,
-            )
-        ]
-
-        if parsed["n_steps"] is not None:
-            candidate_steps = pd.to_numeric(
-                candidates.get("n_steps"),
-                errors="coerce",
-            )
-            candidates = candidates[candidate_steps == parsed["n_steps"]]
-        else:
-            candidates = candidates[
-                ~candidates["run_id"].astype(str).str.contains(
-                    "_steps",
-                    regex=False,
-                )
-            ]
-
-        if candidates.empty:
-            missing.append(f"No MLFF source record matched DFT structure: {structure_name}")
-            continue
-
-        parent = candidates.iloc[0].to_dict()
-        relaxed_value = clean_value(manifest_row.get("relaxed_structure_file"))
-        if relaxed_value is None:
-            missing.append(f"No relaxed structure path for DFT structure: {structure_name}")
-            continue
-
-        relaxed_path = dft_root / str(relaxed_value)
-        perturbed_path = relaxed_path.parent / "initial.cif"
-        baseline_path = baseline_relaxation_path(parent)
-
-        try:
-            baseline = read_structure(baseline_path, index=-1)
-            perturbed = read_dft_structure(perturbed_path)
-            relaxed = read_dft_structure(relaxed_path)
-        except Exception as error:
-            missing.append(f"Could not read DFT structures for {structure_name}: {error}")
-            continue
-
-        if not (len(baseline) == len(perturbed) == len(relaxed)):
-            missing.append(f"Atom count mismatch for DFT structure: {structure_name}")
-            continue
-
-        run_dir = cache_root / structure_name
-        run_dir.mkdir(parents=True, exist_ok=True)
-        write_structure_force_csv(baseline, run_dir / "before_forces.csv")
-        write_structure_force_csv(perturbed, run_dir / "perturbed_forces.csv")
-        write_structure_force_csv(relaxed, run_dir / "after_forces.csv")
-
-        immediate = structure_change_metrics(baseline, perturbed)
-        final = structure_change_metrics(baseline, relaxed)
-        dft_model = f"dft_{parsed['source_model']}"
-
-        record = dict(parent)
-        record.update({
-            "run_id": f"dft_{structure_name}",
-            "logical_run_id": f"dft_{structure_name}",
-            "calculator": dft_model,
-            "model_id": dft_model,
-            "run_dir": str(run_dir),
-            "input_path": str(perturbed_path),
-            "after_relax_steps": as_int(manifest_row.get("n_ionic_steps")),
-            "after_relax_converged": True,
-            "mean_displacement": (
-                float(np.mean(final["displacements"]))
-                if len(final["displacements"])
-                else np.nan
-            ),
-            "max_displacement": (
-                float(np.max(final["displacements"]))
-                if len(final["displacements"])
-                else np.nan
-            ),
-            "final_energy": as_float(manifest_row.get("final_energy_eV")),
-            "perturbed_neighbor_jaccard_distance": immediate["neighbor_jaccard_distance"],
-            "perturbed_coordination_change_mean": immediate["coordination_change_mean"],
-            "perturbed_coordination_change_max": immediate["coordination_change_max"],
-            "perturbed_rdf_l1_distance": immediate["rdf_l1_distance"],
-            "neighbor_jaccard_distance": final["neighbor_jaccard_distance"],
-            "coordination_change_mean": final["coordination_change_mean"],
-            "coordination_change_max": final["coordination_change_max"],
-            "rdf_l1_distance": final["rdf_l1_distance"],
-            "dft_source_model": parsed["source_model"],
-            "dft_structure_name": structure_name,
-            "dft_perturbed_structure": str(perturbed_path),
-            "dft_relaxed_structure": str(relaxed_path),
-            "dft_final_fmax_eV_A": as_float(manifest_row.get("final_fmax_eV_A")),
-        })
-        records.append(record)
 
     return records, missing
 
@@ -4956,7 +4658,7 @@ def make_material_rankings(
             "baseline_key": "displacement",
         },
         "neighbor_jaccard_distance.png": {
-            "name": "neighbor Jaccard distance",
+            "name": "Neighbor Jaccard distance",
             "xlabel": (
                 "Median neighbor Jaccard distance"
             ),
@@ -5211,6 +4913,7 @@ def save_mlff_ranking_violin_plot(
     xlabel,
     value_getter,
     log_x=False,
+    highlight_epsilon_percent=5.0,
 ):
     """
     Create a vertical MLFF ranking violin plot.
@@ -5355,13 +5058,13 @@ def save_mlff_ranking_violin_plot(
     # arranging categories by their observed median values.
     fixed_model_order = [
         "mace_mh",
-        "dft_mace_mh",
         "uma",
-        "dft_uma",
         "chgnet",
-        "dft_chgnet",
         "mtp",
         "mace_model",
+        "dft_mace_mh",
+        "dft_uma",
+        "dft_chgnet",
     ]
 
     present_models = set(
@@ -5614,22 +5317,22 @@ def save_mlff_ranking_violin_plot(
             zorder=6,
         )
 
-    # Add a restrained categorical profile at approximately 5% of the
-    # minimum lattice length. For every material/attack/model group,
-    # use the closest sampled perturbation to 5%, then take the median
-    # across those matched cases for each model.
+    # Highlight the median at the requested perturbation strength. Each
+    # material/attack/model group contributes its closest sampled epsilon.
     if "after attack" in title.lower():
-        five_percent_data = data.dropna(
+        highlighted_data = data.dropna(
             subset=["epsilon_percent_displacement"]
         ).copy()
 
-        five_percent_data = five_percent_data.loc[
-            five_percent_data["epsilon_percent_displacement"] > 0
+        highlighted_data = highlighted_data.loc[
+            highlighted_data["epsilon_percent_displacement"] > 0
         ].copy()
 
-        if not five_percent_data.empty:
-            five_percent_data["distance_from_five_percent"] = np.abs(
-                five_percent_data["epsilon_percent_displacement"] - 5.0
+        if not highlighted_data.empty:
+            distance_column = "distance_from_highlight_epsilon"
+            highlighted_data[distance_column] = np.abs(
+                highlighted_data["epsilon_percent_displacement"]
+                - float(highlight_epsilon_percent)
             )
 
             matching_columns = [
@@ -5639,29 +5342,25 @@ def save_mlff_ranking_violin_plot(
             ]
 
             closest_indices = (
-                five_percent_data.groupby(
+                highlighted_data.groupby(
                     matching_columns,
                     dropna=False,
-                )["distance_from_five_percent"]
+                )[distance_column]
                 .idxmin()
             )
 
-            closest_cases = five_percent_data.loc[
-                closest_indices
-            ]
-
-            five_percent_medians = (
+            closest_cases = highlighted_data.loc[closest_indices]
+            highlighted_medians = (
                 closest_cases.groupby("calculator")["value"]
                 .median()
                 .reindex(model_order)
             )
+            valid_profile = highlighted_medians.notna().to_numpy()
 
-            valid_profile = five_percent_medians.notna().to_numpy()
-
-            if np.count_nonzero(valid_profile) >= 2:
+            if np.count_nonzero(valid_profile) >= 1:
                 profile_positions = positions[valid_profile]
                 profile_values = display_values(
-                    five_percent_medians.to_numpy(dtype=float)[valid_profile]
+                    highlighted_medians.to_numpy(dtype=float)[valid_profile]
                 )
 
                 ax.plot(
@@ -5675,16 +5374,21 @@ def save_mlff_ranking_violin_plot(
                     markeredgewidth=0.0,
                     alpha=1.0,
                     zorder=7,
-                    label="5% ε strength",
+                    label=(
+                        f"{highlight_epsilon_percent:g}% "
+                        + r"$\epsilon$ strength"
+                    ),
                 )
 
+                # Keep the annotation outside the data region.
                 ax.legend(
-                    loc="upper left",
+                    loc="lower right",
+                    bbox_to_anchor=(1.0, 1.005),
                     frameon=False,
                     fontsize=10.5,
-                    handlelength=2.4,
+                    handlelength=0.8,
+                    borderaxespad=0.0,
                 )
-
     ax.set_xticks(positions)
 
     ax.set_xticklabels(
@@ -5920,7 +5624,11 @@ def save_mlff_ranking_violin_plot(
 
     plt.close(fig)
 
-def make_mlff_rankings(records, output_dir):
+def make_mlff_rankings(
+    records,
+    output_dir,
+    highlight_epsilon_percent=5.0,
+):
     output_dir = Path(output_dir)
 
     baseline_dir = (
@@ -6239,6 +5947,7 @@ def make_mlff_rankings(records, output_dir):
             title=metric["title"],
             xlabel=metric["xlabel"],
             value_getter=metric["getter"],
+            highlight_epsilon_percent=highlight_epsilon_percent,
         )
 
     for metric in immediate_metrics:
@@ -6251,6 +5960,7 @@ def make_mlff_rankings(records, output_dir):
             title=metric["title"],
             xlabel=metric["xlabel"],
             value_getter=metric["getter"],
+            highlight_epsilon_percent=highlight_epsilon_percent,
             log_x=(
                 metric["filename"]
                 == "delta_force.png"
@@ -6264,6 +5974,7 @@ def make_mlff_rankings(records, output_dir):
             title=metric["title"],
             xlabel=metric["xlabel"],
             value_getter=metric["getter"],
+            highlight_epsilon_percent=highlight_epsilon_percent,
             log_x=(
                 metric["filename"]
                 == "delta_force.png"
@@ -7362,6 +7073,7 @@ def make_outlier_reports(records, output_dir):
             metric_name=metric["name"],
             stage=metric["stage"],
             value_getter=metric["getter"],
+            highlight_epsilon_percent=highlight_epsilon_percent,
         )
 
         filename = (
@@ -7870,6 +7582,15 @@ def main():
         ),
     )
 
+    parser.add_argument(
+        "--mlff-ranking-highlight-epsilon-percent",
+        type=float,
+        default=5.0,
+        help=(
+            "Perturbation strength highlighted by the red marker in "
+            "post-attack MLFF ranking plots."
+        ),
+    )
     args = parser.parse_args()
 
     selected_models = list(args.models or MODEL_ORDER)
@@ -7930,6 +7651,7 @@ def main():
             args.dft_structures_dir,
             all_records,
             args.output_dir / "dft_plot_records",
+            baseline_path_resolver=baseline_relaxation_path,
         )
 
         pd.DataFrame(
@@ -8032,6 +7754,9 @@ def main():
     make_mlff_rankings(
         epsilon_records,
         args.output_dir / "mlffs_ranking",
+        highlight_epsilon_percent=(
+            args.mlff_ranking_highlight_epsilon_percent
+        ),
     )
 
     make_convergence_figure(epsilon_records, args.output_dir)
