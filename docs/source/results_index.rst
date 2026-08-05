@@ -1,9 +1,137 @@
-Results Index
-=============
+Results
+=======
 
 This page summarizes the measured outcomes and principal findings. Blank
 fields should be completed only after the corresponding summary files have been
 validated.
+
+Index
+-----
+
+2D Materials Project Cases
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. list-table:: 2D Materials Project benchmark cases
+   :header-rows: 1
+   :widths: 18 10 18 22 35 30 24 18
+
+   * - Model
+     - Device
+     - Floating-point precision
+     - Attacks
+     - Epsilon values
+     - Iterative attack steps
+     - Random seeds
+     - Cases per material
+   * - MACE-MH-1
+     - CPU
+     - ``float32``, ``float64``
+     - FGSM, I-FGSM, PGD
+     - 0.001--0.005, 0.01--0.05, 0.1--0.5, 1--5, 10
+     - 1, 2, 3, 4, 5, 10, 20, 30, 40, 50, 100
+     - 42, 43, 44, 45, 46
+     - 850
+   * - UMA-S-1p1
+     - CPU
+     - ``float32``, ``float64``
+     - FGSM, I-FGSM, PGD
+     - 0.001--0.005, 0.01--0.05, 0.1--0.5, 1--5, 10
+     - 1, 2, 3, 4, 5, 10, 20, 30, 40, 50, 100
+     - 42, 43, 44, 45, 46
+     - 850
+   * - CHGNet
+     - CPU
+     - ``float32``, ``float64``
+     - FGSM, I-FGSM, PGD
+     - 0.001--0.005, 0.01--0.05, 0.1--0.5, 1--5, 10
+     - 1, 2, 3, 4, 5, 10, 20, 30, 40, 50, 100
+     - 42, 43, 44, 45, 46
+     - 850
+   * - **Total**
+     - **CPU**
+     - **6 model/precision combinations**
+     - **3 attacks**
+     - **21 epsilon values**
+     - **11 step values**
+     - **5 seeds**
+     - **2,550 per material**
+
+The 2D Materials Project dataset contains 20 materials, giving a total of
+**51,000 benchmark cases**.
+
+LiCoHPF Database Cases
+~~~~~~~~~~~~~~~~~~~~~~
+
+.. list-table:: LiCoHPF database benchmark cases
+   :header-rows: 1
+   :widths: 18 10 18 22 35 30 24 18
+
+   * - Model
+     - Device
+     - Floating-point precision
+     - Attacks
+     - Epsilon values
+     - Iterative attack steps
+     - Random seeds
+     - Cases per material
+   * - MACE-MH-1
+     - CPU
+     - ``float32``, ``float64``
+     - FGSM, I-FGSM, PGD
+     - 0.001--0.005, 0.01--0.05, 0.1--0.5, 1--5, 10
+     - 1, 2, 3, 4, 5, 10, 20, 30, 40, 50, 100
+     - 42, 43, 44, 45, 46
+     - 850
+   * - UMA-S-1p1
+     - CPU
+     - ``float32``, ``float64``
+     - FGSM, I-FGSM, PGD
+     - 0.001--0.005, 0.01--0.05, 0.1--0.5, 1--5, 10
+     - 1, 2, 3, 4, 5, 10, 20, 30, 40, 50, 100
+     - 42, 43, 44, 45, 46
+     - 850
+   * - CHGNet
+     - CPU
+     - ``float32``, ``float64``
+     - FGSM, I-FGSM, PGD
+     - 0.001--0.005, 0.01--0.05, 0.1--0.5, 1--5, 10
+     - 1, 2, 3, 4, 5, 10, 20, 30, 40, 50, 100
+     - 42, 43, 44, 45, 46
+     - 850
+   * - MTP
+     - CPU
+     - ``float64``
+     - FGSM, I-FGSM, PGD
+     - 0.001--0.005, 0.01--0.05, 0.1--0.5, 1--5, 10
+     - 1, 2, 3, 4, 5, 10, 20, 30, 40, 50, 100
+     - 42, 43, 44, 45, 46
+     - 425
+   * - MACE Model
+     - GPU
+     - ``float32``, ``float64``
+     - FGSM, I-FGSM, PGD
+     - 0.001--0.005, 0.01--0.05, 0.1--0.5, 1--5, 10
+     - 1, 2, 3, 4, 5, 10, 20, 30, 40, 50, 100
+     - 42, 43, 44, 45, 46
+     - 850
+   * - **Total**
+     - **CPU and GPU**
+     - **9 model/precision combinations**
+     - **3 attacks**
+     - **21 epsilon values**
+     - **11 step values**
+     - **5 seeds**
+     - **3,825 per material**
+
+The LiCoHPF dataset contains 20 materials, giving a total of
+**76,500 benchmark cases**.
+
+For each model, precision, material, and random seed, the benchmark contains:
+
+* 63 epsilon-sweep cases: 21 epsilon values multiplied by 3 attacks.
+* 22 step-sweep cases: 11 step values multiplied by I-FGSM and PGD.
+* 85 combined epsilon- and step-sweep cases.
+
 
 Figures
 ----------------------
