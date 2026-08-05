@@ -3,6 +3,7 @@ from pathlib import Path
 import argparse
 import csv
 import math
+from io import StringIO
 import re
 
 import matplotlib.pyplot as plt
@@ -35,6 +36,9 @@ MODEL_LABELS = {
     "mtp": "MTP",
     "chgnet": "CHGNet",
     "mace_model": "MACE Model",
+    "dft_mace_mh": "DFT (MACE-MH attack)",
+    "dft_uma": "DFT (UMA attack)",
+    "dft_chgnet": "DFT (CHGNet attack)",
 }
 
 def model_label(model_id):
@@ -49,6 +53,9 @@ CALCULATOR_COLORS = {
     "mtp": "#CC79A7",
     "chgnet": "#009E73",
     "mace_model": "#E69F00",
+    "dft_mace_mh": "#56B4E9",
+    "dft_uma": "#F0A35E",
+    "dft_chgnet": "#66C2A5",
 }
 
 ATTACK_ORDER = ["FGSM", "I-FGSM", "PGD"]
@@ -65,6 +72,9 @@ MODEL_OFFSETS = {
     "mtp": 0.0,
     "chgnet": 0.16,
     "mace_model": 0.32,
+    "dft_mace_mh": -0.24,
+    "dft_uma": 0.0,
+    "dft_chgnet": 0.24,
 }
 
 EPSILON_POSITION_FACTORS = {
@@ -73,6 +83,9 @@ EPSILON_POSITION_FACTORS = {
     "mtp": 1.0,
     "chgnet": 10 ** 0.05,
     "mace_model": 10 ** 0.10,
+    "dft_mace_mh": 10 ** (-0.075),
+    "dft_uma": 1.0,
+    "dft_chgnet": 10 ** 0.075,
 }
 
 EPSILON_BOX_WIDTH_LOG10 = 0.020
@@ -215,6 +228,9 @@ STEP_POSITION_FACTORS = {
     "mtp": 1.0,
     "chgnet": 10 ** 0.05,
     "mace_model": 10 ** 0.10,
+    "dft_mace_mh": 10 ** (-0.075),
+    "dft_uma": 1.0,
+    "dft_chgnet": 10 ** 0.075,
 }
 
 STEP_BOX_WIDTH_LOG10 = 0.020
@@ -303,6 +319,44 @@ def as_float(value):
     if value is None:
         return None
     return float(value)
+
+
+def read_dft_structure(path, index=-1):
+    """Read DFT data, including POSCAR text stored with a .cif name."""
+    path = Path(path)
+    try:
+        return read_structure(path, index=index)
+    except Exception as original_error:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except Exception:
+            raise original_error
+
+        if len(lines) < 8:
+            raise original_error
+
+        count_tokens = lines[6].split()
+        try:
+            valid_counts = bool(count_tokens) and all(
+                int(token) >= 0 for token in count_tokens
+            )
+        except ValueError:
+            valid_counts = False
+
+        symbols = [token.rstrip("/") for token in lines[5].split()]
+        if (
+            not valid_counts
+            or len(symbols) != len(count_tokens)
+            or any(not symbol for symbol in symbols)
+        ):
+            raise original_error
+
+        lines[5] = "  " + "  ".join(symbols)
+        return read_structure(
+            StringIO("\n".join(lines) + "\n"),
+            format="vasp",
+            index=index,
+        )
 
 
 def epsilon_lattice_lengths_from_summary_row(row):
@@ -692,10 +746,166 @@ def relaxation_steps(path, relax_fmax):
     return steps, converged
 
 
-def resolve_run_dir(base_dir, row):
+def run_folder_aliases(value, material_slug=None):
+    """Return aliases shared by current run folders and legacy run IDs."""
+    value = clean_value(value)
+    if value is None:
+        return set()
+
+    text = Path(str(value)).name.strip().lower()
+    aliases = {text}
+    material = str(material_slug or "").strip().lower()
+    if material and text.startswith(f"{material}_"):
+        text = text[len(material) + 1:]
+        aliases.add(text)
+
+    prefixes = (
+        "mace_model_", "mace_mh_", "mace_", "uma_s_1p1_",
+        "uma_", "chgnet_", "mtp_", "float32_", "float64_",
+    )
+    changed = True
+    while changed:
+        changed = False
+        for prefix in prefixes:
+            if text.startswith(prefix):
+                text = text[len(prefix):]
+                aliases.add(text)
+                changed = True
+                break
+
+    return {alias for alias in aliases if alias}
+
+
+def scratch_model_aliases(model_id):
+    """Return compatible scratch directory names for a selected model."""
+    model_id = str(model_id).strip().lower()
+    aliases = {model_id}
+    if model_id == "mace_mh":
+        aliases.add("mace")
+    elif model_id == "mace":
+        aliases.add("mace_mh")
+    return aliases
+
+
+def build_run_directory_index(scratch_runs_dir):
+    """Index scratch runs using model, material, folder, and run-ID aliases."""
+    if scratch_runs_dir is None:
+        return {}
+
+    scratch_runs_dir = Path(scratch_runs_dir)
+    if not scratch_runs_dir.is_dir():
+        raise SystemExit(
+            "ERROR: scratch MLFF run directory does not exist:\n"
+            f"{scratch_runs_dir}"
+        )
+
+    index = {}
+    for trajectory in scratch_runs_dir.rglob(
+        "before_attack_relaxation.traj"
+    ):
+        run_dir = trajectory.parent
+
+        try:
+            relative = run_dir.relative_to(scratch_runs_dir)
+        except ValueError:
+            continue
+
+        # Current runs are stored as
+        # outputs_<dtype>/<model>/<material>/<run_folder>.
+        if len(relative.parts) < 3:
+            continue
+
+        model_id = relative.parts[0]
+        material_slug = relative.parts[-2]
+        run_folder = relative.parts[-1]
+
+        aliases = run_folder_aliases(run_folder, material_slug)
+        aliases.update(run_folder_aliases(
+            f"{material_slug}_{model_id}_{run_folder}", material_slug
+        ))
+
+        for model_alias in scratch_model_aliases(model_id):
+            for alias in aliases:
+                index.setdefault(
+                    (model_alias, material_slug.lower(), alias),
+                    run_dir,
+                )
+
+    if not index:
+        raise SystemExit(
+            "ERROR: no before_attack_relaxation.traj files were found "
+            "under the scratch MLFF run directory:\n"
+            f"{scratch_runs_dir}"
+        )
+
+    return index
+
+
+def resolve_run_dir(
+    base_dir,
+    row,
+    calculator=None,
+    scratch_runs_dir=None,
+    run_directory_index=None,
+):
     run_id = str(row["run_id"])
+    material_slug = clean_value(row.get("material_slug"))
+    run_folder = clean_value(row.get("run_folder"))
+
+    # Scratch is authoritative. Project-side output directories may exist
+    # merely as aggregation destinations and contain no trajectories.
+    if (
+        scratch_runs_dir is not None
+        and calculator is not None
+        and material_slug is not None
+    ):
+        folder_aliases = run_folder_aliases(run_folder, material_slug)
+        folder_aliases.update(run_folder_aliases(run_id, material_slug))
+
+        for model_alias in scratch_model_aliases(calculator):
+            for folder_alias in folder_aliases:
+                scratch_candidate = (
+                    Path(scratch_runs_dir)
+                    / model_alias
+                    / str(material_slug)
+                    / folder_alias
+                )
+                if (
+                    scratch_candidate
+                    / "before_attack_relaxation.traj"
+                ).is_file():
+                    return scratch_candidate
+
+        if run_directory_index:
+            for model_alias in scratch_model_aliases(calculator):
+                for folder_alias in folder_aliases:
+                    indexed_directory = run_directory_index.get(
+                        (
+                            model_alias,
+                            str(material_slug).lower(),
+                            folder_alias,
+                        )
+                    )
+                    if indexed_directory is not None:
+                        return indexed_directory
+
+    actual_output_dir = clean_value(
+        row.get("actual_output_dir")
+    )
+
+    if actual_output_dir is not None:
+        actual_path = Path(str(actual_output_dir))
+        if (
+            actual_path
+            / "before_attack_relaxation.traj"
+        ).is_file():
+            return actual_path
+
     candidate = Path(base_dir) / run_id
-    if candidate.exists():
+    if (
+        candidate
+        / "before_attack_relaxation.traj"
+    ).is_file():
         return candidate
 
     for column in [
@@ -708,13 +918,25 @@ def resolve_run_dir(base_dir, row):
         value = clean_value(row.get(column))
         if value is not None:
             path = Path(str(value))
-            if path.exists():
+            if (
+                path.exists()
+                and (
+                    path.parent
+                    / "before_attack_relaxation.traj"
+                ).is_file()
+            ):
                 return path.parent
 
     return candidate
 
 
-def load_summary(summary_path, base_dir, calculator):
+def load_summary(
+    summary_path,
+    base_dir,
+    calculator,
+    scratch_runs_dir=None,
+    run_directory_index=None,
+):
     summary = read_csv(summary_path)
     if summary is None or summary.empty:
         return [], [f"Missing or empty summary: {summary_path}"]
@@ -726,7 +948,13 @@ def load_summary(summary_path, base_dir, calculator):
         if str(row.get("status", "")).strip().lower() != "success":
             continue
 
-        run_dir = resolve_run_dir(base_dir, row)
+        run_dir = resolve_run_dir(
+            base_dir,
+            row,
+            calculator=calculator,
+            scratch_runs_dir=scratch_runs_dir,
+            run_directory_index=run_directory_index,
+        )
         relax_fmax = as_float(row.get("relax_fmax"))
         material_label, material_slug = material_info(row, run_dir)
 
@@ -784,6 +1012,17 @@ def load_summary(summary_path, base_dir, calculator):
             "alpha": as_float(row.get("alpha")),
             "relax_fmax": relax_fmax,
             "run_dir": str(run_dir),
+            # Preserve backend-specific artifact locations for downstream
+            # random-seed aggregation. Not every calculator writes these
+            # files directly below run_dir.
+            "actual_output_dir": clean_value(row.get("actual_output_dir")),
+            "before_force_csv": clean_value(row.get("before_force_csv")),
+            "perturbed_force_csv": clean_value(row.get("perturbed_force_csv")),
+            "after_force_csv": clean_value(row.get("after_force_csv")),
+            "before_relax_traj": clean_value(row.get("before_relax_traj")),
+            "after_attack_relax_traj": clean_value(
+                row.get("after_attack_relax_traj")
+            ),
             "before_relax_steps": before_steps,
             "before_relax_converged": before_converged,
             "after_relax_steps": after_steps,
@@ -834,6 +1073,266 @@ def load_summary(summary_path, base_dir, calculator):
             "perturbed_unique_site_change": as_float(row.get("perturbed_unique_site_change")),
             "unique_site_change": as_float(row.get("unique_site_change")),
         })
+
+    return records, missing
+
+
+DFT_SOURCE_MODELS = {
+    "mace": "mace_mh",
+    "mace_mh": "mace_mh",
+    "uma": "uma",
+    "chgnet": "chgnet",
+}
+
+
+def normalized_material_name(value):
+    return re.sub(r"[^a-z0-9]", "", str(value).lower())
+
+
+def epsilon_from_dft_token(token):
+    token = str(token)
+    if token.startswith("0"):
+        return float(f"0.{token[1:]}")
+    return float(token)
+
+
+def parse_dft_structure_name(structure_name):
+    match = re.match(
+        r"^(mace_mh|mace|uma|chgnet)_(.+)_"
+        r"(fgsm|ifgsm|pgd)_eps([0-9]+)"
+        r"(?:_steps([0-9]+))?_perturbed$",
+        str(structure_name).lower(),
+    )
+    if match is None:
+        return None
+
+    source_name, material_slug, attack_name, epsilon_token, steps_token = (
+        match.groups()
+    )
+    return {
+        "source_model": DFT_SOURCE_MODELS[source_name],
+        "material_slug": material_slug,
+        "attack_label": {
+            "fgsm": "FGSM",
+            "ifgsm": "I-FGSM",
+            "pgd": "PGD",
+        }[attack_name],
+        "epsilon": epsilon_from_dft_token(epsilon_token),
+        "n_steps": int(steps_token) if steps_token else None,
+    }
+
+
+def structure_change_metrics(reference, target):
+    if reference is None or target is None or len(reference) != len(target):
+        return {
+            "displacements": np.asarray([], dtype=float),
+            "neighbor_jaccard_distance": np.nan,
+            "coordination_change_mean": np.nan,
+            "coordination_change_max": np.nan,
+            "rdf_l1_distance": np.nan,
+        }
+
+    displacements = np.linalg.norm(
+        target.positions - reference.positions,
+        axis=1,
+    )
+
+    try:
+        reference_edges = neighbor_edge_set(reference)
+        target_edges = neighbor_edge_set(target)
+        reference_coordination = coordination_by_atom(
+            reference_edges,
+            reference,
+        )
+        target_coordination = coordination_by_atom(
+            target_edges,
+            target,
+        )
+        atom_keys = set(reference_coordination) | set(target_coordination)
+        coordination_changes = np.asarray([
+            abs(
+                target_coordination.get(atom, 0)
+                - reference_coordination.get(atom, 0)
+            )
+            for atom in atom_keys
+        ], dtype=float)
+
+        return {
+            "displacements": displacements,
+            "neighbor_jaccard_distance": edge_jaccard_distance(
+                reference_edges,
+                target_edges,
+            ),
+            "coordination_change_mean": (
+                float(np.mean(coordination_changes))
+                if len(coordination_changes)
+                else 0.0
+            ),
+            "coordination_change_max": (
+                float(np.max(coordination_changes))
+                if len(coordination_changes)
+                else 0.0
+            ),
+            "rdf_l1_distance": float(rdf_l1_distance(reference, target)),
+        }
+    except Exception:
+        return {
+            "displacements": displacements,
+            "neighbor_jaccard_distance": np.nan,
+            "coordination_change_mean": np.nan,
+            "coordination_change_max": np.nan,
+            "rdf_l1_distance": np.nan,
+        }
+
+
+def write_structure_force_csv(structure, path):
+    frame = pd.DataFrame({
+        "atom_index": np.arange(len(structure), dtype=int),
+        "x": structure.positions[:, 0],
+        "y": structure.positions[:, 1],
+        "z": structure.positions[:, 2],
+        "fx": np.nan,
+        "fy": np.nan,
+        "fz": np.nan,
+    })
+    frame.to_csv(path, index=False)
+
+
+def load_dft_records(dft_root, source_records, cache_root):
+    """Convert clean fixed-cell DFT relaxations into normal plot records."""
+    dft_root = Path(dft_root)
+    manifest_path = dft_root / "manifests" / "preliminary_manifest.csv"
+    manifest = read_csv(manifest_path)
+
+    if manifest is None or manifest.empty:
+        return [], [f"Missing or empty DFT manifest: {manifest_path}"]
+
+    source = pd.DataFrame(source_records)
+    if source.empty:
+        return [], ["No MLFF records were available for matching DFT structures"]
+
+    cache_root = Path(cache_root)
+    cache_root.mkdir(parents=True, exist_ok=True)
+    records = []
+    missing = []
+
+    for _, manifest_row in manifest.iterrows():
+        if str(manifest_row.get("delivery_group", "")).upper() != "FORCE_CONVERGED_CLEAN":
+            continue
+
+        structure_name = str(manifest_row.get("structure_name", ""))
+        parsed = parse_dft_structure_name(structure_name)
+        if parsed is None:
+            missing.append(f"Unrecognized DFT structure name: {structure_name}")
+            continue
+
+        candidates = source[
+            (source["calculator"] == parsed["source_model"])
+            & (source["attack_label"] == parsed["attack_label"])
+        ].copy()
+        candidates = candidates[
+            candidates["material_slug"].map(normalized_material_name)
+            == normalized_material_name(parsed["material_slug"])
+        ]
+        candidate_epsilon = pd.to_numeric(
+            candidates.get("epsilon"),
+            errors="coerce",
+        )
+        candidates = candidates[
+            np.isclose(
+                candidate_epsilon,
+                parsed["epsilon"],
+                rtol=1.0e-8,
+                atol=1.0e-12,
+            )
+        ]
+
+        if parsed["n_steps"] is not None:
+            candidate_steps = pd.to_numeric(
+                candidates.get("n_steps"),
+                errors="coerce",
+            )
+            candidates = candidates[candidate_steps == parsed["n_steps"]]
+        else:
+            candidates = candidates[
+                ~candidates["run_id"].astype(str).str.contains(
+                    "_steps",
+                    regex=False,
+                )
+            ]
+
+        if candidates.empty:
+            missing.append(f"No MLFF source record matched DFT structure: {structure_name}")
+            continue
+
+        parent = candidates.iloc[0].to_dict()
+        relaxed_value = clean_value(manifest_row.get("relaxed_structure_file"))
+        if relaxed_value is None:
+            missing.append(f"No relaxed structure path for DFT structure: {structure_name}")
+            continue
+
+        relaxed_path = dft_root / str(relaxed_value)
+        perturbed_path = relaxed_path.parent / "initial.cif"
+        baseline_path = baseline_relaxation_path(parent)
+
+        try:
+            baseline = read_structure(baseline_path, index=-1)
+            perturbed = read_dft_structure(perturbed_path)
+            relaxed = read_dft_structure(relaxed_path)
+        except Exception as error:
+            missing.append(f"Could not read DFT structures for {structure_name}: {error}")
+            continue
+
+        if not (len(baseline) == len(perturbed) == len(relaxed)):
+            missing.append(f"Atom count mismatch for DFT structure: {structure_name}")
+            continue
+
+        run_dir = cache_root / structure_name
+        run_dir.mkdir(parents=True, exist_ok=True)
+        write_structure_force_csv(baseline, run_dir / "before_forces.csv")
+        write_structure_force_csv(perturbed, run_dir / "perturbed_forces.csv")
+        write_structure_force_csv(relaxed, run_dir / "after_forces.csv")
+
+        immediate = structure_change_metrics(baseline, perturbed)
+        final = structure_change_metrics(baseline, relaxed)
+        dft_model = f"dft_{parsed['source_model']}"
+
+        record = dict(parent)
+        record.update({
+            "run_id": f"dft_{structure_name}",
+            "logical_run_id": f"dft_{structure_name}",
+            "calculator": dft_model,
+            "model_id": dft_model,
+            "run_dir": str(run_dir),
+            "input_path": str(perturbed_path),
+            "after_relax_steps": as_int(manifest_row.get("n_ionic_steps")),
+            "after_relax_converged": True,
+            "mean_displacement": (
+                float(np.mean(final["displacements"]))
+                if len(final["displacements"])
+                else np.nan
+            ),
+            "max_displacement": (
+                float(np.max(final["displacements"]))
+                if len(final["displacements"])
+                else np.nan
+            ),
+            "final_energy": as_float(manifest_row.get("final_energy_eV")),
+            "perturbed_neighbor_jaccard_distance": immediate["neighbor_jaccard_distance"],
+            "perturbed_coordination_change_mean": immediate["coordination_change_mean"],
+            "perturbed_coordination_change_max": immediate["coordination_change_max"],
+            "perturbed_rdf_l1_distance": immediate["rdf_l1_distance"],
+            "neighbor_jaccard_distance": final["neighbor_jaccard_distance"],
+            "coordination_change_mean": final["coordination_change_mean"],
+            "coordination_change_max": final["coordination_change_max"],
+            "rdf_l1_distance": final["rdf_l1_distance"],
+            "dft_source_model": parsed["source_model"],
+            "dft_structure_name": structure_name,
+            "dft_perturbed_structure": str(perturbed_path),
+            "dft_relaxed_structure": str(relaxed_path),
+            "dft_final_fmax_eV_A": as_float(manifest_row.get("final_fmax_eV_A")),
+        })
+        records.append(record)
 
     return records, missing
 
@@ -3395,12 +3894,18 @@ def draw_grouped_ci_by_steps(ax, records, attack, epsilon, value_getter, ylabel,
         ax.set_axis_off()
         return False
 
+    # Build the accumulator from the calculators actually returned by the
+    # data collector. DFT comparison records use identifiers such as
+    # ``dft_mace_mh``, ``dft_uma``, and ``dft_chgnet`` and must not be
+    # discarded by an MLFF-only hard-coded mapping.
     series = {
-        "mace_mh": {"x": [], "median": [], "lower": [], "upper": []},
-        "uma": {"x": [], "median": [], "lower": [], "upper": []},
-        "mtp": {"x": [], "median": [], "lower": [], "upper": []},
-        "chgnet": {"x": [], "median": [], "lower": [], "upper": []},
-        "mace_model": {"x": [], "median": [], "lower": [], "upper": []},
+        calculator: {
+            "x": [],
+            "median": [],
+            "lower": [],
+            "upper": [],
+        }
+        for calculator in dict.fromkeys(calculators)
     }
 
     for position, box_values, calculator in zip(positions, values, calculators):
@@ -3618,14 +4123,43 @@ BASELINE_RANKING_CACHE = {}
 
 def baseline_relaxation_path(row):
     value = clean_value(row.get("before_relax_traj"))
+    run_dir = Path(str(row["run_dir"]))
+    candidates = []
 
     if value is not None:
-        return Path(str(value))
+        recorded_path = Path(str(value))
+        candidates.append(recorded_path)
 
-    return (
-        Path(str(row["run_dir"]))
-        / "before_attack_relaxation.traj"
+        if not recorded_path.is_absolute():
+            candidates.append(run_dir / recorded_path)
+
+    actual_output_dir = clean_value(
+        row.get("actual_output_dir")
     )
+
+    if actual_output_dir is not None:
+        actual_path = Path(str(actual_output_dir))
+        candidates.append(
+            actual_path / "before_attack_relaxation.traj"
+        )
+
+        if not actual_path.is_absolute():
+            candidates.append(
+                run_dir
+                / actual_path
+                / "before_attack_relaxation.traj"
+            )
+
+    candidates.append(
+        run_dir / "before_attack_relaxation.traj"
+    )
+
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+
+    # Return the conventional location so callers report a useful path.
+    return candidates[-1]
 
 
 def empty_baseline_metrics():
@@ -4821,8 +5355,11 @@ def save_mlff_ranking_violin_plot(
     # arranging categories by their observed median values.
     fixed_model_order = [
         "mace_mh",
+        "dft_mace_mh",
         "uma",
+        "dft_uma",
         "chgnet",
+        "dft_chgnet",
         "mtp",
         "mace_model",
     ]
@@ -4843,6 +5380,9 @@ def save_mlff_ranking_violin_plot(
         "uma": "UMA",
         "chgnet": "CHGNet",
         "mtp": "MTP",
+        "dft_mace_mh": "DFT\n(MACE-MH attack)",
+        "dft_uma": "DFT\n(UMA attack)",
+        "dft_chgnet": "DFT\n(CHGNet attack)",
     }
 
     model_labels = [
@@ -4888,6 +5428,9 @@ def save_mlff_ranking_violin_plot(
         "uma": "#F1AC78",
         "chgnet": "#80CEB8",
         "mtp": "#D9A6C5",
+        "dft_mace_mh": "#B9DCEE",
+        "dft_uma": "#F6D0B5",
+        "dft_chgnet": "#B7E2D6",
     }
 
     for position, calculator, values in zip(
@@ -7236,6 +7779,8 @@ def make_exact_min_lattice_figures_1_to_9(epsilon_records, output_dir):
 
 
 def main():
+    global MODEL_ORDER
+
     apply_plot_style()
 
     parser = argparse.ArgumentParser(
@@ -7292,8 +7837,43 @@ def main():
         ),
         type=Path,
     )
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        choices=[
+            "mace_mh",
+            "uma",
+            "mtp",
+            "chgnet",
+            "mace_model",
+        ],
+        default=None,
+        help="Plot only this model set. Defaults to all LiCoHPF models.",
+    )
+    parser.add_argument(
+        "--dft-structures-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Optional dft_2d_structures package. Clean DFT relaxations "
+            "are matched to their originating MLFF attack records."
+        ),
+    )
+    parser.add_argument(
+        "--scratch-runs-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Optional dtype-specific MLFF scratch directory, such as "
+            "trial1_seed42/outputs_float32. It is indexed to resolve "
+            "trajectory and force artifacts omitted from project results."
+        ),
+    )
 
     args = parser.parse_args()
+
+    selected_models = list(args.models or MODEL_ORDER)
+    MODEL_ORDER = selected_models
 
     args.output_dir.mkdir(
         parents=True,
@@ -7317,7 +7897,20 @@ def main():
     all_records = []
     all_missing = []
 
-    for model_id in MODEL_ORDER:
+    run_directory_index = build_run_directory_index(
+        args.scratch_runs_dir
+    )
+    if run_directory_index:
+        indexed_run_count = len(
+            set(run_directory_index.values())
+        )
+        print(
+            "Indexed "
+            f"{indexed_run_count} MLFF run directories from "
+            f"{args.scratch_runs_dir}"
+        )
+
+    for model_id in selected_models:
         model_directory = model_directories[model_id]
         summary_path = model_directory / "summary.csv"
 
@@ -7325,10 +7918,62 @@ def main():
             summary_path,
             model_directory,
             model_id,
+            scratch_runs_dir=args.scratch_runs_dir,
+            run_directory_index=run_directory_index,
         )
 
         all_records.extend(model_records)
         all_missing.extend(model_missing)
+
+    if args.dft_structures_dir is not None:
+        dft_records, dft_missing = load_dft_records(
+            args.dft_structures_dir,
+            all_records,
+            args.output_dir / "dft_plot_records",
+        )
+
+        pd.DataFrame(
+            {"reason": dft_missing}
+        ).to_csv(
+            args.output_dir
+            / "dft_missing_data_report.csv",
+            index=False,
+        )
+
+        if not dft_records:
+            examples = "\n".join(
+                f"  - {reason}"
+                for reason in dft_missing[:20]
+            )
+
+            raise SystemExit(
+                "ERROR: DFT analysis was requested, but zero "
+                "FORCE_CONVERGED_CLEAN DFT records could be loaded.\n"
+                "Inspect dft_missing_data_report.csv.\n"
+                f"First failures:\n{examples}"
+            )
+
+        all_records.extend(dft_records)
+        all_missing.extend(dft_missing)
+
+        dft_models = [
+            f"dft_{model_id}"
+            for model_id in selected_models
+            if model_id in {"mace_mh", "uma", "chgnet"}
+            and any(
+                row.get("calculator") == f"dft_{model_id}"
+                for row in dft_records
+            )
+        ]
+        MODEL_ORDER = [
+            item
+            for model_id in selected_models
+            for item in (
+                [model_id, f"dft_{model_id}"]
+                if f"dft_{model_id}" in dft_models
+                else [model_id]
+            )
+        ]
 
     records = pd.DataFrame(all_records)
 
