@@ -3,6 +3,7 @@ from pathlib import Path
 import argparse
 import csv
 import math
+from io import StringIO
 import re
 
 import matplotlib.pyplot as plt
@@ -35,6 +36,9 @@ MODEL_LABELS = {
     "mtp": "MTP",
     "chgnet": "CHGNet",
     "mace_model": "MACE Model",
+    "dft_mace_mh": "DFT (MACE-MH attack)",
+    "dft_uma": "DFT (UMA attack)",
+    "dft_chgnet": "DFT (CHGNet attack)",
 }
 
 def model_label(model_id):
@@ -49,6 +53,9 @@ CALCULATOR_COLORS = {
     "mtp": "#CC79A7",
     "chgnet": "#009E73",
     "mace_model": "#E69F00",
+    "dft_mace_mh": "#56B4E9",
+    "dft_uma": "#F0A35E",
+    "dft_chgnet": "#66C2A5",
 }
 
 ATTACK_ORDER = ["FGSM", "I-FGSM", "PGD"]
@@ -65,6 +72,9 @@ MODEL_OFFSETS = {
     "mtp": 0.0,
     "chgnet": 0.16,
     "mace_model": 0.32,
+    "dft_mace_mh": -0.24,
+    "dft_uma": 0.0,
+    "dft_chgnet": 0.24,
 }
 
 EPSILON_POSITION_FACTORS = {
@@ -73,6 +83,9 @@ EPSILON_POSITION_FACTORS = {
     "mtp": 1.0,
     "chgnet": 10 ** 0.05,
     "mace_model": 10 ** 0.10,
+    "dft_mace_mh": 10 ** (-0.075),
+    "dft_uma": 1.0,
+    "dft_chgnet": 10 ** 0.075,
 }
 
 EPSILON_BOX_WIDTH_LOG10 = 0.020
@@ -215,6 +228,9 @@ STEP_POSITION_FACTORS = {
     "mtp": 1.0,
     "chgnet": 10 ** 0.05,
     "mace_model": 10 ** 0.10,
+    "dft_mace_mh": 10 ** (-0.075),
+    "dft_uma": 1.0,
+    "dft_chgnet": 10 ** 0.075,
 }
 
 STEP_BOX_WIDTH_LOG10 = 0.020
@@ -303,6 +319,44 @@ def as_float(value):
     if value is None:
         return None
     return float(value)
+
+
+def read_dft_structure(path, index=-1):
+    """Read DFT data, including POSCAR text stored with a .cif name."""
+    path = Path(path)
+    try:
+        return read_structure(path, index=index)
+    except Exception as original_error:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except Exception:
+            raise original_error
+
+        if len(lines) < 8:
+            raise original_error
+
+        count_tokens = lines[6].split()
+        try:
+            valid_counts = bool(count_tokens) and all(
+                int(token) >= 0 for token in count_tokens
+            )
+        except ValueError:
+            valid_counts = False
+
+        symbols = [token.rstrip("/") for token in lines[5].split()]
+        if (
+            not valid_counts
+            or len(symbols) != len(count_tokens)
+            or any(not symbol for symbol in symbols)
+        ):
+            raise original_error
+
+        lines[5] = "  " + "  ".join(symbols)
+        return read_structure(
+            StringIO("\n".join(lines) + "\n"),
+            format="vasp",
+            index=index,
+        )
 
 
 def epsilon_lattice_lengths_from_summary_row(row):
@@ -692,10 +746,166 @@ def relaxation_steps(path, relax_fmax):
     return steps, converged
 
 
-def resolve_run_dir(base_dir, row):
+def run_folder_aliases(value, material_slug=None):
+    """Return aliases shared by current run folders and legacy run IDs."""
+    value = clean_value(value)
+    if value is None:
+        return set()
+
+    text = Path(str(value)).name.strip().lower()
+    aliases = {text}
+    material = str(material_slug or "").strip().lower()
+    if material and text.startswith(f"{material}_"):
+        text = text[len(material) + 1:]
+        aliases.add(text)
+
+    prefixes = (
+        "mace_model_", "mace_mh_", "mace_", "uma_s_1p1_",
+        "uma_", "chgnet_", "mtp_", "float32_", "float64_",
+    )
+    changed = True
+    while changed:
+        changed = False
+        for prefix in prefixes:
+            if text.startswith(prefix):
+                text = text[len(prefix):]
+                aliases.add(text)
+                changed = True
+                break
+
+    return {alias for alias in aliases if alias}
+
+
+def scratch_model_aliases(model_id):
+    """Return compatible scratch directory names for a selected model."""
+    model_id = str(model_id).strip().lower()
+    aliases = {model_id}
+    if model_id == "mace_mh":
+        aliases.add("mace")
+    elif model_id == "mace":
+        aliases.add("mace_mh")
+    return aliases
+
+
+def build_run_directory_index(scratch_runs_dir):
+    """Index scratch runs using model, material, folder, and run-ID aliases."""
+    if scratch_runs_dir is None:
+        return {}
+
+    scratch_runs_dir = Path(scratch_runs_dir)
+    if not scratch_runs_dir.is_dir():
+        raise SystemExit(
+            "ERROR: scratch MLFF run directory does not exist:\n"
+            f"{scratch_runs_dir}"
+        )
+
+    index = {}
+    for trajectory in scratch_runs_dir.rglob(
+        "before_attack_relaxation.traj"
+    ):
+        run_dir = trajectory.parent
+
+        try:
+            relative = run_dir.relative_to(scratch_runs_dir)
+        except ValueError:
+            continue
+
+        # Current runs are stored as
+        # outputs_<dtype>/<model>/<material>/<run_folder>.
+        if len(relative.parts) < 3:
+            continue
+
+        model_id = relative.parts[0]
+        material_slug = relative.parts[-2]
+        run_folder = relative.parts[-1]
+
+        aliases = run_folder_aliases(run_folder, material_slug)
+        aliases.update(run_folder_aliases(
+            f"{material_slug}_{model_id}_{run_folder}", material_slug
+        ))
+
+        for model_alias in scratch_model_aliases(model_id):
+            for alias in aliases:
+                index.setdefault(
+                    (model_alias, material_slug.lower(), alias),
+                    run_dir,
+                )
+
+    if not index:
+        raise SystemExit(
+            "ERROR: no before_attack_relaxation.traj files were found "
+            "under the scratch MLFF run directory:\n"
+            f"{scratch_runs_dir}"
+        )
+
+    return index
+
+
+def resolve_run_dir(
+    base_dir,
+    row,
+    calculator=None,
+    scratch_runs_dir=None,
+    run_directory_index=None,
+):
     run_id = str(row["run_id"])
+    material_slug = clean_value(row.get("material_slug"))
+    run_folder = clean_value(row.get("run_folder"))
+
+    # Scratch is authoritative. Project-side output directories may exist
+    # merely as aggregation destinations and contain no trajectories.
+    if (
+        scratch_runs_dir is not None
+        and calculator is not None
+        and material_slug is not None
+    ):
+        folder_aliases = run_folder_aliases(run_folder, material_slug)
+        folder_aliases.update(run_folder_aliases(run_id, material_slug))
+
+        for model_alias in scratch_model_aliases(calculator):
+            for folder_alias in folder_aliases:
+                scratch_candidate = (
+                    Path(scratch_runs_dir)
+                    / model_alias
+                    / str(material_slug)
+                    / folder_alias
+                )
+                if (
+                    scratch_candidate
+                    / "before_attack_relaxation.traj"
+                ).is_file():
+                    return scratch_candidate
+
+        if run_directory_index:
+            for model_alias in scratch_model_aliases(calculator):
+                for folder_alias in folder_aliases:
+                    indexed_directory = run_directory_index.get(
+                        (
+                            model_alias,
+                            str(material_slug).lower(),
+                            folder_alias,
+                        )
+                    )
+                    if indexed_directory is not None:
+                        return indexed_directory
+
+    actual_output_dir = clean_value(
+        row.get("actual_output_dir")
+    )
+
+    if actual_output_dir is not None:
+        actual_path = Path(str(actual_output_dir))
+        if (
+            actual_path
+            / "before_attack_relaxation.traj"
+        ).is_file():
+            return actual_path
+
     candidate = Path(base_dir) / run_id
-    if candidate.exists():
+    if (
+        candidate
+        / "before_attack_relaxation.traj"
+    ).is_file():
         return candidate
 
     for column in [
@@ -708,13 +918,25 @@ def resolve_run_dir(base_dir, row):
         value = clean_value(row.get(column))
         if value is not None:
             path = Path(str(value))
-            if path.exists():
+            if (
+                path.exists()
+                and (
+                    path.parent
+                    / "before_attack_relaxation.traj"
+                ).is_file()
+            ):
                 return path.parent
 
     return candidate
 
 
-def load_summary(summary_path, base_dir, calculator):
+def load_summary(
+    summary_path,
+    base_dir,
+    calculator,
+    scratch_runs_dir=None,
+    run_directory_index=None,
+):
     summary = read_csv(summary_path)
     if summary is None or summary.empty:
         return [], [f"Missing or empty summary: {summary_path}"]
@@ -726,7 +948,13 @@ def load_summary(summary_path, base_dir, calculator):
         if str(row.get("status", "")).strip().lower() != "success":
             continue
 
-        run_dir = resolve_run_dir(base_dir, row)
+        run_dir = resolve_run_dir(
+            base_dir,
+            row,
+            calculator=calculator,
+            scratch_runs_dir=scratch_runs_dir,
+            run_directory_index=run_directory_index,
+        )
         relax_fmax = as_float(row.get("relax_fmax"))
         material_label, material_slug = material_info(row, run_dir)
 
@@ -784,6 +1012,17 @@ def load_summary(summary_path, base_dir, calculator):
             "alpha": as_float(row.get("alpha")),
             "relax_fmax": relax_fmax,
             "run_dir": str(run_dir),
+            # Preserve backend-specific artifact locations for downstream
+            # random-seed aggregation. Not every calculator writes these
+            # files directly below run_dir.
+            "actual_output_dir": clean_value(row.get("actual_output_dir")),
+            "before_force_csv": clean_value(row.get("before_force_csv")),
+            "perturbed_force_csv": clean_value(row.get("perturbed_force_csv")),
+            "after_force_csv": clean_value(row.get("after_force_csv")),
+            "before_relax_traj": clean_value(row.get("before_relax_traj")),
+            "after_attack_relax_traj": clean_value(
+                row.get("after_attack_relax_traj")
+            ),
             "before_relax_steps": before_steps,
             "before_relax_converged": before_converged,
             "after_relax_steps": after_steps,
@@ -834,6 +1073,266 @@ def load_summary(summary_path, base_dir, calculator):
             "perturbed_unique_site_change": as_float(row.get("perturbed_unique_site_change")),
             "unique_site_change": as_float(row.get("unique_site_change")),
         })
+
+    return records, missing
+
+
+DFT_SOURCE_MODELS = {
+    "mace": "mace_mh",
+    "mace_mh": "mace_mh",
+    "uma": "uma",
+    "chgnet": "chgnet",
+}
+
+
+def normalized_material_name(value):
+    return re.sub(r"[^a-z0-9]", "", str(value).lower())
+
+
+def epsilon_from_dft_token(token):
+    token = str(token)
+    if token.startswith("0"):
+        return float(f"0.{token[1:]}")
+    return float(token)
+
+
+def parse_dft_structure_name(structure_name):
+    match = re.match(
+        r"^(mace_mh|mace|uma|chgnet)_(.+)_"
+        r"(fgsm|ifgsm|pgd)_eps([0-9]+)"
+        r"(?:_steps([0-9]+))?_perturbed$",
+        str(structure_name).lower(),
+    )
+    if match is None:
+        return None
+
+    source_name, material_slug, attack_name, epsilon_token, steps_token = (
+        match.groups()
+    )
+    return {
+        "source_model": DFT_SOURCE_MODELS[source_name],
+        "material_slug": material_slug,
+        "attack_label": {
+            "fgsm": "FGSM",
+            "ifgsm": "I-FGSM",
+            "pgd": "PGD",
+        }[attack_name],
+        "epsilon": epsilon_from_dft_token(epsilon_token),
+        "n_steps": int(steps_token) if steps_token else None,
+    }
+
+
+def structure_change_metrics(reference, target):
+    if reference is None or target is None or len(reference) != len(target):
+        return {
+            "displacements": np.asarray([], dtype=float),
+            "neighbor_jaccard_distance": np.nan,
+            "coordination_change_mean": np.nan,
+            "coordination_change_max": np.nan,
+            "rdf_l1_distance": np.nan,
+        }
+
+    displacements = np.linalg.norm(
+        target.positions - reference.positions,
+        axis=1,
+    )
+
+    try:
+        reference_edges = neighbor_edge_set(reference)
+        target_edges = neighbor_edge_set(target)
+        reference_coordination = coordination_by_atom(
+            reference_edges,
+            reference,
+        )
+        target_coordination = coordination_by_atom(
+            target_edges,
+            target,
+        )
+        atom_keys = set(reference_coordination) | set(target_coordination)
+        coordination_changes = np.asarray([
+            abs(
+                target_coordination.get(atom, 0)
+                - reference_coordination.get(atom, 0)
+            )
+            for atom in atom_keys
+        ], dtype=float)
+
+        return {
+            "displacements": displacements,
+            "neighbor_jaccard_distance": edge_jaccard_distance(
+                reference_edges,
+                target_edges,
+            ),
+            "coordination_change_mean": (
+                float(np.mean(coordination_changes))
+                if len(coordination_changes)
+                else 0.0
+            ),
+            "coordination_change_max": (
+                float(np.max(coordination_changes))
+                if len(coordination_changes)
+                else 0.0
+            ),
+            "rdf_l1_distance": float(rdf_l1_distance(reference, target)),
+        }
+    except Exception:
+        return {
+            "displacements": displacements,
+            "neighbor_jaccard_distance": np.nan,
+            "coordination_change_mean": np.nan,
+            "coordination_change_max": np.nan,
+            "rdf_l1_distance": np.nan,
+        }
+
+
+def write_structure_force_csv(structure, path):
+    frame = pd.DataFrame({
+        "atom_index": np.arange(len(structure), dtype=int),
+        "x": structure.positions[:, 0],
+        "y": structure.positions[:, 1],
+        "z": structure.positions[:, 2],
+        "fx": np.nan,
+        "fy": np.nan,
+        "fz": np.nan,
+    })
+    frame.to_csv(path, index=False)
+
+
+def load_dft_records(dft_root, source_records, cache_root):
+    """Convert clean fixed-cell DFT relaxations into normal plot records."""
+    dft_root = Path(dft_root)
+    manifest_path = dft_root / "manifests" / "preliminary_manifest.csv"
+    manifest = read_csv(manifest_path)
+
+    if manifest is None or manifest.empty:
+        return [], [f"Missing or empty DFT manifest: {manifest_path}"]
+
+    source = pd.DataFrame(source_records)
+    if source.empty:
+        return [], ["No MLFF records were available for matching DFT structures"]
+
+    cache_root = Path(cache_root)
+    cache_root.mkdir(parents=True, exist_ok=True)
+    records = []
+    missing = []
+
+    for _, manifest_row in manifest.iterrows():
+        if str(manifest_row.get("delivery_group", "")).upper() != "FORCE_CONVERGED_CLEAN":
+            continue
+
+        structure_name = str(manifest_row.get("structure_name", ""))
+        parsed = parse_dft_structure_name(structure_name)
+        if parsed is None:
+            missing.append(f"Unrecognized DFT structure name: {structure_name}")
+            continue
+
+        candidates = source[
+            (source["calculator"] == parsed["source_model"])
+            & (source["attack_label"] == parsed["attack_label"])
+        ].copy()
+        candidates = candidates[
+            candidates["material_slug"].map(normalized_material_name)
+            == normalized_material_name(parsed["material_slug"])
+        ]
+        candidate_epsilon = pd.to_numeric(
+            candidates.get("epsilon"),
+            errors="coerce",
+        )
+        candidates = candidates[
+            np.isclose(
+                candidate_epsilon,
+                parsed["epsilon"],
+                rtol=1.0e-8,
+                atol=1.0e-12,
+            )
+        ]
+
+        if parsed["n_steps"] is not None:
+            candidate_steps = pd.to_numeric(
+                candidates.get("n_steps"),
+                errors="coerce",
+            )
+            candidates = candidates[candidate_steps == parsed["n_steps"]]
+        else:
+            candidates = candidates[
+                ~candidates["run_id"].astype(str).str.contains(
+                    "_steps",
+                    regex=False,
+                )
+            ]
+
+        if candidates.empty:
+            missing.append(f"No MLFF source record matched DFT structure: {structure_name}")
+            continue
+
+        parent = candidates.iloc[0].to_dict()
+        relaxed_value = clean_value(manifest_row.get("relaxed_structure_file"))
+        if relaxed_value is None:
+            missing.append(f"No relaxed structure path for DFT structure: {structure_name}")
+            continue
+
+        relaxed_path = dft_root / str(relaxed_value)
+        perturbed_path = relaxed_path.parent / "initial.cif"
+        baseline_path = baseline_relaxation_path(parent)
+
+        try:
+            baseline = read_structure(baseline_path, index=-1)
+            perturbed = read_dft_structure(perturbed_path)
+            relaxed = read_dft_structure(relaxed_path)
+        except Exception as error:
+            missing.append(f"Could not read DFT structures for {structure_name}: {error}")
+            continue
+
+        if not (len(baseline) == len(perturbed) == len(relaxed)):
+            missing.append(f"Atom count mismatch for DFT structure: {structure_name}")
+            continue
+
+        run_dir = cache_root / structure_name
+        run_dir.mkdir(parents=True, exist_ok=True)
+        write_structure_force_csv(baseline, run_dir / "before_forces.csv")
+        write_structure_force_csv(perturbed, run_dir / "perturbed_forces.csv")
+        write_structure_force_csv(relaxed, run_dir / "after_forces.csv")
+
+        immediate = structure_change_metrics(baseline, perturbed)
+        final = structure_change_metrics(baseline, relaxed)
+        dft_model = f"dft_{parsed['source_model']}"
+
+        record = dict(parent)
+        record.update({
+            "run_id": f"dft_{structure_name}",
+            "logical_run_id": f"dft_{structure_name}",
+            "calculator": dft_model,
+            "model_id": dft_model,
+            "run_dir": str(run_dir),
+            "input_path": str(perturbed_path),
+            "after_relax_steps": as_int(manifest_row.get("n_ionic_steps")),
+            "after_relax_converged": True,
+            "mean_displacement": (
+                float(np.mean(final["displacements"]))
+                if len(final["displacements"])
+                else np.nan
+            ),
+            "max_displacement": (
+                float(np.max(final["displacements"]))
+                if len(final["displacements"])
+                else np.nan
+            ),
+            "final_energy": as_float(manifest_row.get("final_energy_eV")),
+            "perturbed_neighbor_jaccard_distance": immediate["neighbor_jaccard_distance"],
+            "perturbed_coordination_change_mean": immediate["coordination_change_mean"],
+            "perturbed_coordination_change_max": immediate["coordination_change_max"],
+            "perturbed_rdf_l1_distance": immediate["rdf_l1_distance"],
+            "neighbor_jaccard_distance": final["neighbor_jaccard_distance"],
+            "coordination_change_mean": final["coordination_change_mean"],
+            "coordination_change_max": final["coordination_change_max"],
+            "rdf_l1_distance": final["rdf_l1_distance"],
+            "dft_source_model": parsed["source_model"],
+            "dft_structure_name": structure_name,
+            "dft_perturbed_structure": str(perturbed_path),
+            "dft_relaxed_structure": str(relaxed_path),
+            "dft_final_fmax_eV_A": as_float(manifest_row.get("final_fmax_eV_A")),
+        })
+        records.append(record)
 
     return records, missing
 
@@ -3084,6 +3583,9 @@ def draw_whisker_span(
 
 
 def make_whisker_span_figure(records, output_dir, figure_name, ylabel, rows, axis_specs=None):
+    # Whisker-span plots are intentionally disabled.
+    return []
+
     all_missing = []
 
     if axis_specs is None:
@@ -3233,6 +3735,9 @@ def draw_whisker_span_by_steps(ax, records, attack, epsilon, value_getter, ylabe
 
 
 def make_whisker_span_by_steps_figure(records, output_dir, figure_name, ylabel, rows, epsilon=0.1):
+    # Whisker-span plots are intentionally disabled.
+    return []
+
     fig, axes = plt.subplots(2, 2, figsize=(7.0, 5.2), sharex=False, sharey=False)
 
     all_missing = []
@@ -3389,12 +3894,18 @@ def draw_grouped_ci_by_steps(ax, records, attack, epsilon, value_getter, ylabel,
         ax.set_axis_off()
         return False
 
+    # Build the accumulator from the calculators actually returned by the
+    # data collector. DFT comparison records use identifiers such as
+    # ``dft_mace_mh``, ``dft_uma``, and ``dft_chgnet`` and must not be
+    # discarded by an MLFF-only hard-coded mapping.
     series = {
-        "mace_mh": {"x": [], "median": [], "lower": [], "upper": []},
-        "uma": {"x": [], "median": [], "lower": [], "upper": []},
-        "mtp": {"x": [], "median": [], "lower": [], "upper": []},
-        "chgnet": {"x": [], "median": [], "lower": [], "upper": []},
-        "mace_model": {"x": [], "median": [], "lower": [], "upper": []},
+        calculator: {
+            "x": [],
+            "median": [],
+            "lower": [],
+            "upper": [],
+        }
+        for calculator in dict.fromkeys(calculators)
     }
 
     for position, box_values, calculator in zip(positions, values, calculators):
@@ -3612,14 +4123,43 @@ BASELINE_RANKING_CACHE = {}
 
 def baseline_relaxation_path(row):
     value = clean_value(row.get("before_relax_traj"))
+    run_dir = Path(str(row["run_dir"]))
+    candidates = []
 
     if value is not None:
-        return Path(str(value))
+        recorded_path = Path(str(value))
+        candidates.append(recorded_path)
 
-    return (
-        Path(str(row["run_dir"]))
-        / "before_attack_relaxation.traj"
+        if not recorded_path.is_absolute():
+            candidates.append(run_dir / recorded_path)
+
+    actual_output_dir = clean_value(
+        row.get("actual_output_dir")
     )
+
+    if actual_output_dir is not None:
+        actual_path = Path(str(actual_output_dir))
+        candidates.append(
+            actual_path / "before_attack_relaxation.traj"
+        )
+
+        if not actual_path.is_absolute():
+            candidates.append(
+                run_dir
+                / actual_path
+                / "before_attack_relaxation.traj"
+            )
+
+    candidates.append(
+        run_dir / "before_attack_relaxation.traj"
+    )
+
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+
+    # Return the conventional location so callers report a useful path.
+    return candidates[-1]
 
 
 def empty_baseline_metrics():
@@ -4649,6 +5189,11 @@ def collect_mlff_ranking_values(records, value_getter):
         rows.append({
             "calculator": row.get("calculator"),
             "value": value,
+            "material_slug": row.get("material_slug"),
+            "attack_label": row.get("attack_label"),
+            "epsilon_percent_displacement": as_float(
+                row.get("epsilon_percent_displacement")
+            ),
         })
 
     data = pd.DataFrame(rows)
@@ -4668,11 +5213,10 @@ def save_mlff_ranking_violin_plot(
     log_x=False,
 ):
     """
-    Create a publication-style MLFF ranking violin plot.
+    Create a vertical MLFF ranking violin plot.
 
-    When log_x is True, KDE, quartiles, whiskers and markers are
-    displayed in log10 space. Exact zeros are placed one decade below
-    the smallest positive value so they remain visible.
+    The legacy ``log_x`` argument now controls the vertical metric
+    axis because the violins are oriented vertically.
     """
     data = collect_mlff_ranking_values(
         records,
@@ -4707,14 +5251,13 @@ def save_mlff_ranking_violin_plot(
         )
 
         if log_x:
-            # Delta-force magnitudes should not be negative.
-            data = data[
+            data = data.loc[
                 data["value"] >= 0
             ].copy()
 
     if data.empty:
         fig, ax = plt.subplots(
-            figsize=(7.2, 3.6),
+            figsize=(7.5, 4.5),
         )
 
         ax.text(
@@ -4724,17 +5267,9 @@ def save_mlff_ranking_violin_plot(
             transform=ax.transAxes,
             ha="center",
             va="center",
-            fontsize=8,
-            color="#444444",
         )
 
-        ax.set_title(
-            title,
-            loc="left",
-            fontsize=9,
-            fontweight="semibold",
-        )
-
+        ax.set_title(title)
         ax.set_axis_off()
 
         fig.savefig(
@@ -4747,24 +5282,32 @@ def save_mlff_ranking_violin_plot(
         plt.close(fig)
         return
 
+    # Clip each displayed model distribution at its own p95.
+    data["value"] = (
+        data.groupby(
+            "calculator",
+            group_keys=False,
+        )["value"]
+        .transform(
+            lambda values: values.clip(
+                upper=values.quantile(0.95)
+            )
+        )
+    )
+
     positive_values = data.loc[
         data["value"] > 0,
         "value",
     ].to_numpy(dtype=float)
 
     if log_x:
-        if len(positive_values):
+        if positive_values.size:
             log_floor = max(
-                float(
-                    np.min(
-                        positive_values
-                    )
-                )
-                / 10.0,
+                float(np.min(positive_values)) / 10.0,
                 np.finfo(float).tiny,
             )
         else:
-            log_floor = 1e-12
+            log_floor = 1.0e-12
     else:
         log_floor = None
 
@@ -4791,11 +5334,8 @@ def save_mlff_ranking_violin_plot(
         )["value"]
         .agg(
             median="median",
-            q1=lambda values:
-            values.quantile(0.25),
-            q3=lambda values:
-            values.quantile(0.75),
-            count="count",
+            q1=lambda values: values.quantile(0.25),
+            q3=lambda values: values.quantile(0.75),
         )
         .reset_index()
         .sort_values(
@@ -4811,14 +5351,51 @@ def save_mlff_ranking_violin_plot(
         )
     )
 
-    model_order = summary[
-        "calculator"
-    ].tolist()
+    # Keep a fixed, presentation-consistent model order instead of
+    # arranging categories by their observed median values.
+    fixed_model_order = [
+        "mace_mh",
+        "dft_mace_mh",
+        "uma",
+        "dft_uma",
+        "chgnet",
+        "dft_chgnet",
+        "mtp",
+        "mace_model",
+    ]
+
+    present_models = set(
+        summary["calculator"].astype(str)
+    )
+
+    model_order = [
+        calculator
+        for calculator in fixed_model_order
+        if calculator in present_models
+    ]
+
+    ranking_model_labels = {
+        "mace_model": "MACE",
+        "mace_mh": "MACE-MH",
+        "uma": "UMA",
+        "chgnet": "CHGNet",
+        "mtp": "MTP",
+        "dft_mace_mh": "DFT\n(MACE-MH attack)",
+        "dft_uma": "DFT\n(UMA attack)",
+        "dft_chgnet": "DFT\n(CHGNet attack)",
+    }
+
+    model_labels = [
+        ranking_model_labels.get(
+            calculator,
+            model_label(calculator),
+        )
+        for calculator in model_order
+    ]
 
     violin_values = [
         data.loc[
-            data["calculator"]
-            == calculator,
+            data["calculator"] == calculator,
             "value",
         ].to_numpy(dtype=float)
         for calculator in model_order
@@ -4829,17 +5406,32 @@ def save_mlff_ranking_violin_plot(
         dtype=float,
     )
 
-    figure_height = max(
-        3.8,
-        0.55 * len(model_order) + 1.55,
+    figure_width = 0.66 * max(
+        7.8,
+        1.35 * len(model_order) + 2.2,
     )
 
     fig, ax = plt.subplots(
         figsize=(
-            7.8,
-            figure_height,
+            figure_width,
+            6.4,
         ),
+        facecolor="white",
     )
+
+    ax.set_facecolor("white")
+    summary_color = "#6B6B6B"
+
+    pastel_colors = {
+        "mace_model": "#F3C969",
+        "mace_mh": "#8FC5E3",
+        "uma": "#F1AC78",
+        "chgnet": "#80CEB8",
+        "mtp": "#D9A6C5",
+        "dft_mace_mh": "#B9DCEE",
+        "dft_uma": "#F6D0B5",
+        "dft_chgnet": "#B7E2D6",
+    }
 
     for position, calculator, values in zip(
         positions,
@@ -4860,16 +5452,16 @@ def save_mlff_ranking_violin_plot(
                 values >= 0
             ]
 
-        if len(values) == 0:
+        if not values.size:
             continue
 
         plotted_values = display_values(
             values
         )
 
-        color = CALCULATOR_COLORS.get(
+        color = pastel_colors.get(
             calculator,
-            "#777777",
+            "#B8B8B8",
         )
 
         plotted_range = float(
@@ -4879,9 +5471,7 @@ def save_mlff_ranking_violin_plot(
         plotted_scale = max(
             float(
                 np.max(
-                    np.abs(
-                        plotted_values
-                    )
+                    np.abs(plotted_values)
                 )
             ),
             1.0,
@@ -4899,7 +5489,7 @@ def save_mlff_ranking_violin_plot(
             violin = ax.violinplot(
                 [plotted_values],
                 positions=[position],
-                vert=False,
+                vert=True,
                 widths=0.68,
                 showmeans=False,
                 showmedians=False,
@@ -4908,35 +5498,24 @@ def save_mlff_ranking_violin_plot(
                 bw_method="scott",
             )
 
-            body = violin[
-                "bodies"
-            ][0]
+            body = violin["bodies"][0]
 
-            body.set_facecolor(
-                color
-            )
-            body.set_edgecolor(
-                "#303030"
-            )
-            body.set_alpha(
-                0.58
-            )
-            body.set_linewidth(
-                0.8
-            )
-            body.set_zorder(
-                2
-            )
+            body.set_facecolor(color)
+            body.set_edgecolor(summary_color)
+            body.set_alpha(0.62)
+            body.set_linewidth(1.0)
+            body.set_zorder(2)
+
         else:
             ax.scatter(
-                plotted_values,
                 np.full(
                     len(plotted_values),
                     position,
                 ),
-                s=28,
+                plotted_values,
+                s=24,
                 facecolor=color,
-                edgecolor="#303030",
+                edgecolor=summary_color,
                 linewidth=0.8,
                 zorder=3,
             )
@@ -4952,210 +5531,208 @@ def save_mlff_ranking_violin_plot(
 
         iqr = q3 - q1
 
-        if iqr > 0:
-            lower_limit = (
-                q1 - 1.5 * iqr
-            )
-            upper_limit = (
-                q3 + 1.5 * iqr
-            )
+        whisker_scale = 1.0
+        lower_fence = q1 - whisker_scale * iqr
+        upper_fence = q3 + whisker_scale * iqr
 
-            lower_values = values[
-                values >= lower_limit
-            ]
-            upper_values = values[
-                values <= upper_limit
-            ]
+        inlier_values = values[
+            (values >= lower_fence)
+            & (values <= upper_fence)
+        ]
 
-            whisker_low = (
-                float(
-                    np.min(
-                        lower_values
-                    )
-                )
-                if len(lower_values)
-                else float(
-                    np.min(values)
-                )
+        if inlier_values.size:
+            lower_whisker = float(
+                np.min(inlier_values)
             )
-
-            whisker_high = (
-                float(
-                    np.max(
-                        upper_values
-                    )
-                )
-                if len(upper_values)
-                else float(
-                    np.max(values)
-                )
+            upper_whisker = float(
+                np.max(inlier_values)
             )
         else:
-            whisker_low = float(
+            lower_whisker = float(
                 np.min(values)
             )
-            whisker_high = float(
+            upper_whisker = float(
                 np.max(values)
             )
 
-        plotted_whiskers = display_values([
-            whisker_low,
-            whisker_high,
-        ])
-
-        plotted_quartiles = display_values([
+        (
+            plotted_lower_whisker,
+            plotted_q1,
+            plotted_median,
+            plotted_q3,
+            plotted_upper_whisker,
+        ) = display_values([
+            lower_whisker,
             q1,
             median,
             q3,
+            upper_whisker,
         ])
 
-        plotted_q1 = float(
-            plotted_quartiles[0]
-        )
-        plotted_median = float(
-            plotted_quartiles[1]
-        )
-        plotted_q3 = float(
-            plotted_quartiles[2]
-        )
-
-        ax.hlines(
-            position,
-            plotted_whiskers[0],
-            plotted_whiskers[1],
-            color="#303030",
-            linewidth=1.0,
-            zorder=4,
-        )
-
+        # Thin compact whisker.
         ax.vlines(
-            plotted_whiskers,
-            position - 0.065,
-            position + 0.065,
-            color="#303030",
-            linewidth=1.0,
+            position,
+            plotted_lower_whisker,
+            plotted_upper_whisker,
+            color=summary_color,
+            linewidth=1.1,
             zorder=4,
         )
 
+        # Short whisker caps.
         ax.hlines(
+            [
+                plotted_lower_whisker,
+                plotted_upper_whisker,
+            ],
+            position - 0.045,
+            position + 0.045,
+            color=summary_color,
+            linewidth=1.1,
+            zorder=4,
+        )
+
+        # Concise IQR bar.
+        ax.vlines(
             position,
             plotted_q1,
             plotted_q3,
-            color="#303030",
-            linewidth=5.4,
+            color=summary_color,
+            linewidth=2.8,
             zorder=5,
         )
 
-        ax.hlines(
-            position,
-            plotted_q1,
-            plotted_q3,
-            color="white",
-            linewidth=3.0,
+        # Small white median with a matching gray border.
+        ax.scatter(
+            [position],
+            [plotted_median],
+            s=30,
+            marker="o",
+            facecolor="white",
+            edgecolor=summary_color,
+            linewidth=1.0,
             zorder=6,
         )
 
-        ax.scatter(
-            [plotted_median],
-            [position],
-            s=25,
-            marker="o",
-            facecolor="#202020",
-            edgecolor="white",
-            linewidth=0.7,
-            zorder=7,
-        )
+    # Add a restrained categorical profile at approximately 5% of the
+    # minimum lattice length. For every material/attack/model group,
+    # use the closest sampled perturbation to 5%, then take the median
+    # across those matched cases for each model.
+    if "after attack" in title.lower():
+        five_percent_data = data.dropna(
+            subset=["epsilon_percent_displacement"]
+        ).copy()
 
-    rank_labels = [
-        (
-            f"{rank}   "
-            f"{MODEL_LABELS.get(calculator, str(calculator))}"
-        )
-        for rank, calculator in enumerate(
-            model_order,
-            start=1,
-        )
-    ]
+        five_percent_data = five_percent_data.loc[
+            five_percent_data["epsilon_percent_displacement"] > 0
+        ].copy()
 
-    ax.set_yticks(
-        positions
+        if not five_percent_data.empty:
+            five_percent_data["distance_from_five_percent"] = np.abs(
+                five_percent_data["epsilon_percent_displacement"] - 5.0
+            )
+
+            matching_columns = [
+                "calculator",
+                "material_slug",
+                "attack_label",
+            ]
+
+            closest_indices = (
+                five_percent_data.groupby(
+                    matching_columns,
+                    dropna=False,
+                )["distance_from_five_percent"]
+                .idxmin()
+            )
+
+            closest_cases = five_percent_data.loc[
+                closest_indices
+            ]
+
+            five_percent_medians = (
+                closest_cases.groupby("calculator")["value"]
+                .median()
+                .reindex(model_order)
+            )
+
+            valid_profile = five_percent_medians.notna().to_numpy()
+
+            if np.count_nonzero(valid_profile) >= 2:
+                profile_positions = positions[valid_profile]
+                profile_values = display_values(
+                    five_percent_medians.to_numpy(dtype=float)[valid_profile]
+                )
+
+                ax.plot(
+                    profile_positions,
+                    profile_values,
+                    linestyle="None",
+                    marker="o",
+                    markersize=3.4,
+                    markerfacecolor="#E53935",
+                    markeredgecolor="#E53935",
+                    markeredgewidth=0.0,
+                    alpha=1.0,
+                    zorder=7,
+                    label="5% ε strength",
+                )
+
+                ax.legend(
+                    loc="upper left",
+                    frameon=False,
+                    fontsize=10.5,
+                    handlelength=2.4,
+                )
+
+    ax.set_xticks(positions)
+
+    ax.set_xticklabels(
+        model_labels,
+        rotation=18,
+        ha="center",
+        rotation_mode="default",
+        fontsize=12,
     )
-    ax.set_yticklabels(
-        rank_labels
+
+    ax.set_xlim(
+        -0.5,
+        len(model_order) - 0.5,
     )
-    ax.invert_yaxis()
 
-    axis_label = xlabel
+    axis_label = str(xlabel)
 
-    if log_x:
-        axis_label += " (log scale)"
+    is_delta_force_label = (
+        r"$\Delta$ force" in axis_label
+        or "? force" in axis_label
+    )
+
+    if (
+        axis_label.startswith("Median ")
+        and not is_delta_force_label
+    ):
+        axis_label = axis_label[
+            len("Median "):
+        ]
+
+    ax.set_ylabel(
+        axis_label,
+        labelpad=10,
+        fontsize=16,
+    )
 
     ax.set_xlabel(
-        axis_label,
-        labelpad=7,
+        "MLFFs",
+        labelpad=12,
+        fontsize=16,
     )
-
-    ax.set_ylabel("")
 
     ax.set_title(
         title,
-        loc="left",
-        fontsize=9,
+        fontsize=14,
         fontweight="semibold",
-        pad=15,
+        pad=14,
     )
-
-    ax.text(
-        0.92,
-        1.035,
-        "Lower median = better rank",
-        transform=ax.transAxes,
-        ha="right",
-        va="bottom",
-        fontsize=7,
-        color="#555555",
-    )
-
-    count_lookup = summary.set_index(
-        "calculator",
-    )["count"].to_dict()
-
-    ax.text(
-        1.015,
-        1.035,
-        "n",
-        transform=ax.transAxes,
-        ha="left",
-        va="bottom",
-        fontsize=7,
-        fontweight="semibold",
-        color="#444444",
-        clip_on=False,
-    )
-
-    for position, calculator in zip(
-        positions,
-        model_order,
-    ):
-        ax.text(
-            1.015,
-            position,
-            str(
-                int(
-                    count_lookup[
-                        calculator
-                    ]
-                )
-            ),
-            transform=(
-                ax.get_yaxis_transform()
-            ),
-            ha="left",
-            va="center",
-            fontsize=7,
-            color="#555555",
-            clip_on=False,
-        )
 
     all_values = np.concatenate(
         violin_values
@@ -5174,105 +5751,92 @@ def save_mlff_ranking_violin_plot(
         all_values
     )
 
-    if len(plotted_all_values):
+    if plotted_all_values.size:
         minimum = float(
-            np.min(
-                plotted_all_values
-            )
+            np.min(plotted_all_values)
         )
+
         maximum = float(
-            np.max(
-                plotted_all_values
-            )
+            np.max(plotted_all_values)
         )
 
         if log_x:
             if maximum > minimum:
                 padding = max(
                     0.18,
-                    0.035
-                    * (
-                        maximum
-                        - minimum
+                    0.035 * (
+                        maximum - minimum
                     ),
                 )
             else:
                 padding = 1.0
 
-            ax.set_xlim(
+            ax.set_ylim(
                 minimum - padding,
                 maximum + padding,
             )
 
             first_power = int(
-                np.floor(
-                    minimum
-                )
+                np.floor(minimum)
             )
+
             last_power = int(
-                np.ceil(
-                    maximum
-                )
+                np.ceil(maximum)
+            )
+
+            # Label every second decade using even exponents:
+            # 10^-2, 10^0, 10^2, and so on. The plotted coordinate is
+            # log10(value), so these labels remain uniformly spaced.
+            first_labeled_power = int(
+                2 * np.ceil(first_power / 2.0)
+            )
+            last_labeled_power = int(
+                2 * np.floor(last_power / 2.0)
             )
 
             powers = np.arange(
-                first_power,
-                last_power + 1,
+                first_labeled_power,
+                last_labeled_power + 1,
+                2,
                 dtype=int,
             )
 
-            if len(powers) > 8:
-                selected_indices = np.unique(
-                    np.round(
-                        np.linspace(
-                            0,
-                            len(powers) - 1,
-                            8,
-                        )
-                    ).astype(int)
-                )
-
-                powers = powers[
-                    selected_indices
-                ]
-
-            ax.xaxis.set_major_locator(
-                FixedLocator(
-                    powers
-                )
+            ax.yaxis.set_major_locator(
+                FixedLocator(powers)
             )
 
-            ax.xaxis.set_minor_locator(
+            ax.yaxis.set_minor_locator(
                 NullLocator()
             )
 
-            ax.xaxis.set_major_formatter(
+            ax.yaxis.set_major_formatter(
                 FuncFormatter(
                     lambda exponent, _:
-                    (
-                        rf"$10^{{{int(round(exponent))}}}$"
-                    )
+                    rf"$10^{{{int(round(exponent))}}}$"
                 )
             )
+
         else:
             raw_minimum = float(
                 np.min(all_values)
             )
+
             raw_maximum = float(
                 np.max(all_values)
             )
 
             if raw_minimum >= 0:
-                right_limit = (
+                upper_limit = (
                     raw_maximum * 1.08
                     if raw_maximum > 0
                     else 1.0
                 )
 
-                ax.set_xlim(
+                ax.set_ylim(
                     0.0,
-                    right_limit,
+                    upper_limit,
                 )
+
             else:
                 span = (
                     raw_maximum
@@ -5282,19 +5846,15 @@ def save_mlff_ranking_violin_plot(
                 padding = (
                     0.08 * span
                     if span > 0
-                    else max(
-                        abs(raw_maximum)
-                        * 0.1,
-                        1.0,
-                    )
+                    else 1.0
                 )
 
-                ax.set_xlim(
+                ax.set_ylim(
                     raw_minimum - padding,
                     raw_maximum + padding,
                 )
 
-            ax.xaxis.set_major_locator(
+            ax.yaxis.set_major_locator(
                 MaxNLocator(
                     nbins=6,
                     min_n_ticks=4,
@@ -5306,97 +5866,47 @@ def save_mlff_ranking_violin_plot(
             )
 
             scalar_formatter.set_powerlimits(
-                (-3, 4),
+                (-3, 4)
             )
 
-            ax.xaxis.set_major_formatter(
+            ax.yaxis.set_major_formatter(
                 scalar_formatter
             )
 
-    ax.grid(
-        True,
-        axis="x",
-        color="#D6D6D6",
-        linewidth=0.65,
-        linestyle="-",
-        alpha=0.8,
-        zorder=0,
-    )
+    # Completely white background with no grid lines.
+    ax.grid(False)
 
-    ax.grid(
-        False,
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    ax.spines["left"].set_color("#444444")
+    ax.spines["bottom"].set_color("#444444")
+
+    ax.spines["left"].set_linewidth(0.9)
+    ax.spines["bottom"].set_linewidth(0.9)
+
+    ax.tick_params(
         axis="y",
+        direction="out",
+        length=4,
+        width=0.8,
+        color="#444444",
+        labelsize=12,
     )
-
-    ax.spines[
-        "top"
-    ].set_visible(False)
-
-    ax.spines[
-        "right"
-    ].set_visible(False)
-
-    ax.spines[
-        "left"
-    ].set_color("#444444")
-
-    ax.spines[
-        "bottom"
-    ].set_color("#444444")
-
-    ax.spines[
-        "left"
-    ].set_linewidth(0.8)
-
-    ax.spines[
-        "bottom"
-    ].set_linewidth(0.8)
 
     ax.tick_params(
         axis="x",
         direction="out",
-        length=3.5,
-        width=0.7,
-        color="#444444",
-    )
-
-    ax.tick_params(
-        axis="y",
         length=0,
-        pad=7,
-    )
-
-    ax.margins(
-        y=0.10
-    )
-
-    footer = (
-        "Violin: run-level distribution; "
-        "white bar: IQR; dot: median; "
-        "whiskers: 1.5×IQR."
-    )
-
-    if log_x:
-        footer += (
-            " Density is calculated in log space; "
-            f"zeros are displayed at {log_floor:.1e}."
-        )
-
-    fig.text(
-        0.5,
-        0.025,
-        footer,
-        ha="center",
-        va="bottom",
-        fontsize=6.5,
-        color="#555555",
+        pad=8,
+        labelsize=12,
     )
 
     fig.subplots_adjust(
-        left=0.25,
-        right=0.90,
-        top=0.84,
-        bottom=0.20,
+        left=0.15,
+        right=0.97,
+        top=0.88,
+        bottom=0.22,
     )
 
     fig.savefig(
@@ -5404,10 +5914,11 @@ def save_mlff_ranking_violin_plot(
         dpi=300,
         bbox_inches="tight",
         facecolor="white",
+        edgecolor="none",
+        pad_inches=0.08,
     )
 
     plt.close(fig)
-
 
 def make_mlff_rankings(records, output_dir):
     output_dir = Path(output_dir)
@@ -5753,6 +6264,10 @@ def make_mlff_rankings(records, output_dir):
             title=metric["title"],
             xlabel=metric["xlabel"],
             value_getter=metric["getter"],
+            log_x=(
+                metric["filename"]
+                == "delta_force.png"
+            ),
         )
 
 
@@ -7264,6 +7779,8 @@ def make_exact_min_lattice_figures_1_to_9(epsilon_records, output_dir):
 
 
 def main():
+    global MODEL_ORDER
+
     apply_plot_style()
 
     parser = argparse.ArgumentParser(
@@ -7320,8 +7837,43 @@ def main():
         ),
         type=Path,
     )
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        choices=[
+            "mace_mh",
+            "uma",
+            "mtp",
+            "chgnet",
+            "mace_model",
+        ],
+        default=None,
+        help="Plot only this model set. Defaults to all LiCoHPF models.",
+    )
+    parser.add_argument(
+        "--dft-structures-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Optional dft_2d_structures package. Clean DFT relaxations "
+            "are matched to their originating MLFF attack records."
+        ),
+    )
+    parser.add_argument(
+        "--scratch-runs-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Optional dtype-specific MLFF scratch directory, such as "
+            "trial1_seed42/outputs_float32. It is indexed to resolve "
+            "trajectory and force artifacts omitted from project results."
+        ),
+    )
 
     args = parser.parse_args()
+
+    selected_models = list(args.models or MODEL_ORDER)
+    MODEL_ORDER = selected_models
 
     args.output_dir.mkdir(
         parents=True,
@@ -7345,7 +7897,20 @@ def main():
     all_records = []
     all_missing = []
 
-    for model_id in MODEL_ORDER:
+    run_directory_index = build_run_directory_index(
+        args.scratch_runs_dir
+    )
+    if run_directory_index:
+        indexed_run_count = len(
+            set(run_directory_index.values())
+        )
+        print(
+            "Indexed "
+            f"{indexed_run_count} MLFF run directories from "
+            f"{args.scratch_runs_dir}"
+        )
+
+    for model_id in selected_models:
         model_directory = model_directories[model_id]
         summary_path = model_directory / "summary.csv"
 
@@ -7353,10 +7918,62 @@ def main():
             summary_path,
             model_directory,
             model_id,
+            scratch_runs_dir=args.scratch_runs_dir,
+            run_directory_index=run_directory_index,
         )
 
         all_records.extend(model_records)
         all_missing.extend(model_missing)
+
+    if args.dft_structures_dir is not None:
+        dft_records, dft_missing = load_dft_records(
+            args.dft_structures_dir,
+            all_records,
+            args.output_dir / "dft_plot_records",
+        )
+
+        pd.DataFrame(
+            {"reason": dft_missing}
+        ).to_csv(
+            args.output_dir
+            / "dft_missing_data_report.csv",
+            index=False,
+        )
+
+        if not dft_records:
+            examples = "\n".join(
+                f"  - {reason}"
+                for reason in dft_missing[:20]
+            )
+
+            raise SystemExit(
+                "ERROR: DFT analysis was requested, but zero "
+                "FORCE_CONVERGED_CLEAN DFT records could be loaded.\n"
+                "Inspect dft_missing_data_report.csv.\n"
+                f"First failures:\n{examples}"
+            )
+
+        all_records.extend(dft_records)
+        all_missing.extend(dft_missing)
+
+        dft_models = [
+            f"dft_{model_id}"
+            for model_id in selected_models
+            if model_id in {"mace_mh", "uma", "chgnet"}
+            and any(
+                row.get("calculator") == f"dft_{model_id}"
+                for row in dft_records
+            )
+        ]
+        MODEL_ORDER = [
+            item
+            for model_id in selected_models
+            for item in (
+                [model_id, f"dft_{model_id}"]
+                if f"dft_{model_id}" in dft_models
+                else [model_id]
+            )
+        ]
 
     records = pd.DataFrame(all_records)
 
@@ -8144,17 +8761,13 @@ def main():
     print("Main publication figures:")
     print(f"  {args.output_dir / 'figure_1_convergence_by_epsilon.png'}")
     print(f"  {args.output_dir / 'figure_2_delta_force_by_epsilon.png'}")
-    print(f"  {args.output_dir / 'figure_2_delta_force_whisker_span_by_epsilon.png'}")
     print(f"  {args.output_dir / 'figure_2_delta_force_ci_by_epsilon.png'}")
     print(f"  {args.output_dir / 'figure_3_displacement_by_epsilon.png'}")
-    print(f"  {args.output_dir / 'figure_3_displacement_whisker_span_by_epsilon.png'}")
     print(f"  {args.output_dir / 'figure_3_displacement_ci_by_epsilon.png'}")
     print(f"  {args.output_dir / 'figure_4_convergence_by_n_steps.png'}")
     print(f"  {args.output_dir / 'figure_5_delta_force_by_n_steps.png'}")
-    print(f"  {args.output_dir / 'figure_5_delta_force_whisker_span_by_n_steps.png'}")
     print(f"  {args.output_dir / 'figure_5_delta_force_ci_by_n_steps.png'}")
     print(f"  {args.output_dir / 'figure_6_displacement_by_n_steps.png'}")
-    print(f"  {args.output_dir / 'figure_6_displacement_whisker_span_by_n_steps.png'}")
     print(f"  {args.output_dir / 'figure_6_displacement_ci_by_n_steps.png'}")
     print(f"  {args.output_dir / 'figure_7_convergence_vs_displacement_by_epsilon.png'}")
     print(f"  {args.output_dir / 'figure_7_convergence_vs_displacement_by_n_steps.png'}")

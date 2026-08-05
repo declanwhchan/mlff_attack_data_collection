@@ -1315,32 +1315,12 @@ def make_space_group_figures(data, output_dir):
                 output_dir / f"{metric}_{state_name}_by_atoms.png",
             )
 
-    if "base_material_slug" not in data.columns:
-        return
-
-    for material, material_data in data.groupby(
-        "base_material_slug"
-    ):
-        material_name = (
-            str(material)
-            .replace("/", "_")
-            .replace("\\", "_")
-        )
-        material_dir = output_dir / material_name
-        material_dir.mkdir(parents=True, exist_ok=True)
-
-        for state_name, prefix in datasets:
-            for metric, label in metrics:
-                plot_attack_panels(
-                    material_data,
-                    f"{prefix}{metric}",
-                    label,
-                    material_dir
-                    / f"{metric}_{state_name}_by_atoms.png",
-                )
-
-
 def plot_command(args):
+    global MODEL_ORDER
+
+    if args.models is not None:
+        MODEL_ORDER = list(args.models)
+
     apply_style()
 
     output_dir = Path(args.output_dir)
@@ -1429,31 +1409,6 @@ def plot_command(args):
         primary,
         output_dir / "space_group",
     )
-
-    # One folder containing figures 1-7 for each base material.
-    for material, material_data in primary.groupby(
-        "base_material_slug"
-    ):
-        safe_name = (
-            str(material)
-            .replace("/", "_")
-            .replace("\\", "_")
-        )
-
-        make_figures_1_to_7(
-            material_data,
-            output_dir / safe_name,
-        )
-
-        # make_component_figures(
-        #     material_data,
-        #     output_dir / "components" / safe_name,
-        # )
-
-        make_topology_figures(
-            material_data,
-            output_dir / "topology" / safe_name,
-        )
 
     # Raw computational-scaling plots.
     plot_attack_panels(
@@ -1547,6 +1502,13 @@ def main():
         "--epsilon",
         default=0.1,
         type=float,
+    )
+    plot_parser.add_argument(
+        "--models",
+        nargs="+",
+        choices=["mace_mh", "uma", "mtp", "chgnet", "mace_model"],
+        default=None,
+        help="Plot only this model set. Defaults to all LiCoHPF models.",
     )
 
     args = parser.parse_args()

@@ -35,10 +35,15 @@ TRIALS = [
     ("trial5_seed46", 46),
 ]
 
-ATTACKS = [
+ADVERSARIAL_ATTACKS = [
     "FGSM",
     "I-FGSM",
     "PGD",
+]
+
+METHODS = [
+    "Contour",
+    *ADVERSARIAL_ATTACKS,
 ]
 
 CALCULATORS = [
@@ -55,6 +60,9 @@ MODEL_LABELS = {
     "mtp": "MTP",
     "chgnet": "CHGNet",
     "mace_model": "MACE Model",
+    "dft_mace_mh": "DFT (MACE-MH attack)",
+    "dft_uma": "DFT (UMA attack)",
+    "dft_chgnet": "DFT (CHGNet attack)",
 }
 
 COLORS = {
@@ -63,6 +71,9 @@ COLORS = {
     "mtp": "#CC79A7",
     "chgnet": "#009E73",
     "mace_model": "#E69F00",
+    "dft_mace_mh": "#56B4E9",
+    "dft_uma": "#F0A35E",
+    "dft_chgnet": "#66C2A5",
 }
 
 
@@ -93,11 +104,11 @@ TOPOLOGY_METRICS = [
     ),
     (
         "rdf_l1_distance",
-        "RDF L1 distance",
+        "RDF L1 distance (Å)",
     ),
     (
         "coordination_change_max",
-        "Maximum coordination change",
+        "Max CN change",
     ),
 ]
 
@@ -315,35 +326,66 @@ def stage_column(stage, metric):
     return f"{stage}__{metric}"
 
 
-def calculate_stage_metrics(row):
-    run_dir = Path(str(row["run_dir"]))
+def resolve_record_artifact(row, column, default_name):
+    """Resolve an artifact recorded by any calculator backend."""
+    run_dir = Path(str(row.get("run_dir", "")))
+    candidates = []
 
-    before_force_path = (
-        run_dir / "before_forces.csv"
-    )
-    perturbed_force_path = (
-        run_dir / "perturbed_forces.csv"
-    )
-    after_force_path = (
-        run_dir / "after_forces.csv"
-    )
+    value = row.get(column)
+    if value is not None and not pd.isna(value) and str(value).strip():
+        recorded = Path(str(value).strip())
+        candidates.append(recorded)
+        if not recorded.is_absolute():
+            candidates.append(run_dir / recorded)
 
-    trajectory_value = row.get(
-        "before_relax_traj"
-    )
-
+    actual_output = row.get("actual_output_dir")
     if (
-        trajectory_value is None
-        or pd.isna(trajectory_value)
-        or not str(trajectory_value).strip()
+        actual_output is not None
+        and not pd.isna(actual_output)
+        and str(actual_output).strip()
     ):
-        trajectory_path = (
-            run_dir / "before_attack_relaxation.traj"
-        )
-    else:
-        trajectory_path = Path(
-            str(trajectory_value)
-        )
+        output_dir = Path(str(actual_output).strip())
+        candidates.append(output_dir / default_name)
+        if not output_dir.is_absolute():
+            candidates.append(run_dir / output_dir / default_name)
+
+    candidates.append(run_dir / default_name)
+
+    seen = set()
+    for candidate in candidates:
+        candidate_key = str(candidate)
+        if candidate_key in seen:
+            continue
+        seen.add(candidate_key)
+        if candidate.is_file():
+            return candidate
+
+    # Return the conventional location so the existing readers preserve
+    # their normal missing-file behavior.
+    return run_dir / default_name
+
+
+def calculate_stage_metrics(row):
+    before_force_path = resolve_record_artifact(
+        row,
+        "before_force_csv",
+        "before_forces.csv",
+    )
+    perturbed_force_path = resolve_record_artifact(
+        row,
+        "perturbed_force_csv",
+        "perturbed_forces.csv",
+    )
+    after_force_path = resolve_record_artifact(
+        row,
+        "after_force_csv",
+        "after_forces.csv",
+    )
+    trajectory_path = resolve_record_artifact(
+        row,
+        "before_relax_traj",
+        "before_attack_relaxation.traj",
+    )
 
     (
         baseline_displacement,
@@ -524,6 +566,323 @@ def load_trials(project_root):
     return combined, missing
 
 
+def empty_stage_values():
+    values = {}
+
+    for stage in STAGES:
+        for metric in (
+            "median_displacement_a",
+            "median_delta_force_ev_a",
+            "relax_steps",
+            "neighbor_jaccard_distance",
+            "rdf_l1_distance",
+            "coordination_change_max",
+        ):
+            values[stage_column(stage, metric)] = np.nan
+
+    return values
+
+
+def contour_endpoint_inputs(frame_data):
+    """Return the final sampled contour state for each endpoint."""
+    if frame_data.empty:
+        return pd.DataFrame()
+
+    keys = [
+        "material_slug",
+        "calculator",
+        "beta",
+    ]
+
+    if not set(keys).issubset(frame_data.columns):
+        return pd.DataFrame()
+
+    data = frame_data.copy()
+    data["_contour_order"] = (
+        numeric(data["step"])
+        if "step" in data.columns
+        else np.arange(len(data), dtype=float)
+    )
+
+    data = (
+        data.sort_values("_contour_order")
+        .groupby(keys, as_index=False, dropna=False)
+        .tail(1)
+    )
+
+    columns = keys + [
+        "contour_median_displacement_percent_min_lattice",
+    ]
+
+    columns = [
+        column
+        for column in columns
+        if column in data.columns
+    ]
+
+    return data[columns].rename(columns={
+        "contour_median_displacement_percent_min_lattice": (
+            "contour_input_displacement_percent_min_lattice"
+        ),
+    })
+
+
+def load_contour_trials(project_root):
+    """
+    Convert existing contour metric tables into the same plotting schema
+    as the adversarial records.
+
+    Contour uses measured displacement from its relaxed starting structure
+    on the x-axis; it does not have a nominal adversarial epsilon.
+    """
+    records = []
+    missing = []
+
+    for trial_name, seed in TRIALS:
+        contour_root = (
+            project_root
+            / trial_name
+            / "outputs_comprehensive"
+            / "float64"
+            / "contour"
+        )
+
+        frame_path = contour_root / "contour_frame_metrics.csv"
+        relaxed_path = (
+            contour_root
+            / "contour_relaxed_endpoint_metrics.csv"
+        )
+
+        try:
+            frame_data = (
+                pd.read_csv(frame_path)
+                if frame_path.is_file()
+                else pd.DataFrame()
+            )
+        except Exception as error:
+            frame_data = pd.DataFrame()
+            missing.append({
+                "trial": trial_name,
+                "seed": seed,
+                "reason": f"unreadable contour frames: {error}",
+            })
+
+        try:
+            relaxed_data = (
+                pd.read_csv(relaxed_path)
+                if relaxed_path.is_file()
+                else pd.DataFrame()
+            )
+        except Exception as error:
+            relaxed_data = pd.DataFrame()
+            missing.append({
+                "trial": trial_name,
+                "seed": seed,
+                "reason": f"unreadable relaxed contour endpoints: {error}",
+            })
+
+        if frame_data.empty and relaxed_data.empty:
+            missing.append({
+                "trial": trial_name,
+                "seed": seed,
+                "reason": f"missing contour metric tables under {contour_root}",
+            })
+            continue
+
+        if not frame_data.empty:
+            required = {
+                "material_slug",
+                "calculator",
+                "contour_median_displacement_percent_min_lattice",
+            }
+
+            if required.issubset(frame_data.columns):
+                for frame_index, row in frame_data.iterrows():
+                    x_value = finite_float(
+                        row.get(
+                            "contour_median_displacement_percent_min_lattice"
+                        )
+                    )
+
+                    if not np.isfinite(x_value) or x_value <= 0.0:
+                        continue
+
+                    values = empty_stage_values()
+                    stage = "after_attack_before_relaxation"
+
+                    values[stage_column(
+                        stage,
+                        "median_displacement_a",
+                    )] = finite_float(
+                        row.get("contour_median_displacement_a")
+                    )
+                    values[stage_column(
+                        stage,
+                        "median_delta_force_ev_a",
+                    )] = finite_float(
+                        row.get("contour_median_force_delta_ev_a")
+                    )
+                    values[stage_column(
+                        stage,
+                        "neighbor_jaccard_distance",
+                    )] = finite_float(
+                        row.get("contour_neighbor_jaccard_distance")
+                    )
+                    values[stage_column(
+                        stage,
+                        "rdf_l1_distance",
+                    )] = finite_float(
+                        row.get("contour_rdf_l1_distance")
+                    )
+                    values[stage_column(
+                        stage,
+                        "coordination_change_max",
+                    )] = finite_float(
+                        row.get("contour_coordination_change_max")
+                    )
+
+                    beta_value = finite_float(
+                        row.get("beta")
+                    )
+                    step_value = finite_float(
+                        row.get("step")
+                    )
+
+                    if (
+                        np.isfinite(beta_value)
+                        and np.isfinite(step_value)
+                    ):
+                        contour_key = (
+                            beta_value
+                            + step_value * 1.0e-6
+                        )
+                    else:
+                        contour_key = x_value
+
+                    records.append({
+                        "run_id": (
+                            f"{trial_name}_contour_frame_{frame_index}"
+                        ),
+                        "material_slug": row.get("material_slug"),
+                        "calculator": row.get("calculator"),
+                        "attack_label": "Contour",
+                        "epsilon": contour_key,
+                        "epsilon_percent_displacement": x_value,
+                        "seed": seed,
+                        "trial": trial_name,
+                        "method_source": "contour_frame",
+                        **values,
+                    })
+
+        if not relaxed_data.empty:
+            endpoint_inputs = contour_endpoint_inputs(frame_data)
+            keys = [
+                "material_slug",
+                "calculator",
+                "beta",
+            ]
+
+            if (
+                not endpoint_inputs.empty
+                and set(keys).issubset(relaxed_data.columns)
+            ):
+                relaxed_data = relaxed_data.merge(
+                    endpoint_inputs,
+                    on=keys,
+                    how="left",
+                )
+
+            for endpoint_index, row in relaxed_data.iterrows():
+                x_value = finite_float(
+                    row.get(
+                        "contour_input_displacement_percent_min_lattice"
+                    )
+                )
+
+                if not np.isfinite(x_value):
+                    x_value = finite_float(
+                        row.get(
+                            "contour_relaxed_displacement_percent_min_lattice"
+                        )
+                    )
+
+                if not np.isfinite(x_value) or x_value <= 0.0:
+                    continue
+
+                values = empty_stage_values()
+                immediate_stage = "after_attack_before_relaxation"
+                final_stage = "after_attack_after_relaxation"
+                relaxation_steps = finite_float(
+                    row.get("contour_endpoint_relaxation_steps")
+                )
+
+                values[stage_column(
+                    immediate_stage,
+                    "relax_steps",
+                )] = relaxation_steps
+                values[stage_column(
+                    final_stage,
+                    "relax_steps",
+                )] = relaxation_steps
+                values[stage_column(
+                    final_stage,
+                    "median_displacement_a",
+                )] = finite_float(
+                    row.get("contour_relaxed_median_displacement_a")
+                )
+                values[stage_column(
+                    final_stage,
+                    "median_delta_force_ev_a",
+                )] = finite_float(
+                    row.get("contour_relaxed_median_force_delta_ev_a")
+                )
+                values[stage_column(
+                    final_stage,
+                    "neighbor_jaccard_distance",
+                )] = finite_float(
+                    row.get("contour_relaxed_neighbor_jaccard_distance")
+                )
+                values[stage_column(
+                    final_stage,
+                    "rdf_l1_distance",
+                )] = finite_float(
+                    row.get("contour_relaxed_rdf_l1_distance")
+                )
+                values[stage_column(
+                    final_stage,
+                    "coordination_change_max",
+                )] = finite_float(
+                    row.get("contour_relaxed_coordination_change_max")
+                )
+
+                beta_value = finite_float(
+                    row.get("beta")
+                )
+
+                contour_key = (
+                    beta_value
+                    if np.isfinite(beta_value)
+                    else x_value
+                )
+
+                records.append({
+                    "run_id": (
+                        f"{trial_name}_contour_endpoint_{endpoint_index}"
+                    ),
+                    "material_slug": row.get("material_slug"),
+                    "calculator": row.get("calculator"),
+                    "attack_label": "Contour",
+                    "epsilon": contour_key,
+                    "epsilon_percent_displacement": x_value,
+                    "seed": seed,
+                    "trial": trial_name,
+                    "method_source": "contour_relaxed_endpoint",
+                    **values,
+                })
+
+    return pd.DataFrame(records), missing
+
+
 def prepare_records(records):
     """
     Prepare all usable rows without requiring every trial, material,
@@ -563,7 +922,7 @@ def prepare_records(records):
     # Retain every valid available row. Missing models, attacks and
     # epsilon values are allowed.
     data = data[
-        data["attack_label"].isin(ATTACKS)
+        data["attack_label"].isin(ADVERSARIAL_ATTACKS)
         & data["calculator"].isin(CALCULATORS)
     ].copy()
 
@@ -635,11 +994,11 @@ def prepare_records(records):
 
 def physical_metrics(stage):
     if stage == "before_attack_after_relaxation":
-        step_label = "Initial relaxation steps"
+        step_label = "Relaxation steps"
     elif stage == "after_attack_before_relaxation":
         step_label = "Subsequent post-attack relaxation steps"
     else:
-        step_label = "Post-attack relaxation steps"
+        step_label = "Relaxation steps"
 
     return [
         (
@@ -991,7 +1350,7 @@ def draw_metric_panel(
         ):
             seed_data = (
                 seed_data.sort_values(
-                    "epsilon"
+                    "epsilon_percent_displacement"
                 )
                 .replace(
                     [np.inf, -np.inf],
@@ -1054,7 +1413,7 @@ def draw_metric_panel(
             aggregate["calculator"]
             == calculator
         ].sort_values(
-            "epsilon"
+            "epsilon_percent_displacement"
         )
 
         summary = (
@@ -1126,10 +1485,20 @@ def draw_metric_panel(
         )
 
     if not plotted:
+        message = (
+            "Not applicable: contour starts\n"
+            "from the relaxed reference"
+            if attack == "Contour"
+            and metric.startswith(
+                "before_attack_after_relaxation__"
+            )
+            else "No matched seed data"
+        )
+
         ax.text(
             0.5,
             0.5,
-            "No matched seed data",
+            message,
             transform=ax.transAxes,
             ha="center",
             va="center",
@@ -1230,23 +1599,12 @@ def figure_legend(records):
             )[1],
             markersize=4,
             linewidth=1,
-            label=f"Seed {seed}",
+            label=f"{seed}",
         )
         for seed in sorted(
             present_seeds
         )
     )
-
-    if present_seeds:
-        handles.append(
-            Line2D(
-                [0],
-                [0],
-                color="#333333",
-                linewidth=2.7,
-                label="Available-seed median",
-            )
-        )
 
     return handles
 
@@ -1259,7 +1617,7 @@ def make_metric_figure(
     panel_scales=None,
 ):
     """
-    Create a 3x3 random-seed figure.
+    Create a 3x4 random-seed figure.
 
     panel_scales maps panel letters to "linear", "log" or "symlog".
     Force panels should use symlog because force changes can contain
@@ -1271,8 +1629,8 @@ def make_metric_figure(
 
     fig, axes = plt.subplots(
         3,
-        3,
-        figsize=(14.5, 10.4),
+        4,
+        figsize=(18.2, 10.4),
         squeeze=False,
     )
 
@@ -1281,7 +1639,7 @@ def make_metric_figure(
         ylabel,
     ) in enumerate(metrics):
         for column, attack in enumerate(
-            ATTACKS
+            METHODS
         ):
             ax = axes[
                 row,
@@ -1290,7 +1648,7 @@ def make_metric_figure(
 
             panel_label = chr(
                 ord("A")
-                + row * 3
+                + row * 4
                 + column
             )
 
@@ -1311,12 +1669,10 @@ def make_metric_figure(
                     labelpad=7,
                 )
 
-            if row == 2:
-                ax.set_xlabel(
-                    "Epsilon "
-                    "(% min lattice length)",
-                    labelpad=6,
-                )
+            ax.set_xlabel(
+                "ε strength (% min lattice parameter)",
+                labelpad=6,
+            )
 
             # Keep panel labels inside the axes so they cannot collide
             # with y-axis labels or scientific-notation offset text.
@@ -1368,13 +1724,13 @@ def make_metric_figure(
 
     note = (
         "Thin lines: individual seeds; "
-        "thick lines: available-seed median; "
-        "shading: interquartile range"
+        "shading: interquartile range; "
+        "contour x-axis: measured displacement"
     )
 
     if uses_symlog:
         note += (
-            "; force panels use a symmetric-log scale"
+            "; force panels use a logarithmic scale"
         )
 
     fig.text(
@@ -1415,6 +1771,8 @@ def make_metric_figure(
         facecolor="white",
     )
 
+    save_exact_random_seed_panels(fig)
+
     plt.close(fig)
 
 
@@ -1453,7 +1811,7 @@ def write_aggregate_table(records, output_path):
 
 def save_exact_random_seed_panels(fig):
     """
-    Save exact crops of the nine axes displayed in each random-seed
+    Save exact crops of the twelve axes displayed in each random-seed
     comprehensive figure.
 
     Six comprehensive figures are organized as:
@@ -1462,8 +1820,16 @@ def save_exact_random_seed_panels(fig):
         x
         2 figure families: physical and topology
 
-    Each stage folder therefore receives 18 panels.
+    Each stage folder therefore receives 24 panels.
     """
+
+    # The comprehensive figure has already been saved. Increase only
+    # the physical height used for standalone panel exports by 40%.
+    fig.set_size_inches(
+        fig.get_figwidth(),
+        fig.get_figheight() * 1.40,
+        forward=True,
+    )
 
     def get_output_directory():
         arguments = sys.argv[1:]
@@ -1515,11 +1881,67 @@ def save_exact_random_seed_panels(fig):
 
         return value.strip("_")
 
+    def individual_y_values(axis):
+        """Collect data-space y values from one plotted panel."""
+        values = []
+
+        for line in axis.lines:
+            current = np.asarray(
+                line.get_ydata(),
+                dtype=float,
+            ).reshape(-1)
+            current = current[np.isfinite(current)]
+
+            if current.size:
+                values.append(current)
+
+        for collection in axis.collections:
+            try:
+                offsets = np.asarray(
+                    collection.get_offsets(),
+                    dtype=float,
+                )
+
+                if (
+                    offsets.ndim == 2
+                    and offsets.shape[1] >= 2
+                ):
+                    current = offsets[:, 1]
+                    current = current[np.isfinite(current)]
+
+                    if current.size:
+                        values.append(current)
+            except Exception:
+                pass
+
+            try:
+                for path_item in collection.get_paths():
+                    vertices = np.asarray(
+                        path_item.vertices,
+                        dtype=float,
+                    )
+
+                    if (
+                        vertices.ndim == 2
+                        and vertices.shape[1] >= 2
+                    ):
+                        current = vertices[:, 1]
+                        current = current[np.isfinite(current)]
+
+                        if current.size:
+                            values.append(current)
+            except Exception:
+                pass
+
+        if not values:
+            return np.asarray([], dtype=float)
+
+        return np.concatenate(values)
+
     plotting_axes = [
         axis
         for axis in fig.axes
         if axis.get_visible()
-        and axis.has_data()
     ]
 
     plotting_axes = sorted(
@@ -1530,9 +1952,9 @@ def save_exact_random_seed_panels(fig):
         ),
     )
 
-    if len(plotting_axes) != 9:
+    if len(plotting_axes) != 12:
         raise RuntimeError(
-            "Expected 9 axes in the random-seed comprehensive "
+            "Expected 12 axes in the random-seed comprehensive "
             f"figure, but found {len(plotting_axes)}"
         )
 
@@ -1597,8 +2019,11 @@ def save_exact_random_seed_panels(fig):
 
     # Classify the experimental stage.
     if (
-        "before attack" in figure_title
-        and "after relaxation" in figure_title
+        "pre relaxation" in figure_title
+        or (
+            "before attack" in figure_title
+            and "after relaxation" in figure_title
+        )
     ):
         stage = "before_attack_after_relaxation"
 
@@ -1643,8 +2068,8 @@ def save_exact_random_seed_panels(fig):
 
     for row_index in range(3):
         row_axes = plotting_axes[
-            row_index * 3:
-            (row_index + 1) * 3
+            row_index * 4:
+            (row_index + 1) * 4
         ]
 
         metric_name = next(
@@ -1667,12 +2092,87 @@ def save_exact_random_seed_panels(fig):
         )
 
     attack_names = (
+        "contour",
         "fgsm",
         "ifgsm",
         "pgd",
     )
 
-    panel_letters = "ABCDEFGHI"
+    panel_letters = "ABCDEFGHIJKL"
+
+    # Reuse the comprehensive figure legend in every individual panel.
+    individual_legend_handles = []
+    individual_legend_labels = []
+
+    if fig.legends:
+        source_legend = fig.legends[0]
+
+        individual_legend_handles = getattr(
+            source_legend,
+            "legend_handles",
+            None,
+        )
+
+        if individual_legend_handles is None:
+            individual_legend_handles = getattr(
+                source_legend,
+                "legendHandles",
+                [],
+            )
+
+        individual_legend_labels = [
+            item.get_text()
+            for item in source_legend.get_texts()
+            if item.get_text() != "Available-seed median"
+        ]
+
+        paired_items = [
+            (handle, label)
+            for handle, label in zip(
+                individual_legend_handles,
+                [
+                    item.get_text()
+                    for item in source_legend.get_texts()
+                ],
+            )
+            if label != "Available-seed median"
+        ]
+
+        individual_legend_handles = [
+            item[0]
+            for item in paired_items
+        ]
+
+        individual_legend_labels = [
+            item[1]
+            for item in paired_items
+        ]
+
+    model_legend_items = [
+        (handle, label)
+        for handle, label in zip(
+            individual_legend_handles,
+            individual_legend_labels,
+        )
+        if not label.startswith("Seed ")
+    ]
+
+    seed_legend_items = [
+        (handle, label)
+        for handle, label in zip(
+            individual_legend_handles,
+            individual_legend_labels,
+        )
+        if label.startswith("Seed ")
+    ]
+
+    # The comprehensive figure has already been saved. Hide its global
+    # legend, title and footer so they cannot leak into panel crops.
+    for figure_legend_artist in fig.legends:
+        figure_legend_artist.set_visible(False)
+
+    for figure_text_artist in fig.texts:
+        figure_text_artist.set_visible(False)
 
     # Render the comprehensive layout before calculating crop boxes.
     fig.canvas.draw()
@@ -1684,8 +2184,8 @@ def save_exact_random_seed_panels(fig):
     for panel_index, axis in enumerate(
         plotting_axes
     ):
-        row_index = panel_index // 3
-        column_index = panel_index % 3
+        row_index = panel_index // 4
+        column_index = panel_index % 4
 
         metric_slug = slugify(
             row_metric_names[row_index]
@@ -1707,15 +2207,261 @@ def save_exact_random_seed_panels(fig):
             / output_filename
         )
 
-        # get_tightbbox includes exactly what belongs to this axis:
-        # title, panel letter, tick labels, and axis labels where shown
-        # in the comprehensive figure.
+        # Hide all other axes before saving this individual panel.
+        # This prevents neighbouring ticks, curves and labels from
+        # appearing inside the expanded legend crop.
+        for other_axis in plotting_axes:
+            other_axis.set_visible(
+                other_axis is axis
+            )
+
+        # Remove the A-L panel letter from the individual output.
+        for text_artist in axis.texts:
+            if (
+                text_artist.get_text().strip()
+                == panel_letters[panel_index]
+            ):
+                text_artist.set_visible(False)
+
+        # Every standalone image needs complete axis labels, even when
+        # its source panel was not in the leftmost or bottom row.
+        axis.set_ylabel(
+            row_metric_names[row_index],
+            labelpad=7,
+        )
+
+        axis.set_xlabel(
+            "ε strength (% min lattice parameter)",
+            labelpad=7,
+        )
+
+        # The comprehensive figure was already saved with harmonized
+        # row limits. Only standalone panels are rescaled here using
+        # the data actually visible in the current axis.
+        panel_values = individual_y_values(axis)
+
+        if panel_values.size:
+            configure_y_axis(
+                axis,
+                panel_values,
+                scale=axis.get_yscale(),
+            )
+
+        # Standalone linear panels must include every visible seed and
+        # IQR value. The general helper uses robust percentiles, which
+        # is useful for comprehensive figures but can crop the largest
+        # value in a single extracted panel. Round upward to the next
+        # clean major tick, with an extra tick when the maximum lies
+        # exactly on a boundary.
+        if (
+            panel_values.size
+            and axis.get_yscale() == "linear"
+            and row_metric_names[row_index] != "Max CN change"
+        ):
+            finite_panel_values = panel_values[
+                np.isfinite(panel_values)
+            ]
+
+            if finite_panel_values.size:
+                panel_minimum = float(
+                    np.min(finite_panel_values)
+                )
+                panel_maximum = float(
+                    np.max(finite_panel_values)
+                )
+
+                panel_lower_limit = (
+                    0.0
+                    if panel_minimum >= 0
+                    else panel_minimum
+                )
+
+                locator = mticker.MaxNLocator(
+                    nbins=6,
+                    min_n_ticks=4,
+                    steps=[1, 2, 2.5, 4, 5, 10],
+                )
+
+                shared_ticks = locator.tick_values(
+                    panel_lower_limit,
+                    panel_maximum,
+                )
+
+                if panel_minimum >= 0:
+                    shared_ticks = shared_ticks[
+                        shared_ticks >= 0
+                    ]
+
+                    if (
+                        shared_ticks.size == 0
+                        or not np.isclose(
+                            shared_ticks[0],
+                            0.0,
+                        )
+                    ):
+                        shared_ticks = np.insert(
+                            shared_ticks,
+                            0,
+                            0.0,
+                        )
+
+                if shared_ticks.size >= 2:
+                    tick_step = float(
+                        shared_ticks[-1]
+                        - shared_ticks[-2]
+                    )
+
+                    if (
+                        shared_ticks[-1]
+                        <= panel_maximum
+                        or np.isclose(
+                            shared_ticks[-1],
+                            panel_maximum,
+                        )
+                    ):
+                        shared_ticks = np.append(
+                            shared_ticks,
+                            shared_ticks[-1] + tick_step,
+                        )
+
+                    axis.set_ylim(
+                        float(shared_ticks[0]),
+                        float(shared_ticks[-1]),
+                    )
+                    axis.set_yticks(shared_ticks)
+        # Attack relaxation runs are capped at 600 steps. Keep a small
+        # amount of headroom above capped curves, but do not display a
+        # misleading 700-step tick. Contour panels retain their own
+        # independently scaled axes.
+        if (
+            column_index > 0
+            and "relaxation steps"
+            in row_metric_names[row_index].lower()
+        ):
+            axis.set_yscale("linear")
+            axis.set_ylim(0, 620)
+            axis.set_yticks(
+                np.arange(0, 601, 100)
+            )
+
+
+        # Give each standalone Max CN panel its own compact integer
+        # scale. End one unit above the largest plotted value while
+        # retaining even-numbered ticks below the ceiling. For example,
+        # a maximum of 12 produces limits of 0--13 and ticks through 12.
+        if row_metric_names[row_index] == "Max CN change":
+            line_value_sets = []
+
+            for line in axis.lines:
+                values = np.asarray(
+                    line.get_ydata(),
+                    dtype=float,
+                ).reshape(-1)
+                values = values[np.isfinite(values)]
+
+                if values.size:
+                    line_value_sets.append(values)
+
+            maximum_cn_change = (
+                float(np.max(np.concatenate(line_value_sets)))
+                if line_value_sets
+                else 10.0
+            )
+            panel_cn_upper_limit = max(
+                2.0,
+                float(
+                    math.ceil(
+                        maximum_cn_change + 1.0
+                    )
+                ),
+            )
+
+            axis.set_yscale("linear")
+            axis.set_ylim(
+                0,
+                panel_cn_upper_limit,
+            )
+            axis.set_yticks(
+                np.arange(
+                    0,
+                    panel_cn_upper_limit,
+                    2,
+                )
+            )
+        panel_legends = []
+
+        if model_legend_items:
+            model_legend = axis.legend(
+                handles=[
+                    item[0]
+                    for item in model_legend_items
+                ],
+                labels=[
+                    item[1]
+                    for item in model_legend_items
+                ],
+                loc="lower center",
+                bbox_to_anchor=(0.28, 1.30),
+                ncol=2,
+                frameon=False,
+                fontsize=7.2,
+                handlelength=2.2,
+                columnspacing=1.0,
+                handletextpad=0.45,
+                borderaxespad=0.0,
+                title="Models",
+                title_fontsize=7.4,
+            )
+
+            axis.add_artist(model_legend)
+            panel_legends.append(model_legend)
+
+        if seed_legend_items:
+            seed_legend = axis.legend(
+                handles=[
+                    item[0]
+                    for item in seed_legend_items
+                ],
+                labels=[
+                    item[1]
+                    for item in seed_legend_items
+                ],
+                loc="lower center",
+                bbox_to_anchor=(0.78, 1.30),
+                ncol=2,
+                frameon=False,
+                fontsize=7.2,
+                handlelength=2.2,
+                columnspacing=1.0,
+                handletextpad=0.45,
+                borderaxespad=0.0,
+                title="Seeds",
+                title_fontsize=7.4,
+            )
+
+            panel_legends.append(seed_legend)
+
+        # Redraw so the legend has a valid bounding box.
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+
+        bounding_boxes = [
+            axis.get_tightbbox(renderer),
+        ]
+
+        for panel_legend in panel_legends:
+            bounding_boxes.append(
+                panel_legend.get_window_extent(renderer)
+            )
+
         bounding_box = (
-            axis.get_tightbbox(renderer)
+            matplotlib.transforms.Bbox.union(
+                bounding_boxes
+            )
             .transformed(
                 fig.dpi_scale_trans.inverted()
             )
-            .padded(0.04)
+            .padded(0.06)
         )
 
         fig.savefig(
@@ -1725,6 +2471,9 @@ def save_exact_random_seed_panels(fig):
             facecolor=fig.get_facecolor(),
             edgecolor="none",
         )
+
+        for panel_legend in panel_legends:
+            panel_legend.remove()
 
 
 def harmonize_random_seed_axes(fig):
@@ -1855,10 +2604,46 @@ def harmonize_random_seed_axes(fig):
         matching_row["axes"].append(ax)
 
     for row in rows:
-        row_axes = sorted(
+        all_row_axes = sorted(
             row["axes"],
             key=lambda current: current.get_position().x0,
         )
+
+        # Use mathematical powers of ten on every logarithmic axis,
+        # including the independently scaled Contour panels.
+        for current_axis in all_row_axes:
+            if current_axis.get_xscale() == "log":
+                current_axis.xaxis.set_major_formatter(
+                    mticker.LogFormatterMathtext(
+                        base=10.0,
+                        labelOnlyBase=False,
+                    )
+                )
+
+                current_axis.xaxis.set_minor_formatter(
+                    mticker.NullFormatter()
+                )
+
+            if current_axis.get_yscale() == "log":
+                current_axis.yaxis.set_major_formatter(
+                    mticker.LogFormatterMathtext(
+                        base=10.0,
+                        labelOnlyBase=False,
+                    )
+                )
+
+                current_axis.yaxis.set_minor_formatter(
+                    mticker.NullFormatter()
+                )
+
+        # Contour displacement is measured rather than prescribed.
+        # Preserve its independently configured x- and y-axis ranges;
+        # only the three adversarial methods share row limits.
+        row_axes = [
+            ax
+            for ax in all_row_axes
+            if ax.get_title().strip().lower() != "contour"
+        ]
 
         if len(row_axes) < 2:
             continue
@@ -1895,6 +2680,13 @@ def harmonize_random_seed_axes(fig):
                         subs=np.arange(2, 10) * 0.1,
                     )
                 )
+                ax.xaxis.set_major_formatter(
+                    mticker.LogFormatterMathtext(
+                        base=10.0,
+                        labelOnlyBase=False,
+                    )
+                )
+
                 ax.xaxis.set_minor_formatter(
                     mticker.NullFormatter()
                 )
@@ -1906,7 +2698,7 @@ def harmonize_random_seed_axes(fig):
 
         row_label = " ".join(
             ax.get_ylabel().lower()
-            for ax in row_axes
+            for ax in all_row_axes
             if ax.get_ylabel()
         )
 
@@ -1979,10 +2771,6 @@ def harmonize_random_seed_axes(fig):
                 lower_limit = 1.0e-2
                 upper_limit = 1.0
 
-            if is_delta_force:
-                # Delta-force figures always begin at 10^-2.
-                lower_limit = 1.0e-2
-
             if upper_limit <= lower_limit:
                 upper_limit = lower_limit * 10.0
 
@@ -2004,6 +2792,13 @@ def harmonize_random_seed_axes(fig):
                     mticker.LogLocator(
                         base=10.0,
                         subs=np.arange(2, 10) * 0.1,
+                    )
+                )
+
+                ax.yaxis.set_major_formatter(
+                    mticker.LogFormatterMathtext(
+                        base=10.0,
+                        labelOnlyBase=False,
                     )
                 )
 
@@ -2124,6 +2919,8 @@ def harmonize_random_seed_axes(fig):
 
 
 def main():
+    global CALCULATORS
+
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
@@ -2135,6 +2932,13 @@ def main():
     parser.add_argument(
         "--output-dir",
         type=Path,
+    )
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        choices=["mace_mh", "uma", "mtp", "chgnet", "mace_model"],
+        default=None,
+        help="Plot only this base model set. Defaults to all LiCoHPF models.",
     )
 
     args = parser.parse_args()
@@ -2153,14 +2957,51 @@ def main():
     )
 
     records, missing = load_trials(project_root)
+
+    if args.models is not None:
+        selected_models = list(args.models)
+        present = set(records.get("calculator", pd.Series(dtype=str)).dropna())
+        CALCULATORS = [
+            item
+            for model_id in selected_models
+            for item in (
+                [model_id, f"dft_{model_id}"]
+                if f"dft_{model_id}" in present
+                else [model_id]
+            )
+        ]
+
     records = prepare_records(records)
+
+    contour_records, missing_contour = load_contour_trials(
+        project_root
+    )
+
+    if args.models is not None and not contour_records.empty:
+        contour_records = contour_records[
+            contour_records["calculator"].isin(args.models)
+        ].copy()
+
+    if not contour_records.empty:
+        records = pd.concat(
+            [records, contour_records],
+            ignore_index=True,
+            sort=False,
+        )
+
+        print(
+            "Random-seed plotting added "
+            f"{len(contour_records)} contour records."
+        )
 
     records.to_csv(
         output_dir / "random_seed_combined.csv",
         index=False,
     )
 
-    pd.DataFrame(missing).to_csv(
+    pd.DataFrame(
+        missing + missing_contour
+    ).to_csv(
         output_dir
         / "random_seed_missing_trials.csv",
         index=False,
@@ -2182,9 +3023,10 @@ def main():
         "Random-seed comparison: physical response "
         "after attack and relaxation",
         panel_scales={
-            "D": "symlog",
             "E": "symlog",
             "F": "symlog",
+            "G": "symlog",
+            "H": "symlog",
         },
     )
 
@@ -2211,9 +3053,10 @@ def main():
         "Random-seed comparison: immediate physical response "
         "after attack, before relaxation",
         panel_scales={
-            "D": "symlog",
             "E": "symlog",
             "F": "symlog",
+            "G": "symlog",
+            "H": "symlog",
         },
     )
 
@@ -2243,9 +3086,10 @@ def main():
         "Random-seed comparison: physical response "
         "pre-relaxation",
         panel_scales={
-            "D": "symlog",
             "E": "symlog",
             "F": "symlog",
+            "G": "symlog",
+            "H": "symlog",
         },
     )
 

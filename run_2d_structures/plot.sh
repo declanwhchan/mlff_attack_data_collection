@@ -46,7 +46,9 @@ fi
 
 TRIAL_NAME="${TRIALS[$TASK_INDEX]}"
 
-SCRATCH_BASE="${SCRATCH_OUTPUT_ROOT:-/scratch/$USER/mlff_attack_data_collection/2d_structures}"
+SCRATCH_COLLECTION_ROOT="/scratch/$USER/mlff_attack_data_collection"
+SCRATCH_BASE="${SCRATCH_OUTPUT_ROOT:-$SCRATCH_COLLECTION_ROOT/2d_structures}"
+DFT_STRUCTURES_ROOT="$SCRATCH_COLLECTION_ROOT/dft_2d_structures"
 SCRATCH_TRIAL="$SCRATCH_BASE/$TRIAL_NAME"
 SUPERCELL_ROOT="${SUPERCELL_OUTPUT_ROOT:-$SCRATCH_BASE/supercell}"
 
@@ -60,6 +62,7 @@ GENERATED_TESTS="$REPO_ROOT/generated_material_tests.csv"
 for required_file in \
     "$CONFIG_FILE" \
     "$GENERATED_TESTS" \
+    "$DFT_STRUCTURES_ROOT/manifests/preliminary_manifest.csv" \
     "$REPO_ROOT/pipeline/run_comprehensive.py" \
     "$REPO_ROOT/pipeline/contour_comprehensive.py" \
     "$REPO_ROOT/pipeline/float_comprehensive.py" \
@@ -82,9 +85,12 @@ if [ ! -d "$MAIN_SUMMARY_DIR" ]; then
 fi
 
 if [ ! -d "$CONTOUR_SUMMARY_DIR" ]; then
-    echo "ERROR: Missing contour summaries:"
+    echo "WARNING: Missing optional contour summaries:"
     echo "$CONTOUR_SUMMARY_DIR"
-    exit 1
+    echo "Contour aggregation and plotting will be skipped."
+    RUN_CONTOUR_PLOTS=0
+else
+    RUN_CONTOUR_PLOTS=1
 fi
 
 mkdir -p "$PROJECT_TRIAL"
@@ -93,6 +99,7 @@ export SCRATCH_TRIAL
 export PROJECT_TRIAL
 export GENERATED_TESTS
 export CONFIG_FILE
+export RUN_CONTOUR_PLOTS
 
 "$PYTHON" - <<'PY'
 from pathlib import Path
@@ -120,6 +127,10 @@ main_summary_dir = (
 )
 contour_summary_dir = (
     scratch_trial / "contour_array_summaries"
+)
+run_contour_plots = (
+    os.environ.get("RUN_CONTOUR_PLOTS", "0")
+    == "1"
 )
 
 configured_tests = pd.read_csv(
@@ -163,15 +174,18 @@ models_by_dtype = {
         "mace_mh",
         "uma",
         "chgnet",
-        "mace_model",
     ],
     "float64": [
         "mace_mh",
         "uma",
-        "mtp",
         "chgnet",
-        "mace_model",
     ],
+}
+
+model_identity_aliases = {
+    "mace_mh": {"mace_mh", "mace"},
+    "uma": {"uma"},
+    "chgnet": {"chgnet"},
 }
 
 for dtype_str, models in models_by_dtype.items():
@@ -192,6 +206,14 @@ for dtype_str, models in models_by_dtype.items():
                 "*_summary.csv"
             )
         )
+
+        if model_id == "mace_mh" and not main_paths:
+            main_paths = sorted(
+                main_summary_dir.glob(
+                    f"{dtype_str}_mace_"
+                    "*_summary.csv"
+                )
+            )
 
         if len(main_paths) != expected_materials:
             raise SystemExit(
@@ -236,10 +258,11 @@ for dtype_str, models in models_by_dtype.items():
             )
 
         if len(main) != expected_main_rows:
-            raise SystemExit(
-                f"ERROR: {dtype_str} {model_id} main "
+            print(
+                f"WARNING: {dtype_str} {model_id} main "
                 f"summary contains {len(main)} rows; "
-                f"expected {expected_main_rows}"
+                f"expected {expected_main_rows}. "
+                "Available successful rows will be plotted."
             )
 
         statuses = {
@@ -255,22 +278,44 @@ for dtype_str, models in models_by_dtype.items():
                 != "success"
             ]
             print(failed.to_string(index=False))
+            print(
+                f"WARNING: Skipping {len(failed)} failed "
+                f"main rows for {dtype_str} {model_id}."
+            )
+            main = main[
+                main["status"]
+                .astype(str)
+                .str.lower()
+                == "success"
+            ].copy()
+
+        if main.empty:
             raise SystemExit(
-                f"ERROR: Failed main rows for "
+                f"ERROR: No successful main rows remain for "
                 f"{dtype_str} {model_id}"
             )
 
-        main_models = {
-            str(value).strip().lower()
-            for value in main["model_id"]
-        }
+        for identity_column in ("model_id", "calculator"):
+            if identity_column not in main.columns:
+                continue
 
-        if main_models != {model_id}:
-            raise SystemExit(
-                f"ERROR: Incorrect model identities "
-                f"in {dtype_str} {model_id}: "
-                f"{main_models}"
+            main_models = {
+                str(value).strip().lower()
+                for value in main[identity_column]
+                if str(value).strip().lower()
+                not in {"", "nan", "none", "null", "na"}
+            }
+
+            unexpected = main_models.difference(
+                model_identity_aliases[model_id]
             )
+
+            if unexpected:
+                raise SystemExit(
+                    f"ERROR: Incorrect model identities "
+                    f"in {dtype_str} {model_id}: "
+                    f"{main_models}"
+                )
 
         main["calculator"] = model_id
         main["model_id"] = model_id
@@ -288,12 +333,23 @@ for dtype_str, models in models_by_dtype.items():
             index=False,
         )
 
+        if not run_contour_plots:
+            continue
+
         contour_paths = sorted(
             contour_summary_dir.glob(
                 f"{dtype_str}_{model_id}_"
                 "*_summary.csv"
             )
         )
+
+        if model_id == "mace_mh" and not contour_paths:
+            contour_paths = sorted(
+                contour_summary_dir.glob(
+                    f"{dtype_str}_mace_"
+                    "*_summary.csv"
+                )
+            )
 
         if len(contour_paths) != expected_materials:
             raise SystemExit(
@@ -357,17 +413,27 @@ for dtype_str, models in models_by_dtype.items():
                 f"{dtype_str} {model_id}"
             )
 
-        contour_models = {
-            str(value).strip().lower()
-            for value in contour["model_id"]
-        }
+        for identity_column in ("model_id", "calculator"):
+            if identity_column not in contour.columns:
+                continue
 
-        if contour_models != {model_id}:
-            raise SystemExit(
-                f"ERROR: Incorrect contour model IDs "
-                f"for {dtype_str} {model_id}: "
-                f"{contour_models}"
+            contour_models = {
+                str(value).strip().lower()
+                for value in contour[identity_column]
+                if str(value).strip().lower()
+                not in {"", "nan", "none", "null", "na"}
+            }
+
+            unexpected = contour_models.difference(
+                model_identity_aliases[model_id]
             )
+
+            if unexpected:
+                raise SystemExit(
+                    f"ERROR: Incorrect contour model IDs "
+                    f"for {dtype_str} {model_id}: "
+                    f"{contour_models}"
+                )
 
         contour["calculator"] = model_id
         contour["model_id"] = model_id
@@ -401,10 +467,6 @@ run_dtype_plots() {
     local chgnet_dir="$dtype_root/chgnet"
     local mace_model_dir="$dtype_root/mace_model"
 
-    if [ "$dtype_str" = "float32" ]; then
-        mkdir -p "$mtp_dir"
-    fi
-
     "$PYTHON" -u pipeline/run_comprehensive.py \
         --mace-mh-dir "$mace_mh_dir" \
         --uma-dir "$uma_dir" \
@@ -413,16 +475,22 @@ run_dtype_plots() {
         --mace-model-dir "$mace_model_dir" \
         --output-dir "$dtype_root" \
         --materials generated_material_tests.csv \
-        --structures-dir mp_structures
+        --structures-dir mp_structures \
+        --models mace_mh uma chgnet \
+        --scratch-runs-dir "$SCRATCH_TRIAL/outputs_$dtype_str" \
+        --dft-structures-dir "$DFT_STRUCTURES_ROOT"
 
-    "$PYTHON" -u pipeline/contour_comprehensive.py \
-        --mace-mh-contour-dir "$mace_mh_dir/contour" \
-        --uma-contour-dir "$uma_dir/contour" \
-        --mtp-contour-dir "$mtp_dir/contour" \
-        --chgnet-contour-dir "$chgnet_dir/contour" \
-        --mace-model-contour-dir "$mace_model_dir/contour" \
-        --comprehensive-dir "$dtype_root" \
-        --output-dir "$dtype_root/contour"
+    if [ "$RUN_CONTOUR_PLOTS" -eq 1 ]; then
+        "$PYTHON" -u pipeline/contour_comprehensive.py \
+            --mace-mh-contour-dir "$mace_mh_dir/contour" \
+            --uma-contour-dir "$uma_dir/contour" \
+            --mtp-contour-dir "$mtp_dir/contour" \
+            --chgnet-contour-dir "$chgnet_dir/contour" \
+            --mace-model-contour-dir "$mace_model_dir/contour" \
+            --comprehensive-dir "$dtype_root" \
+            --output-dir "$dtype_root/contour" \
+            --models mace_mh uma chgnet
+    fi
 }
 
 export OMP_NUM_THREADS=4
@@ -447,19 +515,25 @@ export NUMEXPR_NUM_THREADS=8
 "$PYTHON" -u pipeline/float_comprehensive.py \
     --float32-dir "$PROJECT_TRIAL/outputs_comprehensive/float32" \
     --float64-dir "$PROJECT_TRIAL/outputs_comprehensive/float64" \
-    --output-dir "$PROJECT_TRIAL/outputs_comprehensive/comparison"
+    --output-dir "$PROJECT_TRIAL/outputs_comprehensive/comparison" \
+    --models mace_mh uma chgnet
 
 if [ "$SLURM_ARRAY_TASK_ID" -eq 1 ]; then
     SUPERCELL_ARRAY_SUMMARIES="$SUPERCELL_ROOT/array_summaries"
 
     if [ ! -d "$SUPERCELL_ARRAY_SUMMARIES" ]; then
-        echo "ERROR: Missing supercell summaries:"
+        echo "WARNING: Missing optional supercell summaries:"
         echo "$SUPERCELL_ARRAY_SUMMARIES"
-        exit 1
+        echo "Supercell aggregation and plotting will be skipped."
+        RUN_SUPERCELL_PLOTS=0
+    else
+        RUN_SUPERCELL_PLOTS=1
     fi
 
-    "$PYTHON" -u pipeline/supercell.py combine \
-        --output-root "$SUPERCELL_ROOT"
+    if [ "$RUN_SUPERCELL_PLOTS" -eq 1 ]; then
+        "$PYTHON" -u pipeline/supercell.py combine \
+            --output-root "$SUPERCELL_ROOT" \
+            --models mace_mh uma chgnet
 
     SUPERCELL_PROJECT="$PROJECT_RESULTS/supercell"
 
@@ -470,9 +544,7 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 1 ]; then
     for model_id in \
         mace_mh \
         uma \
-        mtp \
-        chgnet \
-        mace_model; do
+        chgnet; do
         source_summary="$SUPERCELL_ROOT/outputs_float64/$model_id/summary.csv"
         destination_summary="$SUPERCELL_PROJECT/summaries/${model_id}_summary.csv"
 
@@ -492,17 +564,17 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 1 ]; then
         --chgnet-summary "$SUPERCELL_PROJECT/summaries/chgnet_summary.csv" \
         --mace-model-summary "$SUPERCELL_PROJECT/summaries/mace_model_summary.csv" \
         --output-dir "$SUPERCELL_PROJECT/plots" \
-        --epsilon 0.01
+        --epsilon 0.01 \
+        --models mace_mh uma chgnet
 
     for model_id in \
         mace_mh \
         uma \
-        mtp \
-        chgnet \
-        mace_model; do
+        chgnet; do
         rm -f \
             "$SUPERCELL_ROOT/outputs_float64/$model_id/summary.csv"
     done
+    fi
 
     RANDOM_SEED_JOB=$(
         sbatch \
@@ -514,18 +586,12 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 1 ]; then
             --cpus-per-task=8 \
             --output=random-seed-%j.out \
             --export=ALL,PROJECT_RESULTS="$PROJECT_RESULTS" \
-            --wrap="cd '$REPO_ROOT' && '$PYTHON' -u pipeline/random_seed_comprehensive.py --project-root '$PROJECT_RESULTS' --output-dir '$PROJECT_RESULTS/random_seed'"
+            --wrap="cd '$REPO_ROOT' && '$PYTHON' -u pipeline/random_seed_comprehensive.py --project-root '$PROJECT_RESULTS' --output-dir '$PROJECT_RESULTS/random_seed' --models mace_mh uma chgnet"
     )
 
     echo "Submitted random-seed plot job:"
     echo "$RANDOM_SEED_JOB"
 fi
-
-rm -f "$MAIN_SUMMARY_DIR/"*.csv
-rm -f "$CONTOUR_SUMMARY_DIR/"*.csv
-
-rmdir "$MAIN_SUMMARY_DIR" 2>/dev/null || true
-rmdir "$CONTOUR_SUMMARY_DIR" 2>/dev/null || true
 
 echo "Plotting complete"
 echo "Trial: $TRIAL_NAME"

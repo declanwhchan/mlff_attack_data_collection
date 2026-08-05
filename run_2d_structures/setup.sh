@@ -50,9 +50,6 @@ required_files=(
     "pipeline/supercell.py"
     "mace-mh-1.model"
     "uma-s-1p1.pt"
-    "pot.almtp"
-    "pot.almtp.elements"
-    "MACE_model.model"
 )
 
 for required_file in "${required_files[@]}"; do
@@ -67,13 +64,14 @@ echo "Repository root: $REPO_ROOT"
 echo "Scratch output root: $SCRATCH_OUTPUT_ROOT"
 echo "Supercell root: $SUPERCELL_ROOT"
 echo
-echo "Generating complete five-model 2D database."
+echo "Generating MACE-MH, UMA, and CHGNet 2D database."
 
 "$MACE_PYTHON" -u pipeline/setup_mpids.py \
     --materials "$MATERIALS_FILE" \
     --config "$CONFIG_FILE" \
     --tests-out "$ALL_TESTS" \
-    --structures-dir mp_structures
+    --structures-dir mp_structures \
+    --models mace_mh uma chgnet
 
 "$MACE_PYTHON" - \
     "$ALL_TESTS" \
@@ -110,29 +108,22 @@ required_columns = {
 expected_models = {
     "mace_mh",
     "uma",
-    "mtp",
     "chgnet",
-    "mace_model",
 }
 
 expected_backends = {
     "mace_mh": "mace",
     "uma": "uma",
-    "mtp": "mtp",
     "chgnet": "chgnet",
-    "mace_model": "mace",
 }
 
 cpu_models = {
     "mace_mh",
     "uma",
-    "mtp",
     "chgnet",
 }
 
-gpu_models = {
-    "mace_model",
-}
+gpu_models = set()
 
 with all_path.open(
     "r",
@@ -280,8 +271,7 @@ if {
     for row in gpu_rows
 } != gpu_models:
     raise SystemExit(
-        "ERROR: GPU rows do not contain exactly "
-        "mace_model"
+        "ERROR: The 2D database must not contain GPU models"
     )
 
 for output_path, output_rows in (
@@ -339,7 +329,8 @@ mkdir -p "$SUPERCELL_ROOT"
     --output-root "$SUPERCELL_ROOT" \
     --materials "$ALL_TESTS" \
     --config "$CONFIG_FILE" \
-    --structures-dir mp_structures
+    --structures-dir mp_structures \
+    --models mace_mh uma chgnet
 
 "$MACE_PYTHON" - "$SUPERCELL_ROOT" <<'PY'
 import csv
@@ -380,9 +371,9 @@ with metadata_path.open(
 ) as handle:
     metadata = list(csv.DictReader(handle))
 
-if len(tests) != 2400:
+if len(tests) != 1440:
     raise SystemExit(
-        "ERROR: Expected 2,400 supercell test rows, "
+        "ERROR: Expected 1,440 supercell test rows, "
         f"found {len(tests):,}"
     )
 
@@ -400,9 +391,7 @@ models = {
 expected_models = {
     "mace_mh",
     "uma",
-    "mtp",
     "chgnet",
-    "mace_model",
 }
 
 if models != expected_models:

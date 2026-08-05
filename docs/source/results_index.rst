@@ -1,96 +1,248 @@
-Results Index
-=============
+Results
+=======
 
 This page summarizes the measured outcomes and principal findings. Blank
 fields should be completed only after the corresponding summary files have been
 validated.
+
+Index
+-----
+
+2D Materials Project Cases
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. list-table:: 2D Materials Project benchmark cases
+   :header-rows: 1
+   :widths: 18 10 18 22 35 30 24 18
+
+   * - Model
+     - Device
+     - Floating-point precision
+     - Attacks
+     - Epsilon values
+     - Iterative attack steps
+     - Random seeds
+     - Cases per material
+   * - MACE-MH-1
+     - CPU
+     - ``float32``, ``float64``
+     - FGSM, I-FGSM, PGD
+     - 0.001--0.005, 0.01--0.05, 0.1--0.5, 1--5, 10
+     - 1, 2, 3, 4, 5, 10, 20, 30, 40, 50, 100
+     - 42, 43, 44, 45, 46
+     - 850
+   * - UMA-S-1p1
+     - CPU
+     - ``float32``, ``float64``
+     - FGSM, I-FGSM, PGD
+     - 0.001--0.005, 0.01--0.05, 0.1--0.5, 1--5, 10
+     - 1, 2, 3, 4, 5, 10, 20, 30, 40, 50, 100
+     - 42, 43, 44, 45, 46
+     - 850
+   * - CHGNet
+     - CPU
+     - ``float32``, ``float64``
+     - FGSM, I-FGSM, PGD
+     - 0.001--0.005, 0.01--0.05, 0.1--0.5, 1--5, 10
+     - 1, 2, 3, 4, 5, 10, 20, 30, 40, 50, 100
+     - 42, 43, 44, 45, 46
+     - 850
+   * - **Total**
+     - **CPU**
+     - **6 model/precision combinations**
+     - **3 attacks**
+     - **21 epsilon values**
+     - **11 step values**
+     - **5 seeds**
+     - **2,550 per material**
+
+The 2D Materials Project dataset contains 20 materials, giving a total of
+**51,000 benchmark cases**.
+
+LiCoHPF Database Cases
+~~~~~~~~~~~~~~~~~~~~~~
+
+.. list-table:: LiCoHPF database benchmark cases
+   :header-rows: 1
+   :widths: 18 10 18 22 35 30 24 18
+
+   * - Model
+     - Device
+     - Floating-point precision
+     - Attacks
+     - Epsilon values
+     - Iterative attack steps
+     - Random seeds
+     - Cases per material
+   * - MACE-MH-1
+     - CPU
+     - ``float32``, ``float64``
+     - FGSM, I-FGSM, PGD
+     - 0.001--0.005, 0.01--0.05, 0.1--0.5, 1--5, 10
+     - 1, 2, 3, 4, 5, 10, 20, 30, 40, 50, 100
+     - 42, 43, 44, 45, 46
+     - 850
+   * - UMA-S-1p1
+     - CPU
+     - ``float32``, ``float64``
+     - FGSM, I-FGSM, PGD
+     - 0.001--0.005, 0.01--0.05, 0.1--0.5, 1--5, 10
+     - 1, 2, 3, 4, 5, 10, 20, 30, 40, 50, 100
+     - 42, 43, 44, 45, 46
+     - 850
+   * - CHGNet
+     - CPU
+     - ``float32``, ``float64``
+     - FGSM, I-FGSM, PGD
+     - 0.001--0.005, 0.01--0.05, 0.1--0.5, 1--5, 10
+     - 1, 2, 3, 4, 5, 10, 20, 30, 40, 50, 100
+     - 42, 43, 44, 45, 46
+     - 850
+   * - MTP
+     - CPU
+     - ``float64``
+     - FGSM, I-FGSM, PGD
+     - 0.001--0.005, 0.01--0.05, 0.1--0.5, 1--5, 10
+     - 1, 2, 3, 4, 5, 10, 20, 30, 40, 50, 100
+     - 42, 43, 44, 45, 46
+     - 425
+   * - MACE Model
+     - GPU
+     - ``float32``, ``float64``
+     - FGSM, I-FGSM, PGD
+     - 0.001--0.005, 0.01--0.05, 0.1--0.5, 1--5, 10
+     - 1, 2, 3, 4, 5, 10, 20, 30, 40, 50, 100
+     - 42, 43, 44, 45, 46
+     - 850
+   * - **Total**
+     - **CPU and GPU**
+     - **9 model/precision combinations**
+     - **3 attacks**
+     - **21 epsilon values**
+     - **11 step values**
+     - **5 seeds**
+     - **3,825 per material**
+
+The LiCoHPF dataset contains 20 materials, giving a total of
+**76,500 benchmark cases**.
+
+For each model, precision, material, and random seed, the benchmark contains:
+
+* 63 epsilon-sweep cases: 21 epsilon values multiplied by 3 attacks.
+* 22 step-sweep cases: 11 step values multiplied by I-FGSM and PGD.
+* 85 combined epsilon- and step-sweep cases.
+
+
+Figures
+----------------------
+
+The following figures summarize the principal trends discussed in the tables
+below. They provide a visual overview of model behaviour across the evaluated
+metrics.
+
+.. list-table::
+   :widths: 50 50
+   :class: borderless
+
+   * - .. figure:: ../images/delta_force.png
+          :width: 100%
+          :align: center
+
+          **Delta force.** Force response immediately following attack.
+
+     - .. figure:: ../images/displacement.png
+          :width: 100%
+          :align: center
+
+          **Atomic displacement.** Mean displacement versus perturbation strength.
+
+   * - .. figure:: ../images/relaxation_steps.png
+          :width: 100%
+          :align: center
+
+          **Relaxation steps.** Number of optimization steps required for convergence.
+
+     - .. figure:: ../images/rdf_distance.png
+          :width: 100%
+          :align: center
+
+          **RDF distance.** Structural similarity after relaxation.
+
+   * - .. figure:: ../images/jaccard.png
+          :width: 100%
+          :align: center
+
+          **Neighbour Jaccard distance.** Local topology changes.
+
+     - .. figure:: ../images/coordination.png
+          :width: 100%
+          :align: center
+
+          **Coordination change.** Maximum coordination-number variation.
 
 Outcomes
 ---------------------------
 
 .. list-table::
    :header-rows: 1
-   :widths: 22 22 38 28
+   :widths: 22 22 28
 
    * - Outcome
      - Stage
-     - Question answered
      - Result
    * - Delta force
-     - After first relaxation
-     - Median force change before attack
-     - *Fill in*
+     - Post-attack
+     - MACE and MTP break off to 10\ :sup:`6` -- 10\ :sup:`9` after 1 min lattice
    * - Delta force
-     - Immediately after attack
-     - Median force change before recovery
-     - MACE and MTP break off to 10:sup:\6-10:sup:\9 after ~1% min lattice
-   * - Delta force
-     - After second relaxation
-     - Whether force differences persist after recovery
-     - MACE and MTP remain at ~10:sup:\8 after ~1% min lattice, while other models < 1
+     - Post-attack + relaxation
+     - MACE and MTP remain at 10\ :sup:`8`eV/Å after perturbation of ~1% min. lattice, while other models < 1eV/Å
    * - Displacement
-     - After first relaxation
-     - Median atomic movement before attack
-     - *Fill in*
+     - Post-attack
+     - Smooth exponential increase as epsilon sizes increase
    * - Displacement
-     - Immediately after attack
-     - Median atomic movement before recovery
-     - Smooth increase as epsilon sizes increase
-   * - Displacement
-     - After second relaxation
-     - Median atomic movement after recovery
+     - Post-attack + relaxation
      - Models begin to diverge, MACE and MTP experience a greater initial spike at ~1% min lattice
    * - Relaxation steps
-     - After first relaxation
-     - Steps until convergence before attack
+     - Initial relaxation
      - CHGNet takes most steps ~250, MACE and MTP take the least
    * - Relaxation steps
-     - Steps until convergence before recovery
-     - Optimization difficulty and frequency of reaching 600 steps
-     - *Fill in*
-   * - Relaxation steps
-     - Steps until convergence after recovery
-     - Optimization difficulty and frequency of reaching 600 steps
+     - Post-attack + relaxation
      - *Fill in*
    * - Neighbour Jaccard distance
-     - Pre and post-relaxation
-     - Fractional change in neighbour connectivity
+     - Post-attack
+     - *Fill in*
+   * - Neighbour Jaccard distance
+     - Post-attack + relaxation
      - *Fill in*
    * - Maximum coordination change
-     - Pre and post-relaxation
-     - Largest site-level coordination change
+     - Post-attack
+     - *Fill in*
+   * - Maximum coordination change
+     - Post-attack + relaxation
      - *Fill in*
    * - RDF L1 distance
-     - Pre and post-relaxation
-     - Change in the distribution of interatomic distances
+     - Post-attack
+     - *Fill in*
+   * - RDF L1 distance
+     - Post-attack + relaxation
      - *Fill in*
    * - Space-group change
-     - Pre and post-relaxation
-     - Whether crystallographic symmetry classification changes
+     - Post-attack
+     - *Fill in*
+   * - Space-group change
+     - Post-attack + relaxation
      - *Fill in*
    * - Symmetry-operation retention
-     - Pre and post-relaxation
-     - Fraction of original symmetry operations retained
+     - Post-attack
+     - *Fill in*
+   * - Symmetry-operation retention
+     - Post-attack + relaxation
      - *Fill in*
    * - Unique-site change
-     - Pre and post-relaxation
-     - Change in crystallographically unique sites
+     - Post-attack
      - *Fill in*
-   * - float32 & float64 agreement
-     - Matched post-relaxation runs
-     - Sensitivity of outcomes to numerical precision
-     - *Fill in*
-   * - Cross-seed variability
-     - Matched seeds 42-46
-     - Sensitivity to stochastic experimental components
-     - *Fill in*
-   * - Contour comparison
-     - Matched model/material groups
-     - Difference between adversarial and non-adversarial motion
-     - *Fill in*
-   * - Supercell comparison
-     - Post-relaxation
-     - Whether failure modes persist with expanded periodic cells
+   * - Unique-site change
+     - Post-attack + relaxation
      - *Fill in*
 
 Key takeaways
@@ -101,17 +253,17 @@ Key takeaways
    :widths: 22 38 40
 
    * - Finding
-     - Research question
+     - Question
      - Result
    * - Recovery threshold
      - At what normalized epsilon does recovery begin to fail?
-     - *Fill in*
+     - 1% of min lattice parameter
    * - Largest force response
      - Which model/attack/material produces the largest delta force?
-     - *Fill in*
+     - MACE and MTP pretrained by LiCOHPF dataset
    * - Slowest convergence
      - Which model most frequently reaches the 600-step limit?
-     - *Fill in*
+     - CHGNet
    * - Most recoverable model
      - Which model has the smallest post-relaxation changes?
      - *Fill in*
@@ -132,10 +284,13 @@ Key takeaways
      - *Fill in*
    * - Seed dependence
      - Are conclusions stable across seeds 42 through 46?
-     - *Fill in*
-   * - Contour baseline
+     - No abnormalities which suggest results are stable and reliable.
+   * - Contour exploration baseline
      - Are adversarial directions more damaging than contour motion?
-     - *Fill in*
+     - Slight increase but many magnitudes less than deliberate attacks,
+       suggesting that atoms merely moving away from equilibrium do not lead
+       to failure modes compared to adversarial perturbations that maximize
+       model loss.
    * - Supercell dependence
      - Do conclusions persist for expanded periodic systems?
      - *Fill in*

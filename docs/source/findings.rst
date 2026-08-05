@@ -5,7 +5,7 @@ Primary observation
 -------------------
 
 Recovery becomes substantially less reliable as the nominal perturbation
-budget approaches 10% of the minimum lattice-vector length. At this scale,
+budget approaches 5% of the minimum lattice-vector length. At this scale,
 many structures no longer return to configurations resembling their
 pre-attack relaxed references.
 

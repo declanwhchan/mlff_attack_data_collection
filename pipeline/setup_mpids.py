@@ -912,6 +912,8 @@ def write_tests(rows, output_path):
 
 
 def main():
+    global MODEL_BACKENDS, EXPECTED_MODELS, CPU_MODELS, GPU_MODELS
+
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
@@ -944,8 +946,26 @@ def main():
         "--download-only",
         action="store_true",
     )
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        choices=list(MODEL_BACKENDS),
+        default=None,
+        help="Generate only this model set. Defaults to the legacy five-model set.",
+    )
 
     args = parser.parse_args()
+
+    if args.models is not None:
+        selected_models = set(args.models)
+        MODEL_BACKENDS = {
+            model_id: backend
+            for model_id, backend in MODEL_BACKENDS.items()
+            if model_id in selected_models
+        }
+        EXPECTED_MODELS = selected_models
+        CPU_MODELS = CPU_MODELS & selected_models
+        GPU_MODELS = GPU_MODELS & selected_models
 
     materials_path = (
         BASE_DIR / args.materials

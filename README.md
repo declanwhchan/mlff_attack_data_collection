@@ -47,7 +47,7 @@ git clone https://github.com/declanwhchan/mlff_attack_data_collection.git
 
 ```bash
 cd ~/project/mlff_attack_data_collection
-bash run_<dataset>/dependencies.sh
+bash mlff_venvs_for_hpc.sh
 ```
 
 ## 3. Create `.env`
