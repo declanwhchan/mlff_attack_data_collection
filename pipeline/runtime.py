@@ -1316,6 +1316,11 @@ def make_space_group_figures(data, output_dir):
             )
 
 def plot_command(args):
+    global MODEL_ORDER
+
+    if args.models is not None:
+        MODEL_ORDER = list(args.models)
+
     apply_style()
 
     output_dir = Path(args.output_dir)
@@ -1497,6 +1502,13 @@ def main():
         "--epsilon",
         default=0.1,
         type=float,
+    )
+    plot_parser.add_argument(
+        "--models",
+        nargs="+",
+        choices=["mace_mh", "uma", "mtp", "chgnet", "mace_model"],
+        default=None,
+        help="Plot only this model set. Defaults to all LiCoHPF models.",
     )
 
     args = parser.parse_args()

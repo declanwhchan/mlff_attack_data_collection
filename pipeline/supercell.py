@@ -1036,6 +1036,8 @@ def combine(args):
 
 
 def main():
+    global MODEL_ORDER
+
     parser = argparse.ArgumentParser()
 
     commands = parser.add_subparsers(
@@ -1069,6 +1071,12 @@ def main():
         "--force",
         action="store_true",
     )
+    generate_parser.add_argument(
+        "--models",
+        nargs="+",
+        choices=list(MODEL_BACKENDS),
+        default=None,
+    )
 
     task_parser = commands.add_parser(
         "task-info"
@@ -1081,6 +1089,12 @@ def main():
         "--task-id",
         required=True,
     )
+    task_parser.add_argument(
+        "--models",
+        nargs="+",
+        choices=list(MODEL_BACKENDS),
+        default=None,
+    )
 
     combine_parser = commands.add_parser(
         "combine"
@@ -1089,8 +1103,17 @@ def main():
         "--output-root",
         required=True,
     )
+    combine_parser.add_argument(
+        "--models",
+        nargs="+",
+        choices=list(MODEL_BACKENDS),
+        default=None,
+    )
 
     args = parser.parse_args()
+
+    if args.models is not None:
+        MODEL_ORDER = list(args.models)
 
     if args.command == "generate":
         generate(args)

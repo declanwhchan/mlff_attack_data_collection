@@ -1936,6 +1936,8 @@ def plot_global(records, output_dir):
 
 
 def main():
+    global MODEL_ORDER, FLOAT32_MODEL_ORDER
+
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
@@ -1997,8 +1999,19 @@ def main():
         ),
         type=Path,
     )
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        choices=["mace_mh", "uma", "mtp", "chgnet", "mace_model"],
+        default=None,
+        help="Plot only this model set. Defaults to the LiCoHPF model set.",
+    )
 
     args = parser.parse_args()
+
+    if args.models is not None:
+        MODEL_ORDER = list(args.models)
+        FLOAT32_MODEL_ORDER = list(args.models)
 
     apply_style()
 
@@ -2050,7 +2063,9 @@ def main():
             f"{sorted(unexpected_models)}"
         )
 
-    if "mtp" in present_models:
+    if args.models is not None:
+        expected_models = set(args.models)
+    elif "mtp" in present_models:
         expected_models = set(MODEL_ORDER)
     else:
         expected_models = set(FLOAT32_MODEL_ORDER)

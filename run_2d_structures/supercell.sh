@@ -3,7 +3,7 @@
 #SBATCH --time=2-00:00:00
 #SBATCH --mem=24G
 #SBATCH --cpus-per-task=8
-#SBATCH --array=1-640%15
+#SBATCH --array=1-480%15
 #SBATCH --output=supercell-cpu-%A_%a.out
 
 set -euo pipefail
@@ -61,22 +61,19 @@ fi
 CPU_TASK_ID="$SLURM_ARRAY_TASK_ID"
 
 if [ "$CPU_TASK_ID" -lt 1 ] || \
-   [ "$CPU_TASK_ID" -gt 640 ]; then
-    echo "ERROR: CPU supercell task must be 1..640"
+   [ "$CPU_TASK_ID" -gt 480 ]; then
+    echo "ERROR: CPU supercell task must be 1..480"
     exit 1
 fi
 
-TASK_ZERO=$((CPU_TASK_ID - 1))
-CELL_INDEX=$((TASK_ZERO / 4))
-CPU_MODEL_INDEX=$((TASK_ZERO % 4))
-
-FULL_TASK_ID=$((CELL_INDEX * 5 + CPU_MODEL_INDEX + 1))
+FULL_TASK_ID="$CPU_TASK_ID"
 
 TASK_INFO=$(
     "$MACE_PYTHON" -u pipeline/supercell.py \
         task-info \
         --output-root "$SUPERCELL_ROOT" \
-        --task-id "$FULL_TASK_ID"
+        --task-id "$FULL_TASK_ID" \
+        --models mace_mh uma chgnet
 )
 
 echo "$TASK_INFO"
@@ -108,11 +105,6 @@ case "$MODEL_ID" in
     uma)
         EXPECTED_BACKEND="uma"
         PYTHON="$HOME/project/.venv-uma/bin/python"
-        ;;
-    mtp)
-        EXPECTED_BACKEND="mtp"
-        PYTHON="$HOME/project/.venv-mtp/bin/python"
-        export PATH="$HOME/project/.venv-mtp/bin:$PATH"
         ;;
     chgnet)
         EXPECTED_BACKEND="chgnet"
@@ -151,13 +143,6 @@ if [ "$MODEL_ID" = "uma" ] && \
     echo "ERROR: UMA requires HF_TOKEN in .env or"
     echo "HUGGINGFACE_HUB_TOKEN in the environment."
     exit 1
-fi
-
-if [ "$MODEL_ID" = "mtp" ]; then
-    if ! command -v mlp >/dev/null 2>&1; then
-        echo "ERROR: mlp is unavailable in .venv-mtp"
-        exit 1
-    fi
 fi
 
 export MLFF_OUTPUT_ROOT="$SUPERCELL_ROOT"

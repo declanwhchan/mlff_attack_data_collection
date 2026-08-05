@@ -60,6 +60,9 @@ MODEL_LABELS = {
     "mtp": "MTP",
     "chgnet": "CHGNet",
     "mace_model": "MACE Model",
+    "dft_mace_mh": "DFT (MACE-MH attack)",
+    "dft_uma": "DFT (UMA attack)",
+    "dft_chgnet": "DFT (CHGNet attack)",
 }
 
 COLORS = {
@@ -68,6 +71,9 @@ COLORS = {
     "mtp": "#CC79A7",
     "chgnet": "#009E73",
     "mace_model": "#E69F00",
+    "dft_mace_mh": "#56B4E9",
+    "dft_uma": "#F0A35E",
+    "dft_chgnet": "#66C2A5",
 }
 
 
@@ -320,35 +326,66 @@ def stage_column(stage, metric):
     return f"{stage}__{metric}"
 
 
-def calculate_stage_metrics(row):
-    run_dir = Path(str(row["run_dir"]))
+def resolve_record_artifact(row, column, default_name):
+    """Resolve an artifact recorded by any calculator backend."""
+    run_dir = Path(str(row.get("run_dir", "")))
+    candidates = []
 
-    before_force_path = (
-        run_dir / "before_forces.csv"
-    )
-    perturbed_force_path = (
-        run_dir / "perturbed_forces.csv"
-    )
-    after_force_path = (
-        run_dir / "after_forces.csv"
-    )
+    value = row.get(column)
+    if value is not None and not pd.isna(value) and str(value).strip():
+        recorded = Path(str(value).strip())
+        candidates.append(recorded)
+        if not recorded.is_absolute():
+            candidates.append(run_dir / recorded)
 
-    trajectory_value = row.get(
-        "before_relax_traj"
-    )
-
+    actual_output = row.get("actual_output_dir")
     if (
-        trajectory_value is None
-        or pd.isna(trajectory_value)
-        or not str(trajectory_value).strip()
+        actual_output is not None
+        and not pd.isna(actual_output)
+        and str(actual_output).strip()
     ):
-        trajectory_path = (
-            run_dir / "before_attack_relaxation.traj"
-        )
-    else:
-        trajectory_path = Path(
-            str(trajectory_value)
-        )
+        output_dir = Path(str(actual_output).strip())
+        candidates.append(output_dir / default_name)
+        if not output_dir.is_absolute():
+            candidates.append(run_dir / output_dir / default_name)
+
+    candidates.append(run_dir / default_name)
+
+    seen = set()
+    for candidate in candidates:
+        candidate_key = str(candidate)
+        if candidate_key in seen:
+            continue
+        seen.add(candidate_key)
+        if candidate.is_file():
+            return candidate
+
+    # Return the conventional location so the existing readers preserve
+    # their normal missing-file behavior.
+    return run_dir / default_name
+
+
+def calculate_stage_metrics(row):
+    before_force_path = resolve_record_artifact(
+        row,
+        "before_force_csv",
+        "before_forces.csv",
+    )
+    perturbed_force_path = resolve_record_artifact(
+        row,
+        "perturbed_force_csv",
+        "perturbed_forces.csv",
+    )
+    after_force_path = resolve_record_artifact(
+        row,
+        "after_force_csv",
+        "after_forces.csv",
+    )
+    trajectory_path = resolve_record_artifact(
+        row,
+        "before_relax_traj",
+        "before_attack_relaxation.traj",
+    )
 
     (
         baseline_displacement,
@@ -2882,6 +2919,8 @@ def harmonize_random_seed_axes(fig):
 
 
 def main():
+    global CALCULATORS
+
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
@@ -2893,6 +2932,13 @@ def main():
     parser.add_argument(
         "--output-dir",
         type=Path,
+    )
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        choices=["mace_mh", "uma", "mtp", "chgnet", "mace_model"],
+        default=None,
+        help="Plot only this base model set. Defaults to all LiCoHPF models.",
     )
 
     args = parser.parse_args()
@@ -2911,11 +2957,30 @@ def main():
     )
 
     records, missing = load_trials(project_root)
+
+    if args.models is not None:
+        selected_models = list(args.models)
+        present = set(records.get("calculator", pd.Series(dtype=str)).dropna())
+        CALCULATORS = [
+            item
+            for model_id in selected_models
+            for item in (
+                [model_id, f"dft_{model_id}"]
+                if f"dft_{model_id}" in present
+                else [model_id]
+            )
+        ]
+
     records = prepare_records(records)
 
     contour_records, missing_contour = load_contour_trials(
         project_root
     )
+
+    if args.models is not None and not contour_records.empty:
+        contour_records = contour_records[
+            contour_records["calculator"].isin(args.models)
+        ].copy()
 
     if not contour_records.empty:
         records = pd.concat(

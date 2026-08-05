@@ -3,7 +3,7 @@
 #SBATCH --time=2-00:00:00
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=8
-#SBATCH --array=1-700%15
+#SBATCH --array=1-600%15
 #SBATCH --output=contour-cpu-%A_%a.out
 
 set -euo pipefail
@@ -75,8 +75,7 @@ trials = [
 model_order = {
     "mace_mh": 0,
     "uma": 1,
-    "mtp": 2,
-    "chgnet": 3,
+    "chgnet": 2,
 }
 
 dtype_order = {
@@ -121,7 +120,6 @@ present_models = {
 expected_models = {
     "mace_mh",
     "uma",
-    "mtp",
     "chgnet",
 }
 
@@ -131,27 +129,18 @@ if present_models != expected_models:
         f"wrong models: {sorted(present_models)}"
     )
 
-if any(
-    model_id == "mtp" and dtype_str != "float64"
-    for model_id, dtype_str, _ in jobs
-):
-    raise SystemExit(
-        "ERROR: CPU contour database contains "
-        "float32 MTP jobs"
-    )
-
 jobs_per_trial = len(jobs)
 total_tasks = len(trials) * jobs_per_trial
 
-if jobs_per_trial != 140:
+if jobs_per_trial != 120:
     raise SystemExit(
-        "ERROR: Expected 140 CPU contour jobs per "
+        "ERROR: Expected 120 CPU contour jobs per "
         f"trial but found {jobs_per_trial}"
     )
 
-if total_tasks != 700:
+if total_tasks != 600:
     raise SystemExit(
-        "ERROR: Expected 700 total CPU contour tasks "
+        "ERROR: Expected 600 total CPU contour tasks "
         f"but calculated {total_tasks}"
     )
 
@@ -209,11 +198,6 @@ case "$MODEL_ID" in
         CALCULATOR_BACKEND="uma"
         PYTHON="$HOME/project/.venv-uma/bin/python"
         ;;
-    mtp)
-        CALCULATOR_BACKEND="mtp"
-        PYTHON="$HOME/project/.venv-mtp/bin/python"
-        export PATH="$HOME/project/.venv-mtp/bin:$PATH"
-        ;;
     chgnet)
         CALCULATOR_BACKEND="chgnet"
         PYTHON="$HOME/project/.venv-chgnet/bin/python"
@@ -236,18 +220,6 @@ if [ "$MODEL_ID" = "uma" ] && \
     echo "ERROR: UMA requires HF_TOKEN in .env or"
     echo "HUGGINGFACE_HUB_TOKEN in the environment."
     exit 1
-fi
-
-if [ "$MODEL_ID" = "mtp" ]; then
-    if [ "$MLFF_DTYPE" != "float64" ]; then
-        echo "ERROR: MTP can only run with float64"
-        exit 1
-    fi
-
-    if ! command -v mlp >/dev/null 2>&1; then
-        echo "ERROR: mlp is unavailable in .venv-mtp"
-        exit 1
-    fi
 fi
 
 SCRATCH_OUTPUT_ROOT="${SCRATCH_OUTPUT_ROOT:-/scratch/$USER/mlff_attack_data_collection/2d_structures}"

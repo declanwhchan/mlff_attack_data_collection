@@ -29,6 +29,9 @@ MODEL_LABELS = {
     "mtp": "MTP",
     "chgnet": "CHGNet",
     "mace_model": "MACE Model",
+    "dft_mace_mh": "DFT (MACE-MH attack)",
+    "dft_uma": "DFT (UMA attack)",
+    "dft_chgnet": "DFT (CHGNet attack)",
 }
 
 MODEL_COLORS = {
@@ -37,6 +40,9 @@ MODEL_COLORS = {
     "mtp": "#CC79A7",
     "chgnet": "#009E73",
     "mace_model": "#E69F00",
+    "dft_mace_mh": "#56B4E9",
+    "dft_uma": "#F0A35E",
+    "dft_chgnet": "#66C2A5",
 }
 
 
@@ -317,16 +323,45 @@ def save_metric_plot(data, metric, output_dir):
 
 
 def main():
+    global FLOAT32_MODEL_ORDER, FLOAT64_MODEL_ORDER
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--float32-dir", required=True, type=Path)
     parser.add_argument("--float64-dir", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        choices=["mace_mh", "uma", "mtp", "chgnet", "mace_model"],
+        default=None,
+        help="Compare only this model set. Defaults to the LiCoHPF model set.",
+    )
     args = parser.parse_args()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     float32 = read_dataset(args.float32_dir)
     float64 = read_dataset(args.float64_dir)
+
+    if args.models is not None:
+        selected = list(args.models)
+        dft_models = [
+            f"dft_{model_id}"
+            for model_id in selected
+            if f"dft_{model_id}" in set(float32["calculator"].dropna())
+            and f"dft_{model_id}" in set(float64["calculator"].dropna())
+        ]
+        selected_with_dft = [
+            item
+            for model_id in selected
+            for item in (
+                [model_id, f"dft_{model_id}"]
+                if f"dft_{model_id}" in dft_models
+                else [model_id]
+            )
+        ]
+        FLOAT32_MODEL_ORDER = selected_with_dft
+        FLOAT64_MODEL_ORDER = selected_with_dft
 
     validate_model_sets(float32, float64)
 
