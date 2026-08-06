@@ -133,14 +133,14 @@ For each model, precision, material, and random seed, the benchmark contains:
 * 85 combined epsilon- and step-sweep cases.
 
 
-Figures
-----------------------
+.. Figures
+.. ----------------------
 
-The following figures summarize the principal trends discussed in the tables
-below. They provide a visual overview of model behaviour across the evaluated
-metrics.
+.. The following figures summarize the principal trends discussed in the tables
+.. below. They provide a visual overview of model behaviour across the evaluated
+.. metrics.
 
-.. list-table::
+.. list-table
 ..    :widths: 50 50
 ..    :class: borderless
 
