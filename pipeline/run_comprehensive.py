@@ -7073,7 +7073,6 @@ def make_outlier_reports(records, output_dir):
             metric_name=metric["name"],
             stage=metric["stage"],
             value_getter=metric["getter"],
-            highlight_epsilon_percent=highlight_epsilon_percent,
         )
 
         filename = (
