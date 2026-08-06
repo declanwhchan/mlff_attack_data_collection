@@ -60,9 +60,9 @@ MODEL_LABELS = {
     "mtp": "MTP",
     "chgnet": "CHGNet",
     "mace_model": "MACE Model",
-    "dft_mace_mh": "DFT (MACE-MH attack)",
-    "dft_uma": "DFT (UMA attack)",
-    "dft_chgnet": "DFT (CHGNet attack)",
+    "dft_mace_mh": "DFT (MACE-MH)",
+    "dft_uma": "DFT (UMA)",
+    "dft_chgnet": "DFT (CHGNet)",
 }
 
 COLORS = {

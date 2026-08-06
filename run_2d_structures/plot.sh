@@ -64,6 +64,7 @@ for required_file in \
     "$GENERATED_TESTS" \
     "$DFT_STRUCTURES_ROOT/manifests/preliminary_manifest.csv" \
     "$REPO_ROOT/pipeline/run_comprehensive.py" \
+    "$REPO_ROOT/pipeline/load_dft.py" \
     "$REPO_ROOT/pipeline/contour_comprehensive.py" \
     "$REPO_ROOT/pipeline/float_comprehensive.py" \
     "$REPO_ROOT/pipeline/runtime.py" \
@@ -478,6 +479,7 @@ run_dtype_plots() {
         --structures-dir mp_structures \
         --models mace_mh uma chgnet \
         --scratch-runs-dir "$SCRATCH_TRIAL/outputs_$dtype_str" \
+        --mlff-ranking-highlight-epsilon-percent 10 \
         --dft-structures-dir "$DFT_STRUCTURES_ROOT"
 
     if [ "$RUN_CONTOUR_PLOTS" -eq 1 ]; then

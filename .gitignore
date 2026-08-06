@@ -6,22 +6,22 @@
 __pycache__/
 .pytest*
 
-# Calculations
+# Archive
+*.tar*
+*.zip
+
+# Inputs and outputs
 *.cif
 *.xyz
 *.elements
 *.traj
-*DFT*
+*.png
+dft*
 
 # MLFFs
 *.model
 *.pt
 *.almtp
 
-# Outputs
-outputs*/
-*.png
-*.tar*
-
-# docs
-docs/build
+# Docs
+build
