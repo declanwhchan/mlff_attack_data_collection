@@ -141,44 +141,44 @@ below. They provide a visual overview of model behaviour across the evaluated
 metrics.
 
 .. list-table::
-   :widths: 50 50
-   :class: borderless
+..    :widths: 50 50
+..    :class: borderless
 
-   * - .. figure:: ../images/delta_force.png
-          :width: 100%
-          :align: center
+..    * - .. figure:: ../images/delta_force.png
+..           :width: 100%
+..           :align: center
 
-          **Delta force.** Force response immediately following attack.
+..           **Delta force.** Force response immediately following attack.
 
-     - .. figure:: ../images/displacement.png
-          :width: 100%
-          :align: center
+..      - .. figure:: ../images/displacement.png
+..           :width: 100%
+..           :align: center
 
-          **Atomic displacement.** Mean displacement versus perturbation strength.
+..           **Atomic displacement.** Mean displacement versus perturbation strength.
 
-   * - .. figure:: ../images/relaxation_steps.png
-          :width: 100%
-          :align: center
+..    * - .. figure:: ../images/relaxation_steps.png
+..           :width: 100%
+..           :align: center
 
-          **Relaxation steps.** Number of optimization steps required for convergence.
+..           **Relaxation steps.** Number of optimization steps required for convergence.
 
-     - .. figure:: ../images/rdf_distance.png
-          :width: 100%
-          :align: center
+..      - .. figure:: ../images/rdf_distance.png
+..           :width: 100%
+..           :align: center
 
-          **RDF distance.** Structural similarity after relaxation.
+..           **RDF distance.** Structural similarity after relaxation.
 
-   * - .. figure:: ../images/jaccard.png
-          :width: 100%
-          :align: center
+..    * - .. figure:: ../images/jaccard.png
+..           :width: 100%
+..           :align: center
 
-          **Neighbour Jaccard distance.** Local topology changes.
+..           **Neighbour Jaccard distance.** Local topology changes.
 
-     - .. figure:: ../images/coordination.png
-          :width: 100%
-          :align: center
+..      - .. figure:: ../images/coordination.png
+..           :width: 100%
+..           :align: center
 
-          **Coordination change.** Maximum coordination-number variation.
+..           **Coordination change.** Maximum coordination-number variation.
 
 Outcomes
 ---------------------------
@@ -195,7 +195,7 @@ Outcomes
      - MACE and MTP break off to 10\ :sup:`6` -- 10\ :sup:`9` after 1 min lattice
    * - Delta force
      - Post-attack + relaxation
-     - MACE and MTP remain at 10\ :sup:`8`eV/Å after perturbation of ~1% min. lattice, while other models < 1eV/Å
+     - MACE and MTP remain at 10\ :sup:`8`eV/Å after perturbation of ~1% min. lattice, while other models ``<`` 1eV/Å
    * - Displacement
      - Post-attack
      - Smooth exponential increase as epsilon sizes increase
