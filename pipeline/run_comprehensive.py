@@ -11,7 +11,7 @@ from matplotlib.ticker import MaxNLocator, ScalarFormatter, FuncFormatter, Fixed
 import numpy as np
 import pandas as pd
 from ase.io import read as read_structure
-from load_dft import load_dft_records
+from load_dft import dft_coverage_table, load_dft_records
 from run_tests import (
     coordination_by_atom,
     edge_jaccard_distance,
@@ -1084,6 +1084,31 @@ def force_delta_values(run_dir, before_name, after_name):
     before_forces = merged[["fx_before", "fy_before", "fz_before"]].to_numpy()
     after_forces = merged[["fx_after", "fy_after", "fz_after"]].to_numpy()
     return np.linalg.norm(after_forces - before_forces, axis=1), None
+
+
+def ranking_force_delta_values(row, before_name, after_name):
+    """Return force deltas for rankings, including persisted DFT values."""
+    values, error = force_delta_values(
+        row["run_dir"],
+        before_name,
+        after_name,
+    )
+
+    if values is not None:
+        finite_values = np.asarray(values, dtype=float)
+        finite_values = finite_values[np.isfinite(finite_values)]
+        if finite_values.size:
+            return finite_values, None
+
+    calculator = str(row.get("calculator", "")).lower()
+    if calculator.startswith("dft_") and after_name == "after_forces.csv":
+        persisted_value = as_float(
+            row.get("dft_median_delta_force_after_relaxation")
+        )
+        if np.isfinite(persisted_value):
+            return np.asarray([persisted_value], dtype=float), None
+
+    return values, error
 
 
 def displacement_values(run_dir, before_name, after_name):
@@ -5083,9 +5108,9 @@ def save_mlff_ranking_violin_plot(
         "uma": "UMA",
         "chgnet": "CHGNet",
         "mtp": "MTP",
-        "dft_mace_mh": "DFT\n(MACE-MH attack)",
-        "dft_uma": "DFT\n(UMA attack)",
-        "dft_chgnet": "DFT\n(CHGNet attack)",
+        "dft_mace_mh": "DFT\n(MACE-MH)",
+        "dft_uma": "DFT\n(UMA)",
+        "dft_chgnet": "DFT\n(CHGNet)",
     }
 
     model_labels = [
@@ -5383,7 +5408,7 @@ def save_mlff_ranking_violin_plot(
                 # Keep the annotation outside the data region.
                 ax.legend(
                     loc="lower right",
-                    bbox_to_anchor=(1.0, 1.005),
+                    bbox_to_anchor=(1.0, 0.98),
                     frameon=False,
                     fontsize=10.5,
                     handlelength=0.8,
@@ -5868,8 +5893,8 @@ def make_mlff_rankings(
                 r"Median $\Delta$ force "
                 r"(eV/$\AA$)"
             ),
-            "getter": lambda row: force_delta_values(
-                row["run_dir"],
+            "getter": lambda row: ranking_force_delta_values(
+                row,
                 "before_forces.csv",
                 "after_forces.csv",
             ),
@@ -7676,6 +7701,21 @@ def main():
 
         all_records.extend(dft_records)
         all_missing.extend(dft_missing)
+
+        dft_coverage = dft_coverage_table(dft_records)
+        dft_coverage.to_csv(
+            args.output_dir / "dft_plot_coverage.csv",
+            index=False,
+        )
+        print("DFT plot coverage by model and attack:")
+        print(
+            dft_coverage.groupby(
+                ["calculator", "attack_label"],
+                dropna=False,
+            )[["records", "records_with_force_metrics"]]
+            .sum()
+            .to_string()
+        )
 
         dft_models = [
             f"dft_{model_id}"

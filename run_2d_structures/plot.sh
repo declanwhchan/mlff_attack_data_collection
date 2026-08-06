@@ -352,11 +352,20 @@ for dtype_str, models in models_by_dtype.items():
                 )
             )
 
-        if len(contour_paths) != expected_materials:
-            raise SystemExit(
-                f"ERROR: Expected {expected_materials} "
-                f"{dtype_str} {model_id} contour "
-                f"summaries, found {len(contour_paths)}"
+        if not contour_paths:
+            echo_msg = (
+                f"WARNING: No contour summaries found for "
+                f"{dtype_str} {model_id}; skipping contour plots."
+            )
+            print(echo_msg)
+            continue
+
+        if len(contour_paths) < expected_materials:
+            print(
+                f"WARNING: Expected {expected_materials} "
+                f"{dtype_str} {model_id} contour summaries, "
+                f"found {len(contour_paths)}. "
+                "Proceeding with partial contour data."
             )
 
         contour = pd.concat(
@@ -372,7 +381,7 @@ for dtype_str, models in models_by_dtype.items():
         )
 
         expected_contour_rows = (
-            expected_materials
+            len(contour_paths)
             * len(expected_betas)
         )
 

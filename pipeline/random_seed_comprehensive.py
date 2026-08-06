@@ -13,6 +13,8 @@ from matplotlib.lines import Line2D
 import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
+
+from load_dft import dft_coverage_table
 from ase.io import read as ase_read
 
 
@@ -2972,6 +2974,22 @@ def main():
         ]
 
     records = prepare_records(records)
+
+    dft_coverage = dft_coverage_table(records)
+    dft_coverage.to_csv(
+        output_dir / "random_seed_dft_coverage.csv",
+        index=False,
+    )
+    if not dft_coverage.empty:
+        print("Random-seed DFT coverage by model and attack:")
+        print(
+            dft_coverage.groupby(
+                ["calculator", "attack_label"],
+                dropna=False,
+            )["records"]
+            .sum()
+            .to_string()
+        )
 
     contour_records, missing_contour = load_contour_trials(
         project_root

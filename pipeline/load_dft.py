@@ -32,6 +32,58 @@ DFT_SOURCE_MODELS = {
 }
 
 
+def dft_coverage_table(records):
+    """Summarize the DFT rows that are actually available to plotting."""
+    data = pd.DataFrame(records)
+    required = {"calculator", "attack_label", "epsilon", "material_slug"}
+    if data.empty or not required.issubset(data.columns):
+        return pd.DataFrame(columns=[
+            "calculator",
+            "attack_label",
+            "epsilon",
+            "records",
+            "materials",
+            "records_with_force_metrics",
+        ])
+
+    data = data[
+        data["calculator"].fillna("").astype(str).str.startswith("dft_")
+    ].copy()
+    if data.empty:
+        return pd.DataFrame(columns=[
+            "calculator",
+            "attack_label",
+            "epsilon",
+            "records",
+            "materials",
+            "records_with_force_metrics",
+        ])
+
+    data["epsilon"] = pd.to_numeric(data["epsilon"], errors="coerce")
+    force_blocks = pd.to_numeric(
+        data.get(
+            "dft_outcar_force_blocks",
+            pd.Series(0, index=data.index),
+        ),
+        errors="coerce",
+    ).fillna(0)
+    data["_has_force_metrics"] = force_blocks.gt(0)
+
+    return (
+        data.groupby(
+            ["calculator", "attack_label", "epsilon"],
+            dropna=False,
+            sort=True,
+        )
+        .agg(
+            records=("calculator", "size"),
+            materials=("material_slug", "nunique"),
+            records_with_force_metrics=("_has_force_metrics", "sum"),
+        )
+        .reset_index()
+    )
+
+
 def _clean(value):
     if value is None:
         return None
@@ -56,6 +108,16 @@ def _read_csv(path):
         return pd.read_csv(path)
     except Exception:
         return None
+
+
+def _manifest_path(root, value):
+    """Resolve manifest paths written on either Windows or Linux."""
+    value = _clean(value)
+    if value is None:
+        return None
+    normalized = str(value).replace("\\", "/")
+    path = Path(normalized)
+    return path if path.is_absolute() else Path(root) / path
 
 
 def read_dft_structure(path, index=-1):
@@ -213,12 +275,96 @@ def _outcar_path(root, row, relaxed_path, structure_name):
     candidates = []
     jobdir = _clean(row.get("jobdir"))
     if jobdir is not None:
-        candidates.append(root / str(jobdir) / "OUTCAR")
+        candidates.append(_manifest_path(root, jobdir) / "OUTCAR")
     candidates.extend([
         relaxed_path.parent / "OUTCAR",
         root / "vasp_relax_fixedcell" / structure_name / "OUTCAR",
     ])
     return next((path for path in candidates if path.is_file()), None)
+
+
+def _source_parent(source, parsed):
+    """Find the MLFF run that supplies the common relaxed reference.
+
+    Exact attack/epsilon matches are preferred. The initial relaxation is
+    independent of the later attack, so a same-material, same-model sweep
+    row is a valid baseline fallback when an extension point has no exact
+    row in the comprehensive MLFF summary.
+    """
+    candidates = source[
+        source["calculator"].astype(str).eq(parsed["source_model"])
+    ].copy()
+    candidates = candidates[
+        candidates["material_slug"].map(_normal_material)
+        == _normal_material(parsed["material_slug"])
+    ].copy()
+    if candidates.empty:
+        return None, None
+
+    run_ids = candidates.get(
+        "run_id",
+        pd.Series("", index=candidates.index),
+    ).fillna("").astype(str)
+    non_step = ~run_ids.str.contains("_steps", regex=False)
+    if non_step.any():
+        candidates = candidates.loc[non_step].copy()
+
+    attacks = candidates.get(
+        "attack_label",
+        pd.Series("", index=candidates.index),
+    ).fillna("").astype(str)
+    epsilons = pd.to_numeric(candidates.get("epsilon"), errors="coerce")
+    attack_match = attacks.eq(parsed["attack_label"])
+    epsilon_match = np.isclose(
+        epsilons,
+        parsed["epsilon"],
+        rtol=1e-8,
+        atol=1e-12,
+        equal_nan=False,
+    )
+
+    if parsed["n_steps"] is None:
+        step_match = np.ones(len(candidates), dtype=bool)
+    else:
+        candidate_steps = pd.to_numeric(
+            candidates.get("n_steps"),
+            errors="coerce",
+        )
+        step_match = candidate_steps.eq(parsed["n_steps"]).to_numpy()
+
+    exact = candidates.loc[attack_match & epsilon_match & step_match]
+    if not exact.empty:
+        return exact.iloc[0].to_dict(), "exact"
+
+    candidates["_attack_priority"] = (~attack_match).astype(int)
+    positive = epsilons.where(epsilons > 0)
+    if parsed["epsilon"] > 0:
+        distance = np.abs(np.log10(positive) - math.log10(parsed["epsilon"]))
+    else:
+        distance = np.abs(epsilons - parsed["epsilon"])
+    candidates["_epsilon_distance"] = distance.fillna(np.inf)
+    candidates = candidates.sort_values(
+        ["_attack_priority", "_epsilon_distance"],
+        kind="stable",
+    )
+    return candidates.iloc[0].to_dict(), "baseline_fallback"
+
+
+def _epsilon_percent(parent, epsilon):
+    """Convert a manifest epsilon to percent of its lattice reference."""
+    reference = _number(parent.get("epsilon_reference_length_a"))
+    if reference is not None and reference > 0:
+        return 100.0 * float(epsilon) / reference
+
+    parent_epsilon = _number(parent.get("epsilon"))
+    parent_percent = _number(parent.get("epsilon_percent_displacement"))
+    if (
+        parent_epsilon is not None
+        and parent_epsilon != 0
+        and parent_percent is not None
+    ):
+        return float(epsilon) * parent_percent / parent_epsilon
+    return np.nan
 
 
 def load_dft_records(
@@ -256,35 +402,19 @@ def load_dft_records(
             missing.append(f"Unrecognized DFT structure name: {structure_name}")
             continue
 
-        candidates = source[
-            (source["calculator"] == parsed["source_model"])
-            & (source["attack_label"] == parsed["attack_label"])
-        ].copy()
-        candidates = candidates[
-            candidates["material_slug"].map(_normal_material)
-            == _normal_material(parsed["material_slug"])
-        ]
-        candidate_epsilon = pd.to_numeric(candidates.get("epsilon"), errors="coerce")
-        candidates = candidates[
-            np.isclose(candidate_epsilon, parsed["epsilon"], rtol=1e-8, atol=1e-12)
-        ]
-        if parsed["n_steps"] is None:
-            candidates = candidates[
-                ~candidates["run_id"].astype(str).str.contains("_steps", regex=False)
-            ]
-        else:
-            candidate_steps = pd.to_numeric(candidates.get("n_steps"), errors="coerce")
-            candidates = candidates[candidate_steps == parsed["n_steps"]]
-        if candidates.empty:
-            missing.append(f"No MLFF source record matched: {structure_name}")
+        parent, source_match = _source_parent(source, parsed)
+        if parent is None:
+            missing.append(
+                "No same-model/material MLFF baseline matched: "
+                f"{structure_name}"
+            )
             continue
 
-        parent = candidates.iloc[0].to_dict()
         relaxed_value = _clean(manifest_row.get("relaxed_structure_file"))
         if relaxed_value is None:
             missing.append(f"No relaxed DFT structure path: {structure_name}")
             continue
-        relaxed_path = dft_root / str(relaxed_value)
+        relaxed_path = _manifest_path(dft_root, relaxed_value)
         perturbed_path = relaxed_path.parent / "initial.cif"
         try:
             baseline = read_structure(baseline_path_resolver(parent), index=-1)
@@ -311,6 +441,19 @@ def load_dft_records(
             except Exception as error:
                 missing.append(f"Could not read DFT forces for {structure_name}: {error}")
 
+        dft_median_delta_force_after_relaxation = np.nan
+        if first_forces is not None and final_forces is not None:
+            force_delta = np.linalg.norm(
+                np.asarray(final_forces, dtype=float)
+                - np.asarray(first_forces, dtype=float),
+                axis=1,
+            )
+            finite_force_delta = force_delta[np.isfinite(force_delta)]
+            if finite_force_delta.size:
+                dft_median_delta_force_after_relaxation = float(
+                    np.median(finite_force_delta)
+                )
+
         run_dir = cache_root / structure_name
         run_dir.mkdir(parents=True, exist_ok=True)
         # The package has no unperturbed DFT force evaluation. Therefore
@@ -329,6 +472,13 @@ def load_dft_records(
             "logical_run_id": f"dft_{structure_name}",
             "calculator": model,
             "model_id": model,
+            "attack_label": parsed["attack_label"],
+            "epsilon": parsed["epsilon"],
+            "epsilon_percent_displacement": _epsilon_percent(
+                parent,
+                parsed["epsilon"],
+            ),
+            "n_steps": parsed["n_steps"],
             "run_dir": str(run_dir),
             "input_path": str(perturbed_path),
             "after_relax_steps": _number(manifest_row.get("n_ionic_steps"), int),
@@ -351,12 +501,17 @@ def load_dft_records(
             "coordination_change_max": final["coordination_change_max"],
             "rdf_l1_distance": final["rdf_l1_distance"],
             "dft_source_model": parsed["source_model"],
+            "dft_source_run_id": parent.get("run_id"),
+            "dft_source_match": source_match,
             "dft_structure_name": structure_name,
             "dft_perturbed_structure": str(perturbed_path),
             "dft_relaxed_structure": str(relaxed_path),
             "dft_final_fmax_eV_A": _number(manifest_row.get("final_fmax_eV_A")),
             "dft_outcar": str(outcar) if outcar else None,
             "dft_outcar_force_blocks": block_count,
+            "dft_median_delta_force_after_relaxation": (
+                dft_median_delta_force_after_relaxation
+            ),
             "dft_force_reference": "first OUTCAR TOTAL-FORCE block (perturbed input)",
             "dft_force_target": "final OUTCAR TOTAL-FORCE block",
         })

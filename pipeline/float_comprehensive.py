@@ -152,9 +152,12 @@ def force_delta_from_run(run_dir):
     after_forces = merged[["fx_after", "fy_after", "fz_after"]].to_numpy(dtype=float)
     delta = np.linalg.norm(after_forces - before_forces, axis=1)
 
-    if len(delta) == 0:
+    finite_delta = delta[np.isfinite(delta)]
+
+    if finite_delta.size == 0:
         return np.nan
-    return float(np.nanmax(delta))
+
+    return float(np.max(finite_delta))
 
 
 def add_max_delta_force(data):
