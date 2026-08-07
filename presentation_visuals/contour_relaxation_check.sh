@@ -1025,18 +1025,6 @@ contour_known = [
     if value is not None
 ]
 
-print_convergence_audit(
-    "Attack",
-    attack_status,
-    len(attack),
-)
-
-print_convergence_audit(
-    "Contour",
-    contour_status,
-    len(contour),
-)
-
 convergence_groups = empty_group_map()
 
 for _, row in attack.iterrows():
@@ -1128,8 +1116,6 @@ else:
         "Attack relaxation steps: "
         "no explicit post-attack step data"
     )
-
-# -----------
 
 plot_bar(
     "01_convergence_rate",
