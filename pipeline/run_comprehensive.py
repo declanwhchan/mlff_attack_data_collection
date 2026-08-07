@@ -1105,7 +1105,17 @@ def ranking_force_delta_values(row, before_name, after_name):
         persisted_value = as_float(
             row.get("dft_median_delta_force_after_relaxation")
         )
-        if np.isfinite(persisted_value):
+        def _as_finite_float(value):
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                return None
+            if not np.isfinite(value):
+                return None
+            return value
+
+        persisted_value = _as_finite_float(persisted_value)
+        if persisted_value is not None:
             return np.asarray([persisted_value], dtype=float), None
 
     return values, error
