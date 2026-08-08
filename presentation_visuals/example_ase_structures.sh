@@ -64,6 +64,9 @@ MP_IDENTIFIERS = [
     "mp-6922",
     "mp-48",
     "mp-5229",
+    "mp-190",
+    "mp-2815",
+    "mp-984",
 ]
 
 TEXT_COLOR = "#202326"

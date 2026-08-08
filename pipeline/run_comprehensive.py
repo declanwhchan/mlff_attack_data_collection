@@ -53,9 +53,10 @@ CALCULATOR_COLORS = {
     "mtp": "#CC79A7",
     "chgnet": "#009E73",
     "mace_model": "#E69F00",
-    "dft_mace_mh": "#56B4E9",
-    "dft_uma": "#F0A35E",
-    "dft_chgnet": "#66C2A5",
+    # Monochrome DFT reference colors
+    "dft_mace_mh": "#7A7A7A",
+    "dft_uma": "#B0B0B0",
+    "dft_chgnet": "#D0D0D0",
 }
 
 ATTACK_ORDER = ["FGSM", "I-FGSM", "PGD"]
@@ -5033,37 +5034,12 @@ def save_mlff_ranking_violin_plot(
         )
     )
 
-    positive_values = data.loc[
-        data["value"] > 0,
-        "value",
-    ].to_numpy(dtype=float)
-
-    if log_x:
-        if positive_values.size:
-            log_floor = max(
-                float(np.min(positive_values)) / 10.0,
-                np.finfo(float).tiny,
-            )
-        else:
-            log_floor = 1.0e-12
-    else:
-        log_floor = None
-
     def display_values(values):
-        values = np.asarray(
-            values,
-            dtype=float,
-        )
-
-        if not log_x:
-            return values
-
-        return np.log10(
-            np.maximum(
-                values,
-                log_floor,
-            )
-        )
+        values = np.asarray(values, dtype=float).reshape(-1)
+        values = values[np.isfinite(values)]
+        if log_x and np.any(values > 0):
+            return values[values > 0]
+        return values
 
     summary = (
         data.groupby(
@@ -5094,12 +5070,12 @@ def save_mlff_ranking_violin_plot(
     fixed_model_order = [
         "mace_mh",
         "uma",
-        "chgnet",
-        "mtp",
-        "mace_model",
+        # "chgnet",      # intentionally excluded from MLFF rankings
+        # "mtp",         # intentionally excluded from MLFF rankings
+        # "mace_model",  # intentionally excluded from MLFF rankings
         "dft_mace_mh",
         "dft_uma",
-        "dft_chgnet",
+        # "dft_chgnet",  # intentionally excluded from MLFF rankings
     ]
 
     present_models = set(
@@ -5160,15 +5136,33 @@ def save_mlff_ranking_violin_plot(
     ax.set_facecolor("white")
     summary_color = "#6B6B6B"
 
+    positive_values = data.loc[
+        data["value"] > 0,
+        "value",
+    ].to_numpy(dtype=float)
+
+    if log_x:
+        if positive_values.size:
+            lower = float(np.min(positive_values)) / 1.25
+            upper = float(np.max(positive_values)) * 1.25
+            ax.set_yscale("log")
+            ax.set_ylim(lower, upper)
+        else:
+            ax.set_yscale("log")
+            ax.set_ylim(1e-12, 1.0)
+    else:
+        ax.set_yscale("linear")
+
     pastel_colors = {
         "mace_model": "#F3C969",
         "mace_mh": "#8FC5E3",
         "uma": "#F1AC78",
         "chgnet": "#80CEB8",
         "mtp": "#D9A6C5",
-        "dft_mace_mh": "#B9DCEE",
-        "dft_uma": "#F6D0B5",
-        "dft_chgnet": "#B7E2D6",
+        # Monochrome DFT reference fills
+        "dft_mace_mh": "#D2D2D2",
+        "dft_uma": "#ECECEC",
+        "dft_chgnet": "#F4F4F4",
     }
 
     for position, calculator, values in zip(
@@ -5293,19 +5287,24 @@ def save_mlff_ranking_violin_plot(
                 np.max(values)
             )
 
-        (
-            plotted_lower_whisker,
-            plotted_q1,
-            plotted_median,
-            plotted_q3,
-            plotted_upper_whisker,
-        ) = display_values([
+        plotted_summary_values = display_values([
             lower_whisker,
             q1,
             median,
             q3,
             upper_whisker,
         ])
+
+        if plotted_summary_values.size != 5:
+            continue
+
+        (
+            plotted_lower_whisker,
+            plotted_q1,
+            plotted_median,
+            plotted_q3,
+            plotted_upper_whisker,
+        ) = plotted_summary_values
 
         # Thin compact whisker.
         ax.vlines(
@@ -5811,6 +5810,7 @@ def make_mlff_rankings(
                 "before_forces.csv",
                 "perturbed_forces.csv",
             ),
+            "log_x": True,
         },
         {
             "filename": "delta_force_angle.png",
@@ -5908,6 +5908,7 @@ def make_mlff_rankings(
                 "before_forces.csv",
                 "after_forces.csv",
             ),
+            "log_x": True,
         },
         {
             "filename": "delta_force_angle.png",
@@ -5946,6 +5947,8 @@ def make_mlff_rankings(
                 row,
                 "neighbor_jaccard_distance",
             ),
+            # requested: log-scaled y-axis for final-stage violin rankings
+            "log_x": True,
         },
         {
             "filename": "rdf_l1_distance.png",
@@ -5958,6 +5961,8 @@ def make_mlff_rankings(
                 row,
                 "rdf_l1_distance",
             ),
+            # requested: log-scaled y-axis for final-stage violin rankings
+            "log_x": True,
         },
         {
             "filename": "coordination_change.png",
@@ -5996,10 +6001,7 @@ def make_mlff_rankings(
             xlabel=metric["xlabel"],
             value_getter=metric["getter"],
             highlight_epsilon_percent=highlight_epsilon_percent,
-            log_x=(
-                metric["filename"]
-                == "delta_force.png"
-            ),
+            log_x=metric.get("log_x", False),
         )
 
     for metric in relaxed_metrics:
@@ -6010,10 +6012,7 @@ def make_mlff_rankings(
             xlabel=metric["xlabel"],
             value_getter=metric["getter"],
             highlight_epsilon_percent=highlight_epsilon_percent,
-            log_x=(
-                metric["filename"]
-                == "delta_force.png"
-            ),
+            log_x=metric.get("log_x", False),
         )
 
 

@@ -51,9 +51,12 @@ METHODS = [
 CALCULATORS = [
     "mace_mh",
     "uma",
-    "mtp",
-    "chgnet",
-    "mace_model",
+    # "mtp",         # intentionally excluded
+    # "chgnet",      # intentionally excluded
+    # "mace_model",  # intentionally excluded
+    "dft_mace_mh",
+    "dft_uma",
+    # "dft_chgnet",  # intentionally excluded
 ]
 
 MODEL_LABELS = {
@@ -73,9 +76,10 @@ COLORS = {
     "mtp": "#CC79A7",
     "chgnet": "#009E73",
     "mace_model": "#E69F00",
-    "dft_mace_mh": "#56B4E9",
-    "dft_uma": "#F0A35E",
-    "dft_chgnet": "#66C2A5",
+    # Monochrome DFT reference colors
+    "dft_mace_mh": "#7A7A7A",
+    "dft_uma": "#B0B0B0",
+    "dft_chgnet": "#D0D0D0",
 }
 
 
@@ -1308,6 +1312,14 @@ def configure_y_axis(
             high + padding,
         )
 
+    if ax.get_ylabel().strip() == "coordination_change_max":
+        ax.yaxis.set_major_locator(
+            matplotlib.ticker.MultipleLocator(0.2)
+        )
+        ax.yaxis.set_major_formatter(
+            matplotlib.ticker.FormatStrFormatter("%.1f")
+        )
+
 
 def draw_metric_panel(
     ax,
@@ -2483,6 +2495,13 @@ def harmonize_random_seed_axes(fig):
         array = np.asarray(values, dtype=float).reshape(-1)
         return array[np.isfinite(array)]
 
+    figure_title_text = ""
+    if fig._suptitle is not None:
+        figure_title_text = fig._suptitle.get_text().strip().lower()
+
+    final_after_relaxation_figure = (
+        "after attack and relaxation" in figure_title_text
+    )
 
     def collect_axis_values(ax, coordinate):
         values = []
@@ -2547,29 +2566,12 @@ def harmonize_random_seed_axes(fig):
         return np.concatenate(values)
 
 
-    def upper_125(value):
-        """
-        Round a positive upper limit upward to 1, 2, 5, or 10
-        times a power of ten.
-        """
+    def next_power_of_ten(value):
+        """Round upward to the next exact power of ten."""
         if not np.isfinite(value) or value <= 0:
             return 1.0
 
-        exponent = math.floor(math.log10(value))
-        scale = 10.0 ** exponent
-        fraction = value / scale
-
-        if fraction <= 1.0:
-            multiplier = 1.0
-        elif fraction <= 2.0:
-            multiplier = 2.0
-        elif fraction <= 5.0:
-            multiplier = 5.0
-        else:
-            multiplier = 10.0
-
-        return multiplier * scale
-
+        return 10.0 ** math.ceil(math.log10(value))
 
     # Exclude empty/helper axes and group plotting axes by figure row.
     plotting_axes = [
@@ -2627,10 +2629,26 @@ def harmonize_random_seed_axes(fig):
                 )
 
             if current_axis.get_yscale() == "log":
+                current_axis.yaxis.set_major_locator(
+                    mticker.LogLocator(
+                        base=10.0,
+                        subs=(1.0, 2.0, 5.0),
+                        numticks=8,
+                    )
+                )
+
                 current_axis.yaxis.set_major_formatter(
                     mticker.LogFormatterMathtext(
                         base=10.0,
                         labelOnlyBase=False,
+                    )
+                )
+
+                current_axis.yaxis.set_minor_locator(
+                    mticker.LogLocator(
+                        base=10.0,
+                        subs=np.arange(2, 10) * 0.1,
+                        numticks=100,
                     )
                 )
 
@@ -2753,6 +2771,16 @@ def harmonize_random_seed_axes(fig):
             )
         )
 
+        is_rdf = "rdf" in row_label
+
+        use_log_y_for_topology = (
+            final_after_relaxation_figure
+            and (
+                is_unit_interval
+                or is_rdf
+            )
+        )
+
         if is_delta_force or is_displacement:
             if positive_y.size:
                 minimum_positive = float(
@@ -2762,13 +2790,16 @@ def harmonize_random_seed_axes(fig):
                     np.max(positive_y)
                 )
 
-                # Round downward and upward to exact powers of ten.
                 lower_limit = 10.0 ** math.floor(
                     math.log10(minimum_positive)
                 )
-                upper_limit = 10.0 ** math.ceil(
-                    math.log10(maximum_positive)
+
+                upper_limit = next_power_of_ten(
+                    maximum_positive
                 )
+
+                if np.isclose(upper_limit, maximum_positive):
+                    upper_limit *= 10.0
             else:
                 lower_limit = 1.0e-2
                 upper_limit = 1.0
@@ -2778,32 +2809,22 @@ def harmonize_random_seed_axes(fig):
 
             for ax in row_axes:
                 ax.set_yscale("log")
-
-                ax.set_ylim(
-                    lower_limit,
-                    upper_limit,
-                )
-
+                ax.set_ylim(lower_limit, upper_limit)
                 ax.yaxis.set_major_locator(
                     mticker.LogLocator(
                         base=10.0,
+                        subs=(1.0,),
                     )
                 )
-
                 ax.yaxis.set_minor_locator(
-                    mticker.LogLocator(
-                        base=10.0,
-                        subs=np.arange(2, 10) * 0.1,
-                    )
+                    mticker.NullLocator()
                 )
-
                 ax.yaxis.set_major_formatter(
                     mticker.LogFormatterMathtext(
                         base=10.0,
                         labelOnlyBase=False,
                     )
                 )
-
                 ax.yaxis.set_minor_formatter(
                     mticker.NullFormatter()
                 )
@@ -2836,16 +2857,103 @@ def harmonize_random_seed_axes(fig):
                 ax.set_yticks(shared_ticks)
 
         elif is_unit_interval:
-            shared_ticks = np.linspace(
-                0.0,
-                1.0,
-                6,
-            )
+            if positive_y.size:
 
-            for ax in row_axes:
-                ax.set_yscale("linear")
-                ax.set_ylim(0.0, 1.0)
-                ax.set_yticks(shared_ticks)
+                minimum = float(np.min(positive_y))
+                maximum = float(np.max(positive_y))
+
+                lower_limit = 10 ** math.floor(
+                    math.log10(minimum)
+                )
+
+                upper_limit = 10 ** math.ceil(
+                    math.log10(maximum)
+                )
+
+                if np.isclose(lower_limit, upper_limit):
+                    upper_limit = lower_limit * 10.0
+
+                for ax in row_axes:
+                    ax.set_yscale("log")
+
+                    ax.set_ylim(
+                        lower_limit,
+                        upper_limit,
+                    )
+
+                    ax.yaxis.set_major_locator(
+                        mticker.LogLocator(
+                            base=10,
+                            subs=(1.0, 2.0, 5.0),
+                            numticks=8,
+                        )
+                    )
+
+                    ax.yaxis.set_major_formatter(
+                        mticker.LogFormatterMathtext(
+                            base=10,
+                            labelOnlyBase=False,
+                        )
+                    )
+
+                    ax.yaxis.set_minor_locator(
+                        mticker.LogLocator(
+                            base=10,
+                            subs=np.arange(2, 10) * 0.1,
+                        )
+                    )
+
+                    ax.yaxis.set_minor_formatter(
+                        mticker.NullFormatter()
+                    )
+
+        elif use_log_y_for_topology:
+            if positive_y.size:
+                minimum = float(np.min(positive_y))
+                maximum = float(np.max(positive_y))
+
+                lower_limit = 10 ** math.floor(
+                    math.log10(minimum)
+                )
+                upper_limit = 10 ** math.ceil(
+                    math.log10(maximum)
+                )
+
+                if np.isclose(lower_limit, upper_limit):
+                    upper_limit = lower_limit * 10.0
+
+                for ax in row_axes:
+                    ax.set_yscale("log")
+                    ax.set_ylim(
+                        lower_limit,
+                        upper_limit,
+                    )
+
+                    ax.yaxis.set_major_locator(
+                        mticker.LogLocator(
+                            base=10,
+                            subs=(1.0, 2.0, 5.0),
+                            numticks=8,
+                        )
+                    )
+                    ax.yaxis.set_major_formatter(
+                        mticker.LogFormatterMathtext(
+                            base=10,
+                            labelOnlyBase=False,
+                        )
+                    )
+                    ax.yaxis.set_minor_locator(
+                        mticker.LogLocator(
+                            base=10,
+                            subs=np.arange(2, 10) * 0.1,
+                        )
+                    )
+                    ax.yaxis.set_minor_formatter(
+                        mticker.NullFormatter()
+                    )
+            else:
+                for ax in row_axes:
+                    ax.set_yscale("linear")
 
         else:
             current_limits = [
@@ -2963,9 +3071,15 @@ def main():
     if args.models is not None:
         selected_models = list(args.models)
         present = set(records.get("calculator", pd.Series(dtype=str)).dropna())
+
+        # Keep only mace_mh/uma (+ DFT counterparts) even when --models is used.
+        ranking_base_models = [
+            model_id for model_id in selected_models
+            if model_id in {"mace_mh", "uma"}
+        ]
         CALCULATORS = [
             item
-            for model_id in selected_models
+            for model_id in ranking_base_models
             for item in (
                 [model_id, f"dft_{model_id}"]
                 if f"dft_{model_id}" in present
@@ -3053,8 +3167,17 @@ def main():
         topology_metrics_for_stage(final_stage),
         output_dir
         / "seed_response_topology_metrics_after_attack_after_relaxation.png",
-        "Random-seed comparison: topology response "
-        "after attack and relaxation",
+        "Random-seed comparison: topology response after attack and relaxation",
+        panel_scales={
+            "A": "log",
+            "B": "log",
+            "C": "log",
+            "D": "log",
+            "E": "log",
+            "F": "log",
+            "G": "log",
+            "H": "log",
+        },
     )
 
     # Immediate post-attack figures.

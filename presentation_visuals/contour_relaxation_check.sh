@@ -44,6 +44,13 @@ import pandas as pd
 from ase.io import read as ase_read
 from ase.geometry import find_mic
 
+plt.rcParams.update({
+    "axes.labelsize": 22,
+    "axes.titlesize": 24,
+    "xtick.labelsize": 18,
+    "ytick.labelsize": 18,
+})
+
 project_results_root = Path(os.environ["PROJECT_RESULTS_ROOT"]).resolve()
 output_dir = Path(os.environ["OUTPUT_DIR"]).resolve()
 figure_prefix = os.environ["FIGURE_PREFIX"]
@@ -847,7 +854,7 @@ def collect_grouped_values(attack_value_fn, contour_value_fn):
 
 
 def plot_bar(name, grouped_vals, ylabel, title):
-    fig, ax = plt.subplots(figsize=(11.2, 6.8), facecolor="white")
+    fig, ax = plt.subplots(figsize=(8, 6.8), facecolor="white")
     setup_ax(ax)
 
     labels = [label for label, _ in PLOT_GROUPS]
@@ -889,7 +896,7 @@ def plot_bar(name, grouped_vals, ylabel, title):
 
 
 def plot_box(name, grouped_vals, ylabel, title, logy=False):
-    fig, ax = plt.subplots(figsize=(11.2, 6.8), facecolor="white")
+    fig, ax = plt.subplots(figsize=(8, 6.8), facecolor="white")
     setup_ax(ax)
 
     labels = [label for label, _ in PLOT_GROUPS]
@@ -920,17 +927,25 @@ def plot_box(name, grouped_vals, ylabel, title, logy=False):
         data,
         patch_artist=True,
         showfliers=False,
+        widths=0.78,
         zorder=3,
-        medianprops={"color": "white", "linewidth": 2.0},
-        whiskerprops={"linewidth": 1.7},
-        capprops={"linewidth": 1.7},
+        medianprops={
+            "color": "white",
+            "linewidth": 0,
+            "marker": "o",
+            "markersize": 6,
+            "markerfacecolor": "white",
+            "markeredgecolor": "white",
+        },
+        whiskerprops={"color": "black", "linewidth": 2.2},
+        capprops={"color": "black", "linewidth": 2.2},
     )
 
     for patch, color in zip(bp["boxes"], colors):
         patch.set_facecolor(color)
         patch.set_alpha(0.22)
-        patch.set_edgecolor(color)
-        patch.set_linewidth(2.0)
+        patch.set_edgecolor("black")
+        patch.set_linewidth(2.2)
         patch.set_zorder(3)
 
     rng = np.random.default_rng(7)
@@ -965,6 +980,41 @@ def plot_box(name, grouped_vals, ylabel, title, logy=False):
 
     if logy and any(vals.size for vals in series):
         ax.set_yscale("log")
+
+        # Nice automatic major ticks (10^-4, 10^-3, ..., 10^1, ...)
+        ax.yaxis.set_major_locator(
+            mticker.LogLocator(base=10.0, numticks=8)
+        )
+        ax.yaxis.set_major_formatter(
+            mticker.LogFormatterSciNotation(base=10.0)
+        )
+
+        # Minor ticks between decades
+        ax.yaxis.set_minor_locator(
+            mticker.LogLocator(
+                base=10.0,
+                subs=np.arange(2, 10) * 0.1,
+                numticks=100,
+            )
+        )
+        ax.yaxis.set_minor_formatter(
+            mticker.NullFormatter()
+        )
+
+        ax.grid(
+            which="major",
+            axis="y",
+            color="#D9E1E8",
+            linewidth=1.0,
+            alpha=0.85,
+        )
+        ax.grid(
+            which="minor",
+            axis="y",
+            color="#ECEFF3",
+            linewidth=0.6,
+            alpha=0.5,
+        )
 
     save_fig(fig, name)
 
