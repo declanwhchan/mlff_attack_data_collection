@@ -82,6 +82,15 @@ COLORS = {
     "dft_chgnet": "#D0D0D0",
 }
 
+RELAXATION_STEP_UPPER_LIMIT = 600
+
+
+def relaxation_step_upper_limit(project_root):
+    """Return the fixed relaxation-step ceiling for the input dataset."""
+    if "2d_structures" in str(project_root).lower():
+        return 300
+    return 600
+
 
 def model_label(model_id):
     return MODEL_LABELS.get(
@@ -332,61 +341,243 @@ def stage_column(stage, metric):
     return f"{stage}__{metric}"
 
 
-def resolve_record_artifact(row, column, default_name):
-    """Resolve an artifact recorded by any calculator backend."""
-    run_dir = Path(str(row.get("run_dir", "")))
+def resolve_record_artifact(
+    row,
+    column,
+    default_name,
+    extra_columns=(),
+    extra_names=(),
+):
+    """
+    Resolve an artifact recorded by any calculator backend.
+
+    The normal recorded column is tried first. Additional
+    calculator-specific columns/names can be supplied for DFT
+    reference artifacts.
+    """
+    run_dir = Path(
+        str(row.get("run_dir", ""))
+    )
+
     candidates = []
 
-    value = row.get(column)
-    if value is not None and not pd.isna(value) and str(value).strip():
-        recorded = Path(str(value).strip())
-        candidates.append(recorded)
-        if not recorded.is_absolute():
-            candidates.append(run_dir / recorded)
+    candidate_columns = [
+        column,
+        *extra_columns,
+    ]
 
-    actual_output = row.get("actual_output_dir")
+    candidate_names = [
+        default_name,
+        *extra_names,
+    ]
+
+    # ---------------------------------------------------------
+    # 1. Explicit artifact columns.
+    # ---------------------------------------------------------
+
+    for column_name in candidate_columns:
+        value = row.get(column_name)
+
+        if (
+            value is None
+            or pd.isna(value)
+            or not str(value).strip()
+        ):
+            continue
+
+        recorded = Path(
+            str(value).strip()
+        )
+
+        candidates.append(
+            recorded
+        )
+
+        if not recorded.is_absolute():
+            candidates.append(
+                run_dir / recorded
+            )
+
+    # ---------------------------------------------------------
+    # 2. actual_output_dir + conventional filename.
+    # ---------------------------------------------------------
+
+    actual_output = row.get(
+        "actual_output_dir"
+    )
+
     if (
         actual_output is not None
         and not pd.isna(actual_output)
         and str(actual_output).strip()
     ):
-        output_dir = Path(str(actual_output).strip())
-        candidates.append(output_dir / default_name)
-        if not output_dir.is_absolute():
-            candidates.append(run_dir / output_dir / default_name)
+        output_dir = Path(
+            str(actual_output).strip()
+        )
 
-    candidates.append(run_dir / default_name)
+        for name in candidate_names:
+            candidates.append(
+                output_dir / name
+            )
+
+            if not output_dir.is_absolute():
+                candidates.append(
+                    run_dir
+                    / output_dir
+                    / name
+                )
+
+    # ---------------------------------------------------------
+    # 3. run_dir + conventional filename.
+    # ---------------------------------------------------------
+
+    for name in candidate_names:
+        candidates.append(
+            run_dir / name
+        )
+
+    # ---------------------------------------------------------
+    # 4. De-duplicate and return first existing file.
+    # ---------------------------------------------------------
 
     seen = set()
+
     for candidate in candidates:
-        candidate_key = str(candidate)
+        candidate_key = str(
+            candidate.resolve()
+            if candidate.exists()
+            else candidate
+        )
+
         if candidate_key in seen:
             continue
+
         seen.add(candidate_key)
+
         if candidate.is_file():
             return candidate
 
-    # Return the conventional location so the existing readers preserve
-    # their normal missing-file behavior.
+    # Preserve existing missing-file behavior.
     return run_dir / default_name
 
 
+def resolve_force_artifacts(row):
+    """
+    Resolve before/perturbed/after force CSVs.
+
+    DFT rows are allowed to use either the normal force-artifact
+    columns or DFT-specific artifact columns if the dataset records
+    them separately.
+    """
+    is_dft = str(
+        row.get("calculator", "")
+    ).startswith("dft_")
+
+    if is_dft:
+        before_columns = (
+            "dft_before_force_csv",
+            "reference_before_force_csv",
+            "before_dft_force_csv",
+            "before_force_csv",
+        )
+
+        perturbed_columns = (
+            "dft_perturbed_force_csv",
+            "reference_perturbed_force_csv",
+            "perturbed_dft_force_csv",
+            "perturbed_force_csv",
+        )
+
+        after_columns = (
+            "dft_after_force_csv",
+            "reference_after_force_csv",
+            "after_dft_force_csv",
+            "after_force_csv",
+        )
+
+        before_names = (
+            "dft_before_forces.csv",
+            "reference_before_forces.csv",
+            "before_dft_forces.csv",
+            "before_forces.csv",
+        )
+
+        perturbed_names = (
+            "dft_perturbed_forces.csv",
+            "reference_perturbed_forces.csv",
+            "perturbed_dft_forces.csv",
+            "perturbed_forces.csv",
+        )
+
+        after_names = (
+            "dft_after_forces.csv",
+            "reference_after_forces.csv",
+            "after_dft_forces.csv",
+            "after_forces.csv",
+        )
+
+    else:
+        before_columns = (
+            "before_force_csv",
+        )
+
+        perturbed_columns = (
+            "perturbed_force_csv",
+        )
+
+        after_columns = (
+            "after_force_csv",
+        )
+
+        before_names = (
+            "before_forces.csv",
+        )
+
+        perturbed_names = (
+            "perturbed_forces.csv",
+        )
+
+        after_names = (
+            "after_forces.csv",
+        )
+
+    before_path = resolve_record_artifact(
+        row,
+        before_columns[0],
+        before_names[0],
+        extra_columns=before_columns[1:],
+        extra_names=before_names[1:],
+    )
+
+    perturbed_path = resolve_record_artifact(
+        row,
+        perturbed_columns[0],
+        perturbed_names[0],
+        extra_columns=perturbed_columns[1:],
+        extra_names=perturbed_names[1:],
+    )
+
+    after_path = resolve_record_artifact(
+        row,
+        after_columns[0],
+        after_names[0],
+        extra_columns=after_columns[1:],
+        extra_names=after_names[1:],
+    )
+
+    return (
+        before_path,
+        perturbed_path,
+        after_path,
+    )
+
+
 def calculate_stage_metrics(row):
-    before_force_path = resolve_record_artifact(
-        row,
-        "before_force_csv",
-        "before_forces.csv",
-    )
-    perturbed_force_path = resolve_record_artifact(
-        row,
-        "perturbed_force_csv",
-        "perturbed_forces.csv",
-    )
-    after_force_path = resolve_record_artifact(
-        row,
-        "after_force_csv",
-        "after_forces.csv",
-    )
+    (
+        before_force_path,
+        perturbed_force_path,
+        after_force_path,
+    ) = resolve_force_artifacts(row)
     trajectory_path = resolve_record_artifact(
         row,
         "before_relax_traj",
@@ -422,6 +613,11 @@ def calculate_stage_metrics(row):
         before_force_path,
         after_force_path,
     )
+
+    if str(row.get("calculator", "")).lower().startswith("dft_"):
+        baseline_delta_force = np.nan
+        immediate_delta_force = np.nan
+        final_delta_force = np.nan
 
     return {
         "before_attack_after_relaxation": {
@@ -927,10 +1123,32 @@ def prepare_records(records):
 
     # Retain every valid available row. Missing models, attacks and
     # epsilon values are allowed.
+    valid_calculators = set(
+        CALCULATORS
+    )
+
+    valid_attacks = set(
+        ADVERSARIAL_ATTACKS
+    )
+
     data = data[
-        data["attack_label"].isin(ADVERSARIAL_ATTACKS)
-        & data["calculator"].isin(CALCULATORS)
+        data["attack_label"].astype(str).isin(
+            valid_attacks
+        )
+        & data["calculator"].astype(str).isin(
+            valid_calculators
+        )
     ].copy()
+
+    print(
+        "Calculator counts after filtering:"
+    )
+
+    print(
+        data["calculator"]
+        .value_counts(dropna=False)
+        .to_string()
+    )
 
     data["epsilon"] = numeric(
         data["epsilon"]
@@ -995,6 +1213,46 @@ def prepare_records(records):
         f"Random-seed plotting will use {len(data)} valid rows."
     )
 
+    # -------------------------------------------------------------
+    # DFT delta-force coverage diagnostic.
+    # -------------------------------------------------------------
+
+    for calculator in (
+        "mace_mh",
+        "uma",
+        "dft_mace_mh",
+        "dft_uma",
+    ):
+        calculator_rows = data[
+            data["calculator"].astype(str)
+            == calculator
+        ]
+
+        if calculator_rows.empty:
+            continue
+
+        delta_columns = [
+            stage_column(
+                stage,
+                "median_delta_force_ev_a",
+            )
+            for stage in STAGES
+        ]
+
+        finite_counts = {
+            column: int(
+                numeric(
+                    calculator_rows[column]
+                ).notna().sum()
+            )
+            for column in delta_columns
+        }
+
+        print(
+            f"Delta-force coverage for {calculator}: "
+            f"{finite_counts}"
+        )
+
     return data
 
 
@@ -1040,7 +1298,33 @@ def topology_metrics_for_stage(stage):
 
 def seed_curves(records, metric):
     clean = records.copy()
-    clean[metric] = numeric(clean[metric])
+
+    clean[metric] = numeric(
+        clean[metric]
+    )
+
+    # Keep a diagnostic before dropping NaNs.
+    for calculator in CALCULATORS:
+        calculator_mask = (
+            clean["calculator"].astype(str)
+            == calculator
+        )
+
+        if not calculator_mask.any():
+            continue
+
+        finite_count = int(
+            clean.loc[
+                calculator_mask,
+                metric,
+            ].notna().sum()
+        )
+
+        if finite_count == 0:
+            print(
+                f"WARNING: no finite values for "
+                f"{calculator} / {metric}"
+            )
 
     clean = clean.dropna(
         subset=[
@@ -1068,13 +1352,18 @@ def seed_curves(records, metric):
                 "epsilon_percent_displacement",
                 "median",
             ),
-            value=(metric, "median"),
+            value=(
+                metric,
+                "median",
+            ),
             material_count=(
                 "material_slug",
                 "nunique",
             ),
         )
-        .sort_values("epsilon")
+        .sort_values(
+            "epsilon"
+        )
     )
 
 
@@ -1581,7 +1870,7 @@ def figure_legend(records):
         .astype(int)
     )
 
-    handles = [
+    model_handles = [
         Line2D(
             [0],
             [0],
@@ -1590,15 +1879,13 @@ def figure_legend(records):
                 "#777777",
             ),
             linewidth=2.7,
-            label=model_label(
-                calculator
-            ),
+            label=model_label(calculator),
         )
         for calculator in CALCULATORS
         if calculator in present_calculators
     ]
 
-    handles.extend(
+    seed_handles = [
         Line2D(
             [0],
             [0],
@@ -1613,14 +1900,12 @@ def figure_legend(records):
             )[1],
             markersize=4,
             linewidth=1,
-            label=f"{seed}",
+            label=f"Seed {seed}",
         )
-        for seed in sorted(
-            present_seeds
-        )
-    )
+        for seed in sorted(present_seeds)
+    ]
 
-    return handles
+    return model_handles, seed_handles
 
 
 def make_metric_figure(
@@ -1634,8 +1919,8 @@ def make_metric_figure(
     Create a 3x4 random-seed figure.
 
     panel_scales maps panel letters to "linear", "log" or "symlog".
-    Force panels should use symlog because force changes can contain
-    both exact zeros and extremely large finite values.
+    Force panels use symlog because force changes can contain
+    exact zeros and values spanning several orders of magnitude.
     """
     panel_scales = dict(
         panel_scales or {}
@@ -1646,6 +1931,18 @@ def make_metric_figure(
         4,
         figsize=(18.2, 10.4),
         squeeze=False,
+    )
+
+    # IMPORTANT:
+    # save_exact_random_seed_panels() identifies the experimental
+    # stage from the Figure-level title. The previous version
+    # accepted `title` but never attached it to the figure, so
+    # the only Figure-level text was the footer note.
+    fig.suptitle(
+        title,
+        fontsize=13,
+        fontweight="bold",
+        y=0.985,
     )
 
     for row, (
@@ -1709,27 +2006,41 @@ def make_metric_figure(
                 zorder=10,
             )
 
-    legend_handles = figure_legend(
+    model_legend_handles, seed_legend_handles = figure_legend(
         records
     )
 
-    if legend_handles:
+    if model_legend_handles:
         fig.legend(
-            handles=legend_handles,
+            handles=model_legend_handles,
             loc="upper center",
-            ncol=5,
+            ncol=2,
             frameon=False,
-            bbox_to_anchor=(
-                0.5,
-                0.955,
-            ),
+            bbox_to_anchor=(0.35, 0.955),
+            fontsize=8.2,
+            handlelength=2.5,
+            columnspacing=1.2,
+            handletextpad=0.5,
+            borderaxespad=0.0,
+            title="Models",
+            title_fontsize=9.0,
         )
 
-    fig.suptitle(
-        title,
-        fontsize=15,
-        y=0.995,
-    )
+    if seed_legend_handles:
+        fig.legend(
+            handles=seed_legend_handles,
+            loc="upper center",
+            ncol=3,
+            frameon=False,
+            bbox_to_anchor=(0.75, 0.955),
+            fontsize=8.2,
+            handlelength=2.2,
+            columnspacing=1.2,
+            handletextpad=0.5,
+            borderaxespad=0.0,
+            title="Seeds",
+            title_fontsize=9.0,
+        )
 
     uses_symlog = any(
         scale == "symlog"
@@ -1972,18 +2283,65 @@ def save_exact_random_seed_panels(fig):
             f"figure, but found {len(plotting_axes)}"
         )
 
-    if fig._suptitle is None:
-        raise RuntimeError(
-            "The random-seed figure has no title, so its "
-            "experimental stage cannot be identified"
+    # Determine the comprehensive figure title.
+    #
+    # Most figures use fig.suptitle(), which is stored in
+    # fig._suptitle. Some of the random-seed figures, however,
+    # create the title as a regular Figure-level Text artist.
+    # In that case _suptitle is None even though the figure has
+    # a visible title.
+    figure_title = ""
+
+    if fig._suptitle is not None:
+        figure_title = (
+            fig._suptitle.get_text()
+            .strip()
+            .lower()
+            .replace("-", " ")
         )
 
-    figure_title = (
-        fig._suptitle.get_text()
-        .strip()
-        .lower()
-        .replace("-", " ")
-    )
+    # Fall back to Figure-level text artists when the title was
+    # not created with fig.suptitle().
+    if not figure_title:
+        figure_text_candidates = [
+            text_artist.get_text().strip()
+            for text_artist in fig.texts
+            if text_artist.get_text().strip()
+        ]
+
+        # Prefer text containing an experimental-stage phrase.
+        stage_phrases = (
+            "pre relaxation",
+            "before attack",
+            "after attack",
+            "immediate",
+            "post relaxation",
+            "after relaxation",
+            "attack and relaxation",
+        )
+
+        for candidate in figure_text_candidates:
+            candidate_normalized = (
+                candidate.lower()
+                .replace("-", " ")
+            )
+
+            if any(
+                phrase in candidate_normalized
+                for phrase in stage_phrases
+            ):
+                figure_title = candidate_normalized
+                break
+
+    # If the figure genuinely contains no identifiable title,
+    # provide the available Figure-level text in the error so the
+    # actual title source can be located instead of failing blindly.
+    if not figure_title:
+        raise RuntimeError(
+            "The random-seed figure has no identifiable title, "
+            "so its experimental stage cannot be identified.\n"
+            f"Figure text artists: {figure_text_candidates!r}"
+        )
 
     axis_label_text = " ".join(
         axis.get_ylabel().strip().lower()
@@ -2343,19 +2701,18 @@ def save_exact_random_seed_panels(fig):
                         float(shared_ticks[-1]),
                     )
                     axis.set_yticks(shared_ticks)
-        # Attack relaxation runs are capped at 600 steps. Keep a small
+        # Attack relaxation runs are capped at 300/600 steps. Keep a small
         # amount of headroom above capped curves, but do not display a
         # misleading 700-step tick. Contour panels retain their own
         # independently scaled axes.
         if (
-            column_index > 0
-            and "relaxation steps"
+            "relaxation steps"
             in row_metric_names[row_index].lower()
         ):
             axis.set_yscale("linear")
-            axis.set_ylim(0, 620)
+            axis.set_ylim(0, RELAXATION_STEP_UPPER_LIMIT)
             axis.set_yticks(
-                np.arange(0, 601, 100)
+                np.arange(0, RELAXATION_STEP_UPPER_LIMIT + 1, 100)
             )
 
 
@@ -2398,8 +2755,8 @@ def save_exact_random_seed_panels(fig):
             axis.set_yticks(
                 np.arange(
                     0,
-                    panel_cn_upper_limit,
-                    2,
+                    panel_cn_upper_limit + 1,
+                    1,
                 )
             )
         panel_legends = []
@@ -2762,6 +3119,10 @@ def harmonize_random_seed_axes(fig):
             or "relax steps" in row_label
         )
 
+        is_neighbor_jaccard = (
+            "neighbor jaccard" in row_label
+        )
+
         is_unit_interval = any(
             phrase in row_label
             for phrase in (
@@ -2781,7 +3142,95 @@ def harmonize_random_seed_axes(fig):
             )
         )
 
-        if is_delta_force or is_displacement:
+        if is_delta_force:
+            nonzero = np.abs(
+                combined_y[
+                    combined_y != 0
+                ]
+            )
+
+            if nonzero.size:
+                linthresh = max(
+                    float(
+                        np.percentile(
+                            nonzero,
+                            10,
+                        )
+                    ),
+                    float(
+                        np.max(nonzero)
+                    ) * 1e-8,
+                    1e-12,
+                )
+            else:
+                linthresh = 1e-12
+
+            for ax in row_axes:
+                ax.set_yscale(
+                    "symlog",
+                    linthresh=linthresh,
+                    linscale=1.0,
+                    base=10.0,
+                )
+
+                if combined_y.size:
+                    minimum = float(
+                        np.min(combined_y)
+                    )
+                    maximum = float(
+                        np.max(combined_y)
+                    )
+
+                    if minimum >= 0:
+                        upper = (
+                            maximum * 1.15
+                            if maximum > 0
+                            else 1.0
+                        )
+
+                        ax.set_ylim(
+                            0.0,
+                            upper,
+                        )
+                    else:
+                        limit = max(
+                            abs(minimum),
+                            abs(maximum),
+                        )
+
+                        ax.set_ylim(
+                            -1.15 * limit,
+                            1.15 * limit,
+                        )
+
+                ax.yaxis.set_major_locator(
+                    mticker.SymmetricalLogLocator(
+                        linthresh=linthresh,
+                        base=10.0,
+                    )
+                )
+
+                ax.yaxis.set_major_formatter(
+                    mticker.LogFormatterMathtext(
+                        base=10.0,
+                        labelOnlyBase=True,
+                        linthresh=linthresh,
+                    )
+                )
+
+                ax.yaxis.set_minor_formatter(
+                    mticker.NullFormatter()
+                )
+
+                ax.axhline(
+                    0.0,
+                    color="#888888",
+                    linewidth=0.65,
+                    alpha=0.45,
+                    zorder=0,
+                )
+
+        elif is_displacement:
             if positive_y.size:
                 minimum_positive = float(
                     np.min(positive_y)
@@ -2790,34 +3239,115 @@ def harmonize_random_seed_axes(fig):
                     np.max(positive_y)
                 )
 
-                lower_limit = 10.0 ** math.floor(
-                    math.log10(minimum_positive)
+                lower_limit = (
+                    10.0
+                    ** math.floor(
+                        math.log10(
+                            minimum_positive
+                        )
+                    )
                 )
 
-                upper_limit = next_power_of_ten(
-                    maximum_positive
+                upper_limit = (
+                    10.0
+                    ** math.ceil(
+                        math.log10(
+                            maximum_positive
+                        )
+                    )
                 )
 
-                if np.isclose(upper_limit, maximum_positive):
+                if np.isclose(
+                    lower_limit,
+                    upper_limit,
+                ):
                     upper_limit *= 10.0
-            else:
-                lower_limit = 1.0e-2
-                upper_limit = 1.0
 
-            if upper_limit <= lower_limit:
-                upper_limit = lower_limit * 10.0
+                for ax in row_axes:
+                    ax.set_yscale("log")
+                    ax.set_ylim(
+                        lower_limit,
+                        upper_limit,
+                    )
 
-            for ax in row_axes:
+                    ax.yaxis.set_major_locator(
+                        mticker.LogLocator(
+                            base=10.0,
+                            subs=(1.0, 2.0, 5.0),
+                            numticks=8,
+                        )
+                    )
+
+                    ax.yaxis.set_major_formatter(
+                        mticker.LogFormatterMathtext(
+                            base=10.0,
+                            labelOnlyBase=False,
+                        )
+                    )
+
+                    ax.yaxis.set_minor_locator(
+                        mticker.LogLocator(
+                            base=10.0,
+                            subs=np.arange(
+                                2.0,
+                                10.0,
+                            ) * 0.1,
+                            numticks=100,
+                        )
+                    )
+
+                    ax.yaxis.set_minor_formatter(
+                        mticker.NullFormatter()
+                    )
+
+        # Change to 300 or 600
+        elif is_relaxation_steps:
+            upper_limit = RELAXATION_STEP_UPPER_LIMIT
+
+            shared_ticks = np.arange(
+                0.0,
+                upper_limit + 1.0,
+                100.0,
+            )
+
+            for ax in all_row_axes:
+                ax.set_yscale("linear")
+                ax.set_ylim(
+                    0.0,
+                    upper_limit,
+                )
+                ax.set_yticks(shared_ticks)
+
+        elif is_neighbor_jaccard:
+            for ax in all_row_axes:
+                ax.set_yscale("linear")
+                ax.set_ylim(0.0, 0.8)
+                ax.set_yticks(
+                    np.arange(0.0, 0.81, 0.2)
+                )
+
+        elif is_rdf:
+            upper_limit = 1e-2
+
+            if positive_y.size:
+                upper_limit = max(
+                    upper_limit,
+                    10 ** math.ceil(
+                        math.log10(
+                            float(np.max(positive_y))
+                        )
+                    ),
+                )
+
+            for ax in all_row_axes:
                 ax.set_yscale("log")
-                ax.set_ylim(lower_limit, upper_limit)
+                ax.set_ylim(1e-3, upper_limit)
                 ax.yaxis.set_major_locator(
                     mticker.LogLocator(
                         base=10.0,
-                        subs=(1.0,),
+                        subs=(1.0, 2.0, 5.0),
+                        numticks=8,
                     )
-                )
-                ax.yaxis.set_minor_locator(
-                    mticker.NullLocator()
                 )
                 ax.yaxis.set_major_formatter(
                     mticker.LogFormatterMathtext(
@@ -2829,32 +3359,24 @@ def harmonize_random_seed_axes(fig):
                     mticker.NullFormatter()
                 )
 
-        elif is_relaxation_steps:
-            maximum_steps = max(
-                600.0,
-                float(np.max(combined_y))
+        elif "max cn change" in row_label:
+            upper_limit = max(
+                1.0,
+                float(math.ceil(np.max(combined_y)))
                 if combined_y.size
-                else 600.0,
+                else 1.0,
             )
 
-            upper_limit = (
-                math.ceil(maximum_steps / 100.0)
-                * 100.0
-            )
-
-            shared_ticks = np.arange(
-                0.0,
-                upper_limit + 1.0,
-                100.0,
-            )
-
-            for ax in row_axes:
+            for ax in all_row_axes:
                 ax.set_yscale("linear")
-                ax.set_ylim(
-                    0.0,
-                    upper_limit,
+                ax.set_ylim(0.0, upper_limit)
+                ax.set_yticks(
+                    np.arange(
+                        0.0,
+                        upper_limit + 1.0,
+                        1.0,
+                    )
                 )
-                ax.set_yticks(shared_ticks)
 
         elif is_unit_interval:
             if positive_y.size:
@@ -3029,7 +3551,7 @@ def harmonize_random_seed_axes(fig):
 
 
 def main():
-    global CALCULATORS
+    global CALCULATORS, RELAXATION_STEP_UPPER_LIMIT
 
     parser = argparse.ArgumentParser()
 
@@ -3054,6 +3576,7 @@ def main():
     args = parser.parse_args()
 
     project_root = args.project_root.resolve()
+    RELAXATION_STEP_UPPER_LIMIT = relaxation_step_upper_limit(project_root)
 
     output_dir = (
         args.output_dir.resolve()
@@ -3069,23 +3592,40 @@ def main():
     records, missing = load_trials(project_root)
 
     if args.models is not None:
-        selected_models = list(args.models)
-        present = set(records.get("calculator", pd.Series(dtype=str)).dropna())
+        selected_models = [
+            model_id
+            for model_id in args.models
+            if model_id in {
+                "mace_mh",
+                "uma",
+                "mtp",
+                "chgnet",
+                "mace_model",
+            }
+        ]
 
-        # Keep only mace_mh/uma (+ DFT counterparts) even when --models is used.
-        ranking_base_models = [
-            model_id for model_id in selected_models
-            if model_id in {"mace_mh", "uma"}
-        ]
-        CALCULATORS = [
-            item
-            for model_id in ranking_base_models
-            for item in (
-                [model_id, f"dft_{model_id}"]
-                if f"dft_{model_id}" in present
-                else [model_id]
+        present = set(
+            records["calculator"]
+            .dropna()
+            .astype(str)
+        )
+
+        CALCULATORS = []
+
+        for model_id in selected_models:
+            if model_id in present:
+                CALCULATORS.append(
+                    model_id
+                )
+
+            dft_model_id = (
+                f"dft_{model_id}"
             )
-        ]
+
+            if dft_model_id in present:
+                CALCULATORS.append(
+                    dft_model_id
+                )
 
     records = prepare_records(records)
 

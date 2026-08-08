@@ -6,8 +6,9 @@ import math
 import re
 
 import matplotlib.pyplot as plt
-from matplotlib.patches import Ellipse, Patch, FancyArrowPatch
+from matplotlib.patches import Ellipse, FancyArrowPatch
 from matplotlib.ticker import MaxNLocator, ScalarFormatter, FuncFormatter, FixedLocator, NullLocator
+import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
 from ase.io import read as read_structure
@@ -1089,6 +1090,9 @@ def force_delta_values(run_dir, before_name, after_name):
 
 def ranking_force_delta_values(row, before_name, after_name):
     """Return force deltas for rankings, including persisted DFT values."""
+    if str(row.get("calculator", "")).lower().startswith("dft_"):
+        return None, "DFT delta force unavailable"
+
     values, error = force_delta_values(
         row["run_dir"],
         before_name,
@@ -1100,24 +1104,6 @@ def ranking_force_delta_values(row, before_name, after_name):
         finite_values = finite_values[np.isfinite(finite_values)]
         if finite_values.size:
             return finite_values, None
-
-    calculator = str(row.get("calculator", "")).lower()
-    if calculator.startswith("dft_") and after_name == "after_forces.csv":
-        persisted_value = as_float(
-            row.get("dft_median_delta_force_after_relaxation")
-        )
-        def _as_finite_float(value):
-            try:
-                value = float(value)
-            except (TypeError, ValueError):
-                return None
-            if not np.isfinite(value):
-                return None
-            return value
-
-        persisted_value = _as_finite_float(persisted_value)
-        if persisted_value is not None:
-            return np.asarray([persisted_value], dtype=float), None
 
     return values, error
 
@@ -3954,6 +3940,10 @@ def calculate_baseline_ranking_metrics(row):
             np.median(displacement)
         )
 
+    if str(row.get("calculator", "")).lower().startswith("dft_"):
+        BASELINE_RANKING_CACHE[cache_key] = metrics
+        return metrics
+
     try:
         initial_forces = np.asarray(
             initial.get_forces(),
@@ -4070,7 +4060,6 @@ def baseline_ranking_value(row, metric):
 
     if value is None or not np.isfinite(value):
         return None, f"Missing baseline {metric}"
-
     return np.asarray([value], dtype=float), None
 
 
@@ -4942,6 +4931,193 @@ def collect_mlff_ranking_values(records, value_getter):
     return data.dropna(subset=["calculator", "value"])
 
 
+def configure_violin_y_axis(
+    ax,
+    values,
+    log_scale=False,
+):
+    """
+    Configure a clean y-axis for the vertical MLFF violin plot.
+
+    For logarithmic axes:
+      - limits are padded multiplicatively;
+      - major ticks are placed in data space;
+      - 1, 2, and 5 ticks are used when the range is compact;
+      - only decade ticks are labeled when the range spans many decades.
+
+    For linear axes:
+      - MaxNLocator chooses clean human-readable ticks.
+    """
+    values = np.asarray(
+        values,
+        dtype=float,
+    )
+
+    values = values[
+        np.isfinite(values)
+    ]
+
+    if values.size == 0:
+        return
+
+    if log_scale:
+        values = values[
+            values > 0
+        ]
+
+        if values.size == 0:
+            ax.set_yscale("log")
+            ax.set_ylim(
+                1e-3,
+                1.0,
+            )
+            return
+
+        minimum = float(
+            np.min(values)
+        )
+        maximum = float(
+            np.max(values)
+        )
+
+        if minimum == maximum:
+            lower_limit = minimum / 2.0
+            upper_limit = maximum * 2.0
+        else:
+            # Multiplicative padding is appropriate for log axes.
+            lower_limit = minimum / 1.25
+            upper_limit = maximum * 1.25
+
+        ax.set_yscale("log")
+        ax.set_ylim(
+            lower_limit,
+            upper_limit,
+        )
+
+        decades = (
+            np.log10(upper_limit)
+            - np.log10(lower_limit)
+        )
+
+        if decades <= 2.5:
+            # Compact range: show useful 1/2/5 values.
+            major_locator = mticker.LogLocator(
+                base=10.0,
+                subs=(1.0, 2.0, 5.0),
+                numticks=9,
+            )
+        else:
+            # Large range: only label powers of ten so labels
+            # don't become crowded.
+            major_locator = mticker.LogLocator(
+                base=10.0,
+                subs=(1.0,),
+                numticks=8,
+            )
+
+        ax.yaxis.set_major_locator(
+            major_locator
+        )
+
+        ax.yaxis.set_major_formatter(
+            mticker.LogFormatterMathtext(
+                base=10.0,
+                labelOnlyBase=(
+                    decades > 2.5
+                ),
+            )
+        )
+
+        # Minor ticks are useful visually but should not carry labels.
+        ax.yaxis.set_minor_locator(
+            mticker.LogLocator(
+                base=10.0,
+                subs=np.arange(
+                    2.0,
+                    10.0,
+                ) * 0.1,
+                numticks=100,
+            )
+        )
+
+        ax.yaxis.set_minor_formatter(
+            mticker.NullFormatter()
+        )
+
+        return
+
+    # -------------------------
+    # Linear y-axis
+    # -------------------------
+
+    minimum = float(
+        np.min(values)
+    )
+    maximum = float(
+        np.max(values)
+    )
+
+    if minimum >= 0:
+        lower_limit = 0.0
+        upper_limit = (
+            maximum * 1.08
+            if maximum > 0
+            else 1.0
+        )
+    else:
+        span = maximum - minimum
+
+        padding = (
+            0.08 * span
+            if span > 0
+            else 1.0
+        )
+
+        lower_limit = minimum - padding
+        upper_limit = maximum + padding
+
+    ax.set_yscale("linear")
+
+    ax.set_ylim(
+        lower_limit,
+        upper_limit,
+    )
+
+    ax.yaxis.set_major_locator(
+        mticker.MaxNLocator(
+            nbins=6,
+            min_n_ticks=4,
+            steps=[
+                1,
+                2,
+                2.5,
+                5,
+                10,
+            ],
+        )
+    )
+
+    scalar_formatter = mticker.ScalarFormatter(
+        useMathText=True,
+    )
+
+    scalar_formatter.set_powerlimits(
+        (-3, 4)
+    )
+
+    scalar_formatter.set_useOffset(
+        False
+    )
+
+    ax.yaxis.set_major_formatter(
+        scalar_formatter
+    )
+
+    ax.yaxis.set_minor_locator(
+        mticker.NullLocator()
+    )
+
+
 def save_mlff_ranking_violin_plot(
     records,
     output_path,
@@ -4991,7 +5167,7 @@ def save_mlff_ranking_violin_plot(
 
         if log_x:
             data = data.loc[
-                data["value"] >= 0
+                data["value"] > 0
             ].copy()
 
     if data.empty:
@@ -5022,17 +5198,17 @@ def save_mlff_ranking_violin_plot(
         return
 
     # Clip each displayed model distribution at its own p95.
-    data["value"] = (
-        data.groupby(
-            "calculator",
-            group_keys=False,
-        )["value"]
-        .transform(
-            lambda values: values.clip(
-                upper=values.quantile(0.95)
-            )
-        )
-    )
+    # data["value"] = (
+    #     data.groupby(
+    #         "calculator",
+    #         group_keys=False,
+    #     )["value"]
+    #     .transform(
+    #         lambda values: values.clip(
+    #             upper=values.quantile(0.95)
+    #         )
+    #     )
+    # )
 
     def display_values(values):
         values = np.asarray(values, dtype=float).reshape(-1)
@@ -5136,23 +5312,6 @@ def save_mlff_ranking_violin_plot(
     ax.set_facecolor("white")
     summary_color = "#6B6B6B"
 
-    positive_values = data.loc[
-        data["value"] > 0,
-        "value",
-    ].to_numpy(dtype=float)
-
-    if log_x:
-        if positive_values.size:
-            lower = float(np.min(positive_values)) / 1.25
-            upper = float(np.max(positive_values)) * 1.25
-            ax.set_yscale("log")
-            ax.set_ylim(lower, upper)
-        else:
-            ax.set_yscale("log")
-            ax.set_ylim(1e-12, 1.0)
-    else:
-        ax.set_yscale("linear")
-
     pastel_colors = {
         "mace_model": "#F3C969",
         "mace_mh": "#8FC5E3",
@@ -5181,7 +5340,7 @@ def save_mlff_ranking_violin_plot(
 
         if log_x:
             values = values[
-                values >= 0
+                values > 0
             ]
 
         if not values.size:
@@ -5482,134 +5641,14 @@ def save_mlff_ranking_violin_plot(
 
     if log_x:
         all_values = all_values[
-            all_values >= 0
+            all_values > 0
         ]
 
-    plotted_all_values = display_values(
-        all_values
+    configure_violin_y_axis(
+        ax,
+        all_values,
+        log_scale=log_x,
     )
-
-    if plotted_all_values.size:
-        minimum = float(
-            np.min(plotted_all_values)
-        )
-
-        maximum = float(
-            np.max(plotted_all_values)
-        )
-
-        if log_x:
-            if maximum > minimum:
-                padding = max(
-                    0.18,
-                    0.035 * (
-                        maximum - minimum
-                    ),
-                )
-            else:
-                padding = 1.0
-
-            ax.set_ylim(
-                minimum - padding,
-                maximum + padding,
-            )
-
-            first_power = int(
-                np.floor(minimum)
-            )
-
-            last_power = int(
-                np.ceil(maximum)
-            )
-
-            # Label every second decade using even exponents:
-            # 10^-2, 10^0, 10^2, and so on. The plotted coordinate is
-            # log10(value), so these labels remain uniformly spaced.
-            first_labeled_power = int(
-                2 * np.ceil(first_power / 2.0)
-            )
-            last_labeled_power = int(
-                2 * np.floor(last_power / 2.0)
-            )
-
-            powers = np.arange(
-                first_labeled_power,
-                last_labeled_power + 1,
-                2,
-                dtype=int,
-            )
-
-            ax.yaxis.set_major_locator(
-                FixedLocator(powers)
-            )
-
-            ax.yaxis.set_minor_locator(
-                NullLocator()
-            )
-
-            ax.yaxis.set_major_formatter(
-                FuncFormatter(
-                    lambda exponent, _:
-                    rf"$10^{{{int(round(exponent))}}}$"
-                )
-            )
-
-        else:
-            raw_minimum = float(
-                np.min(all_values)
-            )
-
-            raw_maximum = float(
-                np.max(all_values)
-            )
-
-            if raw_minimum >= 0:
-                upper_limit = (
-                    raw_maximum * 1.08
-                    if raw_maximum > 0
-                    else 1.0
-                )
-
-                ax.set_ylim(
-                    0.0,
-                    upper_limit,
-                )
-
-            else:
-                span = (
-                    raw_maximum
-                    - raw_minimum
-                )
-
-                padding = (
-                    0.08 * span
-                    if span > 0
-                    else 1.0
-                )
-
-                ax.set_ylim(
-                    raw_minimum - padding,
-                    raw_maximum + padding,
-                )
-
-            ax.yaxis.set_major_locator(
-                MaxNLocator(
-                    nbins=6,
-                    min_n_ticks=4,
-                )
-            )
-
-            scalar_formatter = ScalarFormatter(
-                useMathText=True,
-            )
-
-            scalar_formatter.set_powerlimits(
-                (-3, 4)
-            )
-
-            ax.yaxis.set_major_formatter(
-                scalar_formatter
-            )
 
     # Completely white background with no grid lines.
     ax.grid(False)
@@ -5755,7 +5794,7 @@ def make_mlff_rankings(
         {
             "filename": "neighbor_jaccard_distance.png",
             "title": (
-                "MLFF ranking: neighbor Jaccard distance "
+                "MLFF ranking: Neighbor Jaccard distance "
                 "pre-relaxation"
             ),
             "xlabel": (
@@ -5841,7 +5880,7 @@ def make_mlff_rankings(
         {
             "filename": "neighbor_jaccard_distance.png",
             "title": (
-                "MLFF ranking: neighbor Jaccard distance "
+                "MLFF ranking: Neighbor Jaccard distance "
                 "after attack, before relaxation"
             ),
             "xlabel": "Median neighbor Jaccard distance",
@@ -5939,7 +5978,7 @@ def make_mlff_rankings(
         {
             "filename": "neighbor_jaccard_distance.png",
             "title": (
-                "MLFF ranking: neighbor Jaccard distance "
+                "MLFF ranking: Neighbor Jaccard distance "
                 "after attack and relaxation"
             ),
             "xlabel": "Median neighbor Jaccard distance",

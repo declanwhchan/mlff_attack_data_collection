@@ -901,6 +901,7 @@ def plot_box(name, grouped_vals, ylabel, title, logy=False):
 
     labels = [label for label, _ in PLOT_GROUPS]
     colors = [color for _, color in PLOT_GROUPS]
+
     series = [
         np.asarray(
             [
@@ -917,49 +918,101 @@ def plot_box(name, grouped_vals, ylabel, title, logy=False):
         series = [vals[vals > 0] for vals in series]
 
     if all(vals.size == 0 for vals in series):
-        ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
+        ax.text(
+            0.5,
+            0.5,
+            "No data",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
         ax.set_axis_off()
         save_fig(fig, name)
         return
 
-    data = [vals if vals.size else np.array([np.nan]) for vals in series]
+    # Matplotlib needs a placeholder for completely empty groups.
+    data = [
+        vals if vals.size else np.array([np.nan])
+        for vals in series
+    ]
+
+    # ------------------------------------------------------------
+    # BOX STYLE
+    # ------------------------------------------------------------
+    BOX_FILL_COLOR = "#B8B8B8"   # neutral gray shading
+    BOX_EDGE_COLOR = "#4A4A4A"   # dark gray outline
+
     bp = ax.boxplot(
         data,
         patch_artist=True,
         showfliers=False,
-        widths=0.78,
-        zorder=3,
+
+        # Slightly wider so the box outline is easier to see.
+        widths=0.16,
+
+        # Draw box/whiskers above the individual data points.
+        zorder=5,
+
+        # No Matplotlib median line -- we add one white dot below.
         medianprops={
-            "color": "white",
+            "color": "none",
             "linewidth": 0,
-            "marker": "o",
-            "markersize": 6,
-            "markerfacecolor": "white",
-            "markeredgecolor": "white",
+            "marker": None,
         },
-        whiskerprops={"color": "black", "linewidth": 2.2},
-        capprops={"color": "black", "linewidth": 2.2},
+
+        # More visible whiskers.
+        whiskerprops={
+            "color": BOX_EDGE_COLOR,
+            "linewidth": 2.0,
+            "zorder": 7,
+        },
+
+        # More visible horizontal caps.
+        capprops={
+            "color": BOX_EDGE_COLOR,
+            "linewidth": 2.0,
+            "zorder": 7,
+        },
     )
 
-    for patch, color in zip(bp["boxes"], colors):
-        patch.set_facecolor(color)
-        patch.set_alpha(0.22)
-        patch.set_edgecolor("black")
-        patch.set_linewidth(2.2)
-        patch.set_zorder(3)
+    # ------------------------------------------------------------
+    # GRAY BOX FILL + DARK OUTLINE
+    # ------------------------------------------------------------
+    for patch in bp["boxes"]:
+        patch.set_facecolor(BOX_FILL_COLOR)
+        patch.set_alpha(0.68)
 
+        patch.set_edgecolor(BOX_EDGE_COLOR)
+        patch.set_linewidth(2.0)
+
+        # Keep box clearly above the scatter points.
+        patch.set_zorder(6)
+
+    # ------------------------------------------------------------
+    # INDIVIDUAL DATA POINTS
+    # ------------------------------------------------------------
     rng = np.random.default_rng(7)
+
     for i, vals in enumerate(series):
         if vals.size:
-            jitter = rng.uniform(-0.09, 0.09, size=len(vals))
+            jitter = rng.uniform(
+                -0.12,
+                0.12,
+                size=len(vals),
+            )
+
             ax.scatter(
                 np.full(len(vals), i + 1) + jitter,
                 vals,
+
+                # Small dots behind the box.
                 s=14,
                 alpha=0.25,
                 color=colors[i],
                 linewidths=0,
-                zorder=2,
+
+                # Lower z-order than the box.
+                zorder=1,
             )
         else:
             ax.text(
@@ -972,6 +1025,34 @@ def plot_box(name, grouped_vals, ylabel, title, logy=False):
                 fontsize=11,
             )
 
+    # ------------------------------------------------------------
+    # EXACTLY ONE WHITE DOT AT EACH MEDIAN
+    # ------------------------------------------------------------
+    #
+    # This is intentionally drawn AFTER the scatter points and
+    # AFTER the box so that there is exactly one visible white
+    # median marker in the center of each box.
+    #
+    for i, vals in enumerate(series):
+        if vals.size:
+            median = float(np.median(vals))
+
+            ax.scatter(
+                i + 1,
+                median,
+
+                # Exactly one white dot.
+                s=38,
+                marker="o",
+
+                facecolor="white",
+                edgecolor="white",
+                linewidths=0,
+
+                # Put the median dot above the box.
+                zorder=10,
+            )
+
     ax.set_xticks(np.arange(1, len(labels) + 1))
     ax.set_xticklabels(labels)
     ax.set_xlabel("Stress Tests")
@@ -981,15 +1062,21 @@ def plot_box(name, grouped_vals, ylabel, title, logy=False):
     if logy and any(vals.size for vals in series):
         ax.set_yscale("log")
 
-        # Nice automatic major ticks (10^-4, 10^-3, ..., 10^1, ...)
+        # Nice automatic major ticks.
         ax.yaxis.set_major_locator(
-            mticker.LogLocator(base=10.0, numticks=8)
-        )
-        ax.yaxis.set_major_formatter(
-            mticker.LogFormatterSciNotation(base=10.0)
+            mticker.LogLocator(
+                base=10.0,
+                numticks=8,
+            )
         )
 
-        # Minor ticks between decades
+        ax.yaxis.set_major_formatter(
+            mticker.LogFormatterSciNotation(
+                base=10.0
+            )
+        )
+
+        # Minor ticks between decades.
         ax.yaxis.set_minor_locator(
             mticker.LogLocator(
                 base=10.0,
@@ -997,6 +1084,7 @@ def plot_box(name, grouped_vals, ylabel, title, logy=False):
                 numticks=100,
             )
         )
+
         ax.yaxis.set_minor_formatter(
             mticker.NullFormatter()
         )
@@ -1008,6 +1096,7 @@ def plot_box(name, grouped_vals, ylabel, title, logy=False):
             linewidth=1.0,
             alpha=0.85,
         )
+
         ax.grid(
             which="minor",
             axis="y",

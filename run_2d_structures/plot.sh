@@ -486,7 +486,7 @@ run_dtype_plots() {
         --output-dir "$dtype_root" \
         --materials generated_material_tests.csv \
         --structures-dir mp_structures \
-        --models mace_mh uma chgnet \
+        --models mace_mh uma \
         --scratch-runs-dir "$SCRATCH_TRIAL/outputs_$dtype_str" \
         --mlff-ranking-highlight-epsilon-percent 10 \
         --dft-structures-dir "$DFT_STRUCTURES_ROOT"
@@ -500,7 +500,7 @@ run_dtype_plots() {
             --mace-model-contour-dir "$mace_model_dir/contour" \
             --comprehensive-dir "$dtype_root" \
             --output-dir "$dtype_root/contour" \
-            --models mace_mh uma chgnet
+            --models mace_mh uma
     fi
 }
 
@@ -527,7 +527,7 @@ export NUMEXPR_NUM_THREADS=8
     --float32-dir "$PROJECT_TRIAL/outputs_comprehensive/float32" \
     --float64-dir "$PROJECT_TRIAL/outputs_comprehensive/float64" \
     --output-dir "$PROJECT_TRIAL/outputs_comprehensive/comparison" \
-    --models mace_mh uma chgnet
+    --models mace_mh uma
 
 if [ "$SLURM_ARRAY_TASK_ID" -eq 1 ]; then
     SUPERCELL_ARRAY_SUMMARIES="$SUPERCELL_ROOT/array_summaries"
@@ -544,7 +544,7 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 1 ]; then
     if [ "$RUN_SUPERCELL_PLOTS" -eq 1 ]; then
         "$PYTHON" -u pipeline/supercell.py combine \
             --output-root "$SUPERCELL_ROOT" \
-            --models mace_mh uma chgnet
+            --models mace_mh uma
 
     SUPERCELL_PROJECT="$PROJECT_RESULTS/supercell"
 
@@ -576,7 +576,7 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 1 ]; then
         --mace-model-summary "$SUPERCELL_PROJECT/summaries/mace_model_summary.csv" \
         --output-dir "$SUPERCELL_PROJECT/plots" \
         --epsilon 0.01 \
-        --models mace_mh uma chgnet
+        --models mace_mh uma
 
     for model_id in \
         mace_mh \
@@ -597,7 +597,7 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 1 ]; then
             --cpus-per-task=8 \
             --output=random-seed-%j.out \
             --export=ALL,PROJECT_RESULTS="$PROJECT_RESULTS" \
-            --wrap="cd '$REPO_ROOT' && '$PYTHON' -u pipeline/random_seed_comprehensive.py --project-root '$PROJECT_RESULTS' --output-dir '$PROJECT_RESULTS/random_seed' --models mace_mh uma chgnet"
+            --wrap="cd '$REPO_ROOT' && '$PYTHON' -u pipeline/random_seed_comprehensive.py --project-root '$PROJECT_RESULTS' --output-dir '$PROJECT_RESULTS/random_seed' --models mace_mh uma"
     )
 
     echo "Submitted random-seed plot job:"
