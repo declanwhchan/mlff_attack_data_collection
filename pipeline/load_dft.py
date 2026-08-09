@@ -393,6 +393,15 @@ def load_dft_records(
     cache_root.mkdir(parents=True, exist_ok=True)
     records, missing = [], []
 
+    # OUTCAR files are absent from this delivery, but ionic-step force
+    # summaries are retained and support DFT residual-recovery metrics.
+    ionic_steps_by_structure = {}
+    for path in dft_root.rglob("ionic_steps.csv"):
+        directory_name = path.parent.name
+        if "__" in directory_name:
+            ionic_steps_by_structure.setdefault(
+                directory_name.split("__", 1)[1], path
+            )
     for _, manifest_row in manifest.iterrows():
         if str(manifest_row.get("delivery_group", "")).upper() != "FORCE_CONVERGED_CLEAN":
             continue
@@ -509,6 +518,9 @@ def load_dft_records(
             "dft_final_fmax_eV_A": _number(manifest_row.get("final_fmax_eV_A")),
             "dft_outcar": str(outcar) if outcar else None,
             "dft_outcar_force_blocks": block_count,
+            "dft_ionic_steps_csv": str(
+                ionic_steps_by_structure.get(structure_name, "")
+            ),
             "dft_median_delta_force_after_relaxation": (
                 dft_median_delta_force_after_relaxation
             ),

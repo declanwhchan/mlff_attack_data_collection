@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 from ase.io import read as read_structure
 from load_dft import dft_coverage_table, load_dft_records
+from force_recovery import add_rms_force_metrics, make_rms_force_figures
 from run_tests import (
     coordination_by_atom,
     edge_jaccard_distance,
@@ -7786,6 +7787,7 @@ def main():
 
     records = pd.DataFrame(all_records)
 
+    records = add_rms_force_metrics(records)
     missing_rows = [
         {"reason": item}
         for item in all_missing
@@ -7845,6 +7847,13 @@ def main():
             args.mlff_ranking_highlight_epsilon_percent
         ),
     )
+    make_rms_force_figures(
+        epsilon_records,
+        args.output_dir / "mlffs_ranking",
+        MODEL_LABELS,
+        CALCULATOR_COLORS,
+    )
+
 
     make_convergence_figure(epsilon_records, args.output_dir)
     # Component plots are intentionally disabled to reduce the

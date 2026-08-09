@@ -16,6 +16,7 @@ import pandas as pd
 
 from load_dft import dft_coverage_table
 from ase.io import read as ase_read
+from force_recovery import add_rms_force_metrics, make_rms_force_figures
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -2619,6 +2620,26 @@ def save_exact_random_seed_panels(fig):
                 scale=axis.get_yscale(),
             )
 
+        # RDF standalone exports retain the comprehensive figure's 10^-13 floor.
+        if "rdf" in row_metric_names[row_index].lower():
+            positive_rdf_values = panel_values[panel_values > 0]
+            rdf_upper_limit = 1e-2
+
+            if positive_rdf_values.size:
+                rdf_upper_limit = max(
+                    rdf_upper_limit,
+                    10 ** math.ceil(math.log10(float(np.max(positive_rdf_values)))),
+                )
+
+            axis.set_yscale("log")
+            axis.set_ylim(1e-13, rdf_upper_limit)
+            axis.yaxis.set_major_locator(
+                mticker.LogLocator(base=10.0, subs=(1.0, 2.0, 5.0), numticks=8)
+            )
+            axis.yaxis.set_major_formatter(
+                mticker.LogFormatterMathtext(base=10.0, labelOnlyBase=False)
+            )
+            axis.yaxis.set_minor_formatter(mticker.NullFormatter())
         # Standalone linear panels must include every visible seed and
         # IQR value. The general helper uses robust percentiles, which
         # is useful for comprehensive figures but can crop the largest
@@ -2716,18 +2737,12 @@ def save_exact_random_seed_panels(fig):
             )
 
 
-        # Give each standalone Max CN panel its own compact integer
-        # scale. End one unit above the largest plotted value while
-        # retaining even-numbered ticks below the ceiling. For example,
-        # a maximum of 12 produces limits of 0--13 and ticks through 12.
+        # Keep one-change panels readable without displaying an unreached 2.
         if row_metric_names[row_index] == "Max CN change":
             line_value_sets = []
 
             for line in axis.lines:
-                values = np.asarray(
-                    line.get_ydata(),
-                    dtype=float,
-                ).reshape(-1)
+                values = np.asarray(line.get_ydata(), dtype=float).reshape(-1)
                 values = values[np.isfinite(values)]
 
                 if values.size:
@@ -2738,27 +2753,17 @@ def save_exact_random_seed_panels(fig):
                 if line_value_sets
                 else 10.0
             )
-            panel_cn_upper_limit = max(
-                2.0,
-                float(
-                    math.ceil(
-                        maximum_cn_change + 1.0
-                    )
-                ),
-            )
-
             axis.set_yscale("linear")
-            axis.set_ylim(
-                0,
-                panel_cn_upper_limit,
-            )
-            axis.set_yticks(
-                np.arange(
-                    0,
-                    panel_cn_upper_limit + 1,
-                    1,
+
+            if maximum_cn_change <= 1.0:
+                axis.set_ylim(0.0, 1.1)
+                axis.set_yticks(np.arange(0.0, 1.01, 0.2))
+            else:
+                panel_cn_upper_limit = float(math.ceil(maximum_cn_change + 0.1))
+                axis.set_ylim(0.0, panel_cn_upper_limit)
+                axis.yaxis.set_major_locator(
+                    mticker.MaxNLocator(nbins=6, min_n_ticks=5)
                 )
-            )
         panel_legends = []
 
         if model_legend_items:
@@ -3578,6 +3583,16 @@ def main():
     project_root = args.project_root.resolve()
     RELAXATION_STEP_UPPER_LIMIT = relaxation_step_upper_limit(project_root)
 
+    # Exclude CHGNet from every 2D-structures random-seed figure.
+    exclude_chgnet = "2d_structures" in str(project_root).lower()
+
+    if exclude_chgnet:
+        CALCULATORS = [
+            calculator
+            for calculator in CALCULATORS
+            if "chgnet" not in calculator
+        ]
+
     output_dir = (
         args.output_dir.resolve()
         if args.output_dir
@@ -3602,6 +3617,7 @@ def main():
                 "chgnet",
                 "mace_model",
             }
+            and not (exclude_chgnet and model_id == "chgnet")
         ]
 
         present = set(
@@ -3628,6 +3644,7 @@ def main():
                 )
 
     records = prepare_records(records)
+    records = add_rms_force_metrics(records)
 
     dft_coverage = dft_coverage_table(records)
     dft_coverage.to_csv(
@@ -3682,6 +3699,14 @@ def main():
     write_aggregate_table(
         records,
         output_dir / "random_seed_aggregate.csv",
+    )
+
+    make_rms_force_figures(
+        records,
+        output_dir,
+        MODEL_LABELS,
+        COLORS,
+        prefix="seed_",
     )
 
     # Existing final-response figures.
