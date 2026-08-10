@@ -46,11 +46,6 @@ done
 
 mkdir -p "$RANDOM_SEED_DIR" "$WHY_PLOTS_DIR"
 
-# The former all-material Jaccard overview was a non-causal spaghetti plot.
-# Remove any stale copies so this job cannot leave it in the presentation set.
-rm -f "$WHY_PLOTS_DIR/02_all_material_jaccard_overview.png" \
-      "$WHY_PLOTS_DIR/02_jaccard_seed_summary.csv"
-
 echo "Rebuilding random-seed figures: $RANDOM_SEED_DIR"
 "$PYTHON" -u pipeline/random_seed_comprehensive.py \
     --project-root "$PROJECT_RESULTS" \

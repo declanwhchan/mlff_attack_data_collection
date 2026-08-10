@@ -281,7 +281,7 @@ def save_structure_trajectory(data, cases, output):
                 ax.set_title(name); ax.set_aspect("equal"); ax.set_xticks([]); ax.set_yticks([])
             fig.colorbar(scatter, ax=axes, shrink=.75, label="Displacement from reference (Å)")
             fig.suptitle(f"{material}: {LABELS.get(row['calculator'], row['calculator'])}", fontweight="bold")
-            fig.savefig(output / f"03_structure_transition_{material}.png", dpi=300, bbox_inches="tight")
+            fig.savefig(output / f"02_structure_transition_{material}.png", dpi=300, bbox_inches="tight")
             plt.close(fig)
             rows.append({"material_slug": material, "run_id": row["run_id"], "calculator": row["calculator"], "attack_label": row.get("attack_label"), "epsilon_percent": row.get("epsilon_percent"), "final_jaccard": row.get("final_jaccard"), "converged": row.get("converged"), "projected_perturbed_x": points[1, 0], "projected_final_x": points[2, 0]})
         except Exception as error:
@@ -374,7 +374,7 @@ def save_pes(data, cases, output, grid):
         ax.plot(endpoints[:, 0], endpoints[:, 1], "wo-", markeredgecolor="#222", label="reference → perturbed → final")
         ax.set(title=f"Local MLFF basin: {cases[0]}", xlabel="Attack direction (Å·√atoms)", ylabel="Orthogonal relaxation direction (Å·√atoms)")
         ax.legend(fontsize=8); fig.colorbar(contour, ax=ax, label="Relative MLFF energy (eV; capped)")
-        fig.savefig(output / "04_basin_map_2d.png", dpi=300, bbox_inches="tight"); plt.close(fig)
+        fig.savefig(output / "03_basin_map_2d.png", dpi=300, bbox_inches="tight"); plt.close(fig)
         np.savez_compressed(output / "basin_map_data.npz", x=x, y=y, energy=energies, endpoints=endpoints)
     except Exception as error:
         (output / "basin_map_error.txt").write_text(f"PES skipped: {error}\n", encoding="utf-8")
@@ -407,7 +407,7 @@ def save_phonons(data, cases, output):
         ax.plot(group["mode"], group["frequency_meV"], marker="o", markersize=2.5, linewidth=1, label=f"{material} — {state}")
     ax.axhline(0, color="#222", linewidth=.8); ax.set(xlabel="Γ-point mode index", ylabel="Signed phonon energy (meV)", title="Local phonon stability near the threshold")
     ax.grid(alpha=.25); ax.legend(fontsize=6, ncol=2)
-    fig.savefig(output / "05_phonon_stability.png", dpi=300, bbox_inches="tight"); plt.close(fig)
+    fig.savefig(output / "04_phonon_stability.png", dpi=300, bbox_inches="tight"); plt.close(fig)
 
 
 def main():
