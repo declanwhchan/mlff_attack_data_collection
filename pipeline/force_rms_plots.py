@@ -1,0 +1,126 @@
+"""Four-model RMS-force summaries for post-attack relaxation analysis."""
+
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+
+RMS_MODELS = ("mace_mh", "uma", "dft_mace_mh", "dft_uma")
+
+
+def _rms_force_csv(path):
+    try:
+        data = pd.read_csv(path)
+        vectors = data[["fx", "fy", "fz"]].apply(
+            pd.to_numeric, errors="coerce"
+        ).to_numpy(float)
+    except Exception:
+        return np.nan
+    squared = np.sum(vectors ** 2, axis=1)
+    squared = squared[np.isfinite(squared)]
+    return float(np.sqrt(np.mean(squared))) if squared.size else np.nan
+
+
+def _artifact(row, column, filename):
+    value = row.get(column)
+    if value is not None and str(value).strip().lower() not in {"", "nan"}:
+        path = Path(str(value))
+        if path.is_file():
+            return path
+    path = Path(str(row.get("run_dir", ""))) / filename
+    return path if path.is_file() else None
+
+
+def _dft_rms_endpoints(path):
+    try:
+        values = pd.to_numeric(
+            pd.read_csv(path)["rms_force_eV_A"], errors="coerce"
+        ).dropna()
+    except Exception:
+        return np.nan, np.nan
+    if values.empty:
+        return np.nan, np.nan
+    return float(values.iloc[0]), float(values.iloc[-1])
+
+
+def add_post_attack_rms_columns(records):
+    """Add RMS force at attack and after subsequent relaxation."""
+    data = records.copy()
+    attacked, relaxed = [], []
+    for _, row in data.iterrows():
+        if str(row.get("calculator", "")).startswith("dft_"):
+            first, last = _dft_rms_endpoints(row.get("dft_ionic_steps_csv"))
+        else:
+            attack_path = _artifact(
+                row, "perturbed_force_csv", "perturbed_forces.csv"
+            )
+            final_path = _artifact(row, "after_force_csv", "after_forces.csv")
+            first = _rms_force_csv(attack_path) if attack_path else np.nan
+            last = _rms_force_csv(final_path) if final_path else np.nan
+        attacked.append(first)
+        relaxed.append(last)
+    data["post_attack_rms_force_ev_a"] = attacked
+    data["post_attack_relaxed_rms_force_ev_a"] = relaxed
+    return data
+
+
+def rms_value_getter(column):
+    """Adapt one per-record RMS value to the ranking violin interface."""
+    def getter(row):
+        try:
+            value = float(row.get(column))
+        except (TypeError, ValueError):
+            return None, f"Missing {column}"
+        if not np.isfinite(value) or value <= 0:
+            return None, f"Invalid {column}"
+        return np.asarray([value]), None
+    return getter
+
+
+def save_random_seed_rms_plots(records, output_dir, labels, colors):
+    """Save clean post-attack and post-relaxation four-model RMS curves."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    data = records[records["calculator"].isin(RMS_MODELS)].copy()
+    data["epsilon"] = pd.to_numeric(data.get("epsilon"), errors="coerce")
+    attacks = [name for name in ("FGSM", "I-FGSM", "PGD")
+               if name in set(data.get("attack_label", []))]
+    if not attacks:
+        attacks = ["all"]
+
+    figures = (
+        ("post_attack_rms_force_ev_a", "Post-attack RMS force (eV/$\\AA$)",
+         "rms_force_post_attack.png"),
+        ("post_attack_relaxed_rms_force_ev_a",
+         "Post-attack + relaxation RMS force (eV/$\\AA$)",
+         "rms_force_post_attack_relaxed.png"),
+    )
+    for column, ylabel, filename in figures:
+        subset = data[np.isfinite(pd.to_numeric(data[column], errors="coerce"))]
+        subset = subset[subset["epsilon"] > 0]
+        if subset.empty:
+            continue
+        fig, axes = plt.subplots(1, len(attacks), figsize=(4.3 * len(attacks), 3.5), squeeze=False)
+        for axis, attack in zip(axes[0], attacks):
+            panel = subset if attack == "all" else subset[subset["attack_label"] == attack]
+            for calculator in RMS_MODELS:
+                group = panel[panel["calculator"] == calculator]
+                summary = group.groupby("epsilon", as_index=False)[column].median().sort_values("epsilon")
+                if summary.empty:
+                    continue
+                axis.plot(summary["epsilon"], summary[column], marker="o", linewidth=2,
+                          markersize=4, color=colors[calculator], label=labels[calculator])
+            axis.set_title(attack if attack != "all" else "All attacks")
+            axis.set_xscale("log")
+            axis.set_yscale("log")
+            axis.set_xlabel("Epsilon (Å)")
+            axis.set_ylabel(ylabel)
+            axis.grid(True, which="both", alpha=0.28)
+        handles, legend_labels = axes[0][-1].get_legend_handles_labels()
+        if handles:
+            fig.legend(handles, legend_labels, loc="upper center", ncol=4, frameon=False)
+        fig.tight_layout(rect=(0, 0, 1, 0.84 if handles else 1))
+        fig.savefig(output_dir / filename, dpi=300, bbox_inches="tight", facecolor="white")
+        plt.close(fig)

@@ -13,7 +13,11 @@ import numpy as np
 import pandas as pd
 from ase.io import read as read_structure
 from load_dft import dft_coverage_table, load_dft_records
-from force_recovery import add_rms_force_metrics, make_rms_force_figures
+from force_rms_plots import (
+    RMS_MODELS,
+    add_post_attack_rms_columns,
+    rms_value_getter,
+)
 from run_tests import (
     coordination_by_atom,
     edge_jaccard_distance,
@@ -1107,6 +1111,7 @@ def ranking_force_delta_values(row, before_name, after_name):
             return finite_values, None
 
     return values, error
+
 
 
 def displacement_values(run_dir, before_name, after_name):
@@ -7786,8 +7791,8 @@ def main():
         ]
 
     records = pd.DataFrame(all_records)
+    records = add_post_attack_rms_columns(records)
 
-    records = add_rms_force_metrics(records)
     missing_rows = [
         {"reason": item}
         for item in all_missing
@@ -7847,16 +7852,25 @@ def main():
             args.mlff_ranking_highlight_epsilon_percent
         ),
     )
-    make_rms_force_figures(
-        epsilon_records,
-        args.output_dir / "mlffs_ranking",
-        MODEL_LABELS,
-        CALCULATOR_COLORS,
+
+
+    rms_records = epsilon_records[epsilon_records["calculator"].isin(RMS_MODELS)].copy()
+    rms_output_dir = args.output_dir / "mlffs_ranking" / "after_attack_after_relaxation"
+    save_mlff_ranking_violin_plot(
+        rms_records, rms_output_dir / "rms_force_post_attack.png",
+        "MLFF ranking: RMS force after attack", r"RMS force (eV/$\AA$)",
+        rms_value_getter("post_attack_rms_force_ev_a"), log_x=True,
+        highlight_epsilon_percent=args.mlff_ranking_highlight_epsilon_percent,
     )
-
-
-    make_convergence_figure(epsilon_records, args.output_dir)
+    save_mlff_ranking_violin_plot(
+        rms_records, rms_output_dir / "rms_force_post_attack_relaxed.png",
+        "MLFF ranking: RMS force after attack and relaxation",
+        r"RMS force (eV/$\AA$)",
+        rms_value_getter("post_attack_relaxed_rms_force_ev_a"), log_x=True,
+        highlight_epsilon_percent=args.mlff_ranking_highlight_epsilon_percent,
+    )
     # Component plots are intentionally disabled to reduce the
+    make_convergence_figure(epsilon_records, args.output_dir)
     # number and total size of generated image files.
     # make_lattice_axis_component_figures(
     #     epsilon_records,

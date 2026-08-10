@@ -16,7 +16,10 @@ import pandas as pd
 
 from load_dft import dft_coverage_table
 from ase.io import read as ase_read
-from force_recovery import add_rms_force_metrics, make_rms_force_figures
+from force_rms_plots import (
+    add_post_attack_rms_columns,
+    save_random_seed_rms_plots,
+)
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -3644,7 +3647,6 @@ def main():
                 )
 
     records = prepare_records(records)
-    records = add_rms_force_metrics(records)
 
     dft_coverage = dft_coverage_table(records)
     dft_coverage.to_csv(
@@ -3682,6 +3684,7 @@ def main():
             "Random-seed plotting added "
             f"{len(contour_records)} contour records."
         )
+    records = add_post_attack_rms_columns(records)
 
     records.to_csv(
         output_dir / "random_seed_combined.csv",
@@ -3700,14 +3703,14 @@ def main():
         records,
         output_dir / "random_seed_aggregate.csv",
     )
-
-    make_rms_force_figures(
+    save_random_seed_rms_plots(
         records,
         output_dir,
         MODEL_LABELS,
         COLORS,
-        prefix="seed_",
     )
+
+
 
     # Existing final-response figures.
     final_stage = "after_attack_after_relaxation"
