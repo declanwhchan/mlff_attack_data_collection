@@ -5,9 +5,13 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from ase.io import read as read_structure
 
 
 RMS_MODELS = ("mace_mh", "uma", "dft_mace_mh", "dft_uma")
+POST_ATTACK_RELAXED_RMS_FMAX_005_COLUMN = (
+    "post_attack_relaxed_rms_force_fmax_005_ev_a"
+)
 
 
 def _rms_force_csv(path):
@@ -45,6 +49,63 @@ def _dft_rms_endpoints(path):
     return float(values.iloc[0]), float(values.iloc[-1])
 
 
+def _rms_force_from_vectors(vectors):
+    vectors = np.asarray(vectors, dtype=float)
+    if vectors.ndim != 2 or vectors.shape[1] != 3:
+        return np.nan
+
+    squared = np.sum(vectors ** 2, axis=1)
+    squared = squared[np.isfinite(squared)]
+    return float(np.sqrt(np.mean(squared))) if squared.size else np.nan
+
+
+def _mlff_rms_at_fmax(path, fmax):
+    """Return RMS force at the first saved frame meeting ``fmax``."""
+    if path is None:
+        return np.nan
+
+    try:
+        trajectory = read_structure(path, index=":")
+    except Exception:
+        return np.nan
+
+    for atoms in trajectory:
+        try:
+            forces = np.asarray(atoms.get_forces(), dtype=float)
+        except Exception:
+            continue
+
+        norms = np.linalg.norm(forces, axis=1)
+        finite_norms = norms[np.isfinite(norms)]
+        if finite_norms.size != len(norms):
+            continue
+        if finite_norms.size and float(np.max(finite_norms)) <= fmax:
+            return _rms_force_from_vectors(forces)
+
+    return np.nan
+
+
+def _dft_rms_at_fmax(path, fmax):
+    """Return RMS force at the first DFT ionic step meeting ``fmax``."""
+    try:
+        data = pd.read_csv(path)
+        max_forces = pd.to_numeric(
+            data["max_force_eV_A"], errors="coerce"
+        )
+        rms_forces = pd.to_numeric(
+            data["rms_force_eV_A"], errors="coerce"
+        )
+    except Exception:
+        return np.nan
+
+    qualifying = data.loc[
+        (max_forces <= fmax) & np.isfinite(rms_forces),
+    ]
+    if qualifying.empty:
+        return np.nan
+
+    return float(rms_forces.loc[qualifying.index[0]])
+
 def add_post_attack_rms_columns(records):
     """Add RMS force at attack and after subsequent relaxation."""
     data = records.copy()
@@ -65,6 +126,29 @@ def add_post_attack_rms_columns(records):
     data["post_attack_relaxed_rms_force_ev_a"] = relaxed
     return data
 
+
+def add_post_attack_relaxed_rms_at_fmax_column(records, fmax):
+    """Add RMS forces at the first post-attack state converged to ``fmax``."""
+    data = records.copy()
+    values = []
+
+    for _, row in data.iterrows():
+        if str(row.get("calculator", "")).startswith("dft_"):
+            value = _dft_rms_at_fmax(
+                row.get("dft_ionic_steps_csv"),
+                fmax,
+            )
+        else:
+            trajectory_path = _artifact(
+                row,
+                "after_attack_relax_traj",
+                "after_attack_relaxation.traj",
+            )
+            value = _mlff_rms_at_fmax(trajectory_path, fmax)
+        values.append(value)
+
+    data[POST_ATTACK_RELAXED_RMS_FMAX_005_COLUMN] = values
+    return data
 
 def rms_value_getter(column):
     """Adapt one per-record RMS value to the ranking violin interface."""

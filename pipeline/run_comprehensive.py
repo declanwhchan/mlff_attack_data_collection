@@ -12,9 +12,11 @@ import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
 from ase.io import read as read_structure
-from load_dft import dft_coverage_table, load_dft_records
+from load_dft import dft_coverage_table, load_dft_records, read_dft_structure
 from force_rms_plots import (
+    POST_ATTACK_RELAXED_RMS_FMAX_005_COLUMN,
     RMS_MODELS,
+    add_post_attack_relaxed_rms_at_fmax_column,
     add_post_attack_rms_columns,
     rms_value_getter,
 )
@@ -1111,8 +1113,6 @@ def ranking_force_delta_values(row, before_name, after_name):
             return finite_values, None
 
     return values, error
-
-
 
 def displacement_values(run_dir, before_name, after_name):
     merged, reason = merge_atom_csvs(
@@ -5132,6 +5132,7 @@ def save_mlff_ranking_violin_plot(
     value_getter,
     log_x=False,
     highlight_epsilon_percent=5.0,
+    lower_clip_reference_models=None,
 ):
     """
     Create a vertical MLFF ranking violin plot.
@@ -5151,6 +5152,10 @@ def save_mlff_ranking_violin_plot(
     )
 
     data = data.copy()
+    lower_clip_reference_models = dict(
+        lower_clip_reference_models or {}
+    )
+    applied_lower_clip_floors = {}
 
     if not data.empty:
         data["value"] = pd.to_numeric(
@@ -5175,6 +5180,33 @@ def save_mlff_ranking_violin_plot(
             data = data.loc[
                 data["value"] > 0
             ].copy()
+
+        # Values below the minimum corresponding DFT reference are shown as
+        # at that residual-force floor. This prevents tiny relaxation
+        # residuals from stretching the logarithmic axis.
+        for calculator, reference_calculator in (
+            lower_clip_reference_models.items()
+        ):
+            reference_values = data.loc[
+                data["calculator"] == reference_calculator,
+                "value",
+            ]
+            if reference_values.empty:
+                continue
+
+            floor = float(reference_values.min())
+            if not np.isfinite(floor) or floor <= 0:
+                continue
+
+            model_mask = data["calculator"] == calculator
+            if not model_mask.any():
+                continue
+
+            data.loc[model_mask, "value"] = data.loc[
+                model_mask,
+                "value",
+            ].clip(lower=floor)
+            applied_lower_clip_floors[calculator] = floor
 
     if data.empty:
         fig, ax = plt.subplots(
@@ -5636,6 +5668,18 @@ def save_mlff_ranking_violin_plot(
         fontweight="semibold",
         pad=14,
     )
+
+    if applied_lower_clip_floors:
+        ax.text(
+            0.99,
+            0.02,
+            "MLFF values below the paired DFT minimum are clipped",
+            transform=ax.transAxes,
+            ha="right",
+            va="bottom",
+            fontsize=8.5,
+            color="#555555",
+        )
 
     all_values = np.concatenate(
         violin_values
@@ -7568,6 +7612,103 @@ def make_exact_min_lattice_figures_1_to_9(epsilon_records, output_dir):
     )
 
 
+def _direct_post_attack_traj(row):
+    run_dir = Path(str(row["run_dir"]))
+    saved = clean_value(row.get("after_attack_relax_traj"))
+    options = [Path(str(saved))] if saved is not None else []
+    if saved is not None and not Path(str(saved)).is_absolute():
+        options.append(run_dir / Path(str(saved)))
+    options.append(run_dir / "after_attack_relaxation.traj")
+    return next((path for path in options if path.is_file()), options[-1])
+
+
+def make_direct_comparison_figures(records, output_dir):
+    """Compare paired final MLFF and DFT post-attack relaxations."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    data = records.copy()
+    mlff = data[~data["calculator"].astype(str).str.startswith("dft_")]
+    dft = data[data["calculator"].astype(str).str.startswith("dft_")]
+    mlff_by_id = {str(row["run_id"]): row for _, row in mlff.iterrows()}
+    pairs, missing = [], []
+    for _, dft_row in dft.iterrows():
+        source_id = clean_value(dft_row.get("dft_source_run_id"))
+        source = mlff_by_id.get(str(source_id)) if source_id is not None else None
+        if source is None:
+            missing.append(f"No MLFF match for DFT run {dft_row.get('run_id')}")
+            continue
+        try:
+            mlff_atoms = read_structure(_direct_post_attack_traj(source), index=-1)
+            dft_atoms = read_dft_structure(Path(str(dft_row["dft_relaxed_structure"])), index=-1)
+            if len(mlff_atoms) != len(dft_atoms):
+                raise ValueError("atom-count mismatch")
+            displacement = np.linalg.norm(mlff_atoms.positions - dft_atoms.positions, axis=1)
+            mlff_edges = neighbor_edge_set(mlff_atoms)
+            dft_edges = neighbor_edge_set(dft_atoms)
+            mlff_cn = coordination_by_atom(mlff_edges, mlff_atoms)
+            dft_cn = coordination_by_atom(dft_edges, dft_atoms)
+            cn_delta = [abs(mlff_cn.get(atom, 0) - dft_cn.get(atom, 0)) for atom in set(mlff_cn) | set(dft_cn)]
+        except Exception as error:
+            missing.append(f"Could not calculate paired geometry for {source_id}: {error}")
+            continue
+        try:
+            mlff_force = pd.read_csv(Path(str(source["run_dir"])) / "after_forces.csv")[["fx", "fy", "fz"]].to_numpy(float)
+            dft_force = pd.read_csv(Path(str(dft_row["run_dir"])) / "after_forces.csv")[["fx", "fy", "fz"]].to_numpy(float)
+            rms_force = float(np.sqrt(np.mean(np.sum((mlff_force - dft_force) ** 2, axis=1)))) if mlff_force.shape == dft_force.shape else np.nan
+        except Exception:
+            rms_force = np.nan
+        mlff_steps, dft_steps = source.get("after_relax_steps"), dft_row.get("after_relax_steps")
+        pairs.append({
+            "run_id": source_id, "source_model": source["calculator"], "material_slug": source.get("material_slug"),
+            "attack_label": source.get("attack_label"), "epsilon": source.get("epsilon"), "n_steps": source.get("n_steps"),
+            "median_displacement_a": float(np.median(displacement)), "rms_force_difference_ev_a": rms_force,
+            "relaxation_step_difference": abs(float(mlff_steps) - float(dft_steps)) if pd.notna(mlff_steps) and pd.notna(dft_steps) else np.nan,
+            "neighbor_jaccard_distance": edge_jaccard_distance(mlff_edges, dft_edges),
+            "coordination_number_difference_max": float(max(cn_delta)) if cn_delta else 0.0,
+            "rdf_l1_distance": float(rdf_l1_distance(mlff_atoms, dft_atoms)),
+        })
+    pairs = pd.DataFrame(pairs)
+    pairs.to_csv(output_dir / "paired_mlff_dft_post_attack_relaxation.csv", index=False)
+    pd.DataFrame({"reason": missing}).to_csv(output_dir / "missing_pairs.csv", index=False)
+    metrics = [
+        ("median_displacement_a", r"Median displacement ($\AA$)"),
+        ("rms_force_difference_ev_a", r"RMS force difference (eV/$\AA$)"),
+        ("relaxation_step_difference", "Relaxation-step difference"),
+        ("neighbor_jaccard_distance", "Neighbor Jaccard distance"),
+        ("coordination_number_difference_max", "Maximum CN difference"),
+        ("rdf_l1_distance", "RDF L1 distance"),
+    ]
+    colors = {"mace_mh": "#8FC5E3", "uma": "#F1AC78", "chgnet": "#80CEB8", "mtp": "#D9A6C5", "mace_model": "#F3C969"}
+    def draw(ax, metric, label):
+        values = pairs[["source_model", metric]].copy() if metric in pairs else pd.DataFrame(columns=["source_model", metric])
+        values[metric] = pd.to_numeric(values[metric], errors="coerce")
+        values = values.replace([np.inf, -np.inf], np.nan).dropna()
+        models = [model for model in MODEL_ORDER if model in set(values["source_model"])]
+        for pos, model in enumerate(models):
+            sample = values.loc[values["source_model"] == model, metric].to_numpy(float)
+            if len(sample) > 1 and not np.allclose(sample, sample[0]):
+                body = ax.violinplot(sample, positions=[pos], widths=0.72, showextrema=False)["bodies"][0]
+                body.set_facecolor(colors.get(model, "#CCCCCC")); body.set_edgecolor("#555555"); body.set_alpha(0.72)
+            elif len(sample):
+                ax.scatter([pos], sample, s=30, color=colors.get(model, "#CCCCCC"), edgecolor="#555555", zorder=3)
+            if len(sample):
+                q1, med, q3 = np.percentile(sample, [25, 50, 75])
+                ax.vlines(pos, q1, q3, color="#4A4A4A", linewidth=3, zorder=4)
+                ax.scatter(pos, med, s=26, color="white", edgecolor="#4A4A4A", zorder=5)
+        ax.set_xticks(range(len(models))); ax.set_xticklabels([model_label(model) for model in models], rotation=16, ha="right")
+        ax.set_ylabel(label); ax.grid(axis="y", alpha=0.24); ax.set_axisbelow(True)
+    for metric, label in metrics:
+        fig, ax = plt.subplots(figsize=(5.6, 4.5), facecolor="white")
+        draw(ax, metric, label); ax.set_title(f"MLFF vs DFT: {label}", fontweight="semibold")
+        ax.set_xlabel("MLFF relaxed structure (paired with DFT)")
+        save_figure(fig, output_dir / f"{metric}.png"); plt.close(fig)
+    fig, axes = plt.subplots(2, 3, figsize=(13, 7.2), constrained_layout=True, facecolor="white")
+    for ax, (metric, label) in zip(axes.flat, metrics):
+        draw(ax, metric, label); ax.set_title(label, fontweight="semibold")
+    fig.suptitle("Post-attack + relaxation: paired MLFF vs DFT", fontsize=15, fontweight="semibold")
+    save_figure(fig, output_dir / "direct_comparison_six_metrics"); plt.close(fig)
+    return pairs, missing
+
 def main():
     global MODEL_ORDER
 
@@ -7792,6 +7933,10 @@ def main():
 
     records = pd.DataFrame(all_records)
     records = add_post_attack_rms_columns(records)
+    records = add_post_attack_relaxed_rms_at_fmax_column(
+        records,
+        fmax=0.05,
+    )
 
     missing_rows = [
         {"reason": item}
@@ -7832,6 +7977,11 @@ def main():
     make_space_group_figures(records, args.output_dir / "space_group")
     make_supercell_metadata(records, args.output_dir / "supercells")
 
+    direct_pairs, direct_missing = make_direct_comparison_figures(
+        records, args.output_dir.parent / "direct_comparison"
+    )
+    print(f"Saved {len(direct_pairs)} paired MLFF-vs-DFT comparisons to {args.output_dir.parent / 'direct_comparison'}")
+
     epsilon_records = records[
         ~records["run_id"].str.contains("_steps", regex=False)
     ].copy()
@@ -7864,10 +8014,15 @@ def main():
     )
     save_mlff_ranking_violin_plot(
         rms_records, rms_output_dir / "rms_force_post_attack_relaxed.png",
-        "MLFF ranking: RMS force after attack and relaxation",
+        "MLFF ranking: RMS force after attack and relaxation\n"
+        r"(first state with $f_{\max} \leq 0.05$ eV/$\AA$)",
         r"RMS force (eV/$\AA$)",
-        rms_value_getter("post_attack_relaxed_rms_force_ev_a"), log_x=True,
+        rms_value_getter(POST_ATTACK_RELAXED_RMS_FMAX_005_COLUMN), log_x=True,
         highlight_epsilon_percent=args.mlff_ranking_highlight_epsilon_percent,
+        lower_clip_reference_models={
+            "mace_mh": "dft_mace_mh",
+            "uma": "dft_uma",
+        },
     )
     # Component plots are intentionally disabled to reduce the
     make_convergence_figure(epsilon_records, args.output_dir)

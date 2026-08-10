@@ -112,6 +112,9 @@ sbatch run_<dataset>/contour_gpu.sh
 ```bash
 sbatch run_<dataset>/plot.sh
 
+# Run for faster generation of publication plots if plot.sh was initially completed
+sbatch run_<dataset>/good_plots.sh
+
 # Visualize initial atomic structures (OPTIONAL)
 sbatch run_<dataset>/visualize.sh
 ```
