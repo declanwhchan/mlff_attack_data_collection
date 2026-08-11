@@ -19,8 +19,9 @@ fi
 export MPLBACKEND=Agg
 export REPO_ROOT
 
-SCRATCH_COLLECTION_ROOT="${SCRATCH_COLLECTION_ROOT:-/scratch/$USER/mlff_attack_data_collection}"
-PROJECT_RESULTS_ROOT="${PROJECT_RESULTS_ROOT:-$SCRATCH_COLLECTION_ROOT/licohpf_database_results}"
+PROJECT_BASE="${PROJECT_OUTPUT_ROOT:-$REPO_ROOT}"
+PROJECT_RESULTS_ROOT="${PROJECT_RESULTS_ROOT:-$PROJECT_BASE/2d_structures_results}"
+
 
 OUTPUT_DIR="${OUTPUT_DIR:-$REPO_ROOT/presentation_visuals/contour_relaxation_checks}"
 FIGURE_PREFIX="${FIGURE_PREFIX:-contour_relaxation_checks}"
@@ -115,7 +116,7 @@ attack = read_rows(ATTACK_SUMMARY_FILES)
 attack_runs = read_rows(ATTACK_RUN_SUMMARY_FILES)
 contour = read_rows(CONTOUR_SUMMARY_FILES)
 
-if not attack_runs.empty:
+if not attack_runs.empty and not attack.empty:
     keep = [
         "run_id",
         "status",
@@ -132,15 +133,47 @@ if not attack_runs.empty:
 
     keep = [c for c in keep if c in attack_runs.columns]
 
-    attack = attack.merge(
-        attack_runs[keep],
-        on="run_id",
-        how="left",
-    )
+    if "run_id" not in attack.columns or "run_id" not in keep:
+        log("Cannot match attack runs: missing run_id")
+    else:
+        run_data = attack_runs[keep].drop_duplicates(
+            subset="run_id",
+            keep="last",
+        )
+        attack = attack.merge(
+            run_data,
+            on="run_id",
+            how="left",
+            suffixes=("", "_run"),
+        )
 
-    matched = attack["before_force_csv"].notna().sum()
-    print(f"Matched attack runs: {matched}/{len(attack)}")
+        for column in keep:
+            if column == "run_id":
+                continue
 
+            run_column = f"{column}_run"
+            if run_column not in attack.columns:
+                continue
+
+            if column in attack.columns:
+                attack[column] = attack[column].where(
+                    attack[column].map(clean) != "",
+                    attack[run_column],
+                )
+                attack.drop(columns=run_column, inplace=True)
+            else:
+                attack.rename(
+                    columns={run_column: column},
+                    inplace=True,
+                )
+
+before_force_csv = attack.get("before_force_csv")
+matched = (
+    before_force_csv.map(clean).ne("").sum()
+    if before_force_csv is not None
+    else 0
+)
+print(f"Matched attack runs: {matched}/{len(attack)}")
 if attack.empty and contour.empty:
     raise SystemExit("ERROR: no usable rows were loaded")
 
@@ -870,8 +903,8 @@ def plot_bar(name, grouped_vals, ylabel, title):
     bars = ax.bar(positions, means, color=colors, width=0.62, alpha=0.94)
     ax.set_xticks(positions)
     ax.set_xticklabels(labels)
-    ax.set_xlabel("Stress Tests")
-    ax.set_ylabel(ylabel)
+    ax.set_xlabel("Stress Tests", labelpad=18)
+    ax.set_ylabel(ylabel, labelpad=18)
     ax.set_title(title)
 
     ymax = 100.0 if "Converged" in ylabel else max([m for m in means if np.isfinite(m)] + [1.0]) * 1.25
@@ -895,7 +928,7 @@ def plot_bar(name, grouped_vals, ylabel, title):
     save_fig(fig, name)
 
 
-def plot_box(name, grouped_vals, ylabel, title, logy=False):
+def plot_box(name, grouped_vals, ylabel, title, logy=False, symlog=False):
     fig, ax = plt.subplots(figsize=(8, 6.8), facecolor="white")
     setup_ax(ax)
 
@@ -996,8 +1029,8 @@ def plot_box(name, grouped_vals, ylabel, title, logy=False):
     for i, vals in enumerate(series):
         if vals.size:
             jitter = rng.uniform(
-                -0.12,
-                0.12,
+                -0.18,
+                0.18,
                 size=len(vals),
             )
 
@@ -1055,11 +1088,16 @@ def plot_box(name, grouped_vals, ylabel, title, logy=False):
 
     ax.set_xticks(np.arange(1, len(labels) + 1))
     ax.set_xticklabels(labels)
-    ax.set_xlabel("Stress Tests")
-    ax.set_ylabel(ylabel)
+    ax.set_xlabel("Stress Tests", labelpad=18)
+    ax.set_ylabel(ylabel, labelpad=18)
     ax.set_title(title)
 
-    if logy and any(vals.size for vals in series):
+    if symlog and any(vals.size for vals in series):
+        ax.set_yscale("symlog", linthresh=1.0e-2, linscale=0.8)
+        ax.axhspan(-1.0e-2, 1.0e-2, color="#F2F2F2", zorder=0)
+        ax.text(0.01, 0.02, "linear near zero: identical/near-identical RDF bins",
+                transform=ax.transAxes, fontsize=8.5, color="#555555", va="bottom")
+    elif logy and any(vals.size for vals in series):
         ax.set_yscale("log")
 
         # Nice automatic major ticks.
@@ -1359,7 +1397,10 @@ for fname, ylabel, attack_keys, contour_keys in topology_specs:
         lambda row, keys=attack_keys: attack_metric(row, *keys),
         lambda row, keys=contour_keys: contour_metric(row, *keys),
     )
-    plot_box(fname, grouped_vals, ylabel, ylabel, logy=False)
+    plot_box(
+        fname, grouped_vals, ylabel, ylabel,
+        symlog=(fname == "06_topology_rdf"),
+    )
 
 print("Done.")
 
