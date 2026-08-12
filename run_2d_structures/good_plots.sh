@@ -60,6 +60,7 @@ echo "Generating presentation why-plots: $WHY_PLOTS_DIR"
     --project-root "$PROJECT_RESULTS" \
     --output-dir "$WHY_PLOTS_DIR" \
     --mace-mh-head "$MACE_MH_HEAD" \
+    --diagnostic-model uma \
     --with-pes \
     --with-phonons
 
@@ -67,12 +68,8 @@ for required_output in \
     "$RANDOM_SEED_DIR/random_seed_combined.csv" \
     "$WHY_PLOTS_DIR/01_material_attribution.png" \
     "$WHY_PLOTS_DIR/02_selected_anomaly_transitions.png" \
-    "$WHY_PLOTS_DIR/03_basin_map_2d_force_spike.png" \
     "$WHY_PLOTS_DIR/03_basin_map_2d_mlff_jaccard_dip.png" \
-    "$WHY_PLOTS_DIR/03_basin_map_2d_dft_jaccard_spike.png" \
-    "$WHY_PLOTS_DIR/04_phonon_stability_force_spike.png" \
-    "$WHY_PLOTS_DIR/04_phonon_stability_mlff_jaccard_dip.png" \
-    "$WHY_PLOTS_DIR/04_phonon_stability_dft_jaccard_spike.png"; do
+    "$WHY_PLOTS_DIR/04_phonon_stability_mlff_jaccard_dip.png"; do
     if [ ! -s "$required_output" ]; then
         echo "ERROR: Expected output was not created: $required_output"
         exit 1

@@ -1094,9 +1094,6 @@ def plot_box(name, grouped_vals, ylabel, title, logy=False, symlog=False):
 
     if symlog and any(vals.size for vals in series):
         ax.set_yscale("symlog", linthresh=1.0e-2, linscale=0.8)
-        ax.axhspan(-1.0e-2, 1.0e-2, color="#F2F2F2", zorder=0)
-        ax.text(0.01, 0.02, "linear near zero: identical/near-identical RDF bins",
-                transform=ax.transAxes, fontsize=8.5, color="#555555", va="bottom")
     elif logy and any(vals.size for vals in series):
         ax.set_yscale("log")
 
@@ -1392,15 +1389,53 @@ topology_specs = [
     ),
 ]
 
+topology_zero_groups = {}
+
 for fname, ylabel, attack_keys, contour_keys in topology_specs:
     grouped_vals = collect_grouped_values(
         lambda row, keys=attack_keys: attack_metric(row, *keys),
         lambda row, keys=contour_keys: contour_metric(row, *keys),
     )
+    topology_zero_groups[ylabel] = {
+        label: (np.nan if not values else 100.0 * np.mean(np.isclose(values, 0.0)))
+        for label, values in grouped_vals.items()
+    }
+
     plot_box(
         fname, grouped_vals, ylabel, ylabel,
         symlog=(fname == "06_topology_rdf"),
     )
+def plot_topology_zero_rate(metric_groups):
+    fig, ax = plt.subplots(figsize=(9.5, 6.8), facecolor="white")
+    setup_ax(ax)
+    labels = [label for label, _ in PLOT_GROUPS]
+    metrics = list(metric_groups)
+    colors = ["#4DAF4A", "#377EB8", "#984EA3"]
+    positions = np.arange(len(labels))
+    width = 0.24
+    for index, (metric, color) in enumerate(zip(metrics, colors)):
+        values = [metric_groups[metric].get(label, np.nan) for label in labels]
+        offset = (index - (len(metrics) - 1) / 2.0) * width
+        bars = ax.bar(positions + offset, values, width=width, color=color,
+                      alpha=0.94, label=metric)
+        for rect, value in zip(bars, values):
+            if np.isfinite(value):
+                ax.text(rect.get_x() + rect.get_width() / 2.0,
+                        min(value + 1.5, 98.0), f"{value:.1f}",
+                        ha="center", va="bottom", fontsize=10,
+                        fontweight="bold", color="#1F2328")
+    ax.set_xticks(positions)
+    ax.set_xticklabels(labels)
+    ax.set_xlabel("Stress Tests", labelpad=18)
+    ax.set_ylabel("Cases with zero distance/change (%)", labelpad=18)
+    ax.set_title("Unchanged topology after relaxation")
+    ax.set_ylim(0, 100)
+    ax.legend(frameon=False, loc="upper right")
+    save_fig(fig, "07_topology_zero_rate")
+
+
+plot_topology_zero_rate(topology_zero_groups)
+
 
 print("Done.")
 
