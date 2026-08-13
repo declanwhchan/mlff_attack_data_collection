@@ -6,7 +6,7 @@ import math
 import re
 
 import matplotlib.pyplot as plt
-from matplotlib.patches import Ellipse, FancyArrowPatch
+from matplotlib.patches import Ellipse, FancyArrowPatch, Patch, Polygon
 from matplotlib.ticker import MaxNLocator, ScalarFormatter, FuncFormatter, FixedLocator, NullLocator
 import matplotlib.ticker as mticker
 import numpy as np
@@ -5134,6 +5134,7 @@ def save_mlff_ranking_violin_plot(
     highlight_epsilon_percent=5.0,
     lower_clip_reference_models=None,
     symlog_y=False,
+    symlog_linthresh=1.0e-2,
 ):
     """
     Create a vertical MLFF ranking violin plot.
@@ -5701,15 +5702,40 @@ def save_mlff_ranking_violin_plot(
             all_values > 0
         ]
 
-    configure_violin_y_axis(
-        ax,
-        all_values,
-        log_scale=(log_x and not symlog_y),
-    )
-
     if symlog_y:
-        ax.set_yscale("symlog", linthresh=1.0e-2, linscale=0.8)
-        ax.axhspan(-1.0e-2, 1.0e-2, color="#F2F2F2", zorder=0)
+        positive_values = all_values[all_values > 0]
+
+        upper_limit = max(
+            1.0e-1,  # always include the 10^-1 decade
+            (
+                float(np.max(positive_values)) * 1.25
+                if positive_values.size
+                else symlog_linthresh * 10.0
+            ),
+        )
+
+        ax.set_yscale(
+            "symlog",
+            linthresh=symlog_linthresh,
+            linscale=0.8,
+        )
+        ax.set_ylim(0.0, upper_limit)
+        ax.yaxis.set_major_locator(
+            mticker.SymmetricalLogLocator(
+                base=10.0,
+                linthresh=symlog_linthresh,
+            )
+        )
+        ax.yaxis.set_major_formatter(
+            mticker.LogFormatterMathtext(base=10.0)
+        )
+        ax.yaxis.set_minor_locator(mticker.NullLocator())
+    else:
+        configure_violin_y_axis(
+            ax,
+            all_values,
+            log_scale=log_x,
+        )
     # Completely white background with no grid lines.
     ax.grid(False)
 
@@ -6075,6 +6101,8 @@ def make_mlff_rankings(
             ),
             # requested: log-scaled y-axis for final-stage violin rankings
             "log_x": True,
+            # Keep the zero-to-10^-1 region linear for this final RDF plot.
+            "symlog_linthresh": 1.0e-1,
         },
         {
             "filename": "coordination_change.png",
@@ -6115,6 +6143,7 @@ def make_mlff_rankings(
             highlight_epsilon_percent=highlight_epsilon_percent,
             log_x=metric.get("log_x", False),
             symlog_y=("rdf l1 distance" in metric["title"].lower()),
+            symlog_linthresh=metric.get("symlog_linthresh", 1.0e-2),
         )
 
     for metric in relaxed_metrics:
@@ -6127,6 +6156,7 @@ def make_mlff_rankings(
             highlight_epsilon_percent=highlight_epsilon_percent,
             log_x=metric.get("log_x", False),
             symlog_y=("rdf l1 distance" in metric["title"].lower()),
+            symlog_linthresh=metric.get("symlog_linthresh", 1.0e-2),
         )
 
 
@@ -7647,6 +7677,42 @@ def _direct_post_attack_traj(row):
     return next((path for path in options if path.is_file()), options[-1])
 
 
+def _direct_final_force_vectors(row):
+    """Load final force vectors from explicit or run-directory artifacts.
+
+    Comprehensive MLFF records may point to scratch-resolved force files via
+    ``after_force_csv``; DFT records retain the cached file under ``run_dir``.
+    The direct comparison must support both layouts.
+    """
+    run_dir = Path(str(row.get("run_dir", "")))
+    saved = clean_value(row.get("after_force_csv"))
+    options = []
+    if saved is not None:
+        saved_path = Path(str(saved))
+        options.append(saved_path)
+        if not saved_path.is_absolute():
+            options.append(run_dir / saved_path)
+    options.append(run_dir / "after_forces.csv")
+
+    for force_path in options:
+        if not force_path.is_file():
+            continue
+        try:
+            data = pd.read_csv(force_path)
+            vectors = data[["fx", "fy", "fz"]].apply(
+                pd.to_numeric, errors="coerce")
+            if "atom_index" in data:
+                vectors = vectors.assign(atom_index=pd.to_numeric(
+                    data["atom_index"], errors="coerce"
+                )).sort_values("atom_index")[["fx", "fy", "fz"]]
+            result = vectors.to_numpy(float)
+            if result.ndim == 2 and result.shape[1] == 3 and np.isfinite(result).all():
+                return result
+        except Exception:
+            continue
+    return None
+
+
 def make_direct_comparison_figures(records, output_dir):
     """Plot paired final MLFF--DFT differences against attack strength.
 
@@ -7682,12 +7748,15 @@ def make_direct_comparison_figures(records, output_dir):
         except Exception as error:
             missing.append(f"Could not calculate paired geometry for {source_id}: {error}")
             continue
-        try:
-            mlff_force = pd.read_csv(Path(str(source["run_dir"])) / "after_forces.csv")[["fx", "fy", "fz"]].to_numpy(float)
-            dft_force = pd.read_csv(Path(str(dft_row["run_dir"])) / "after_forces.csv")[["fx", "fy", "fz"]].to_numpy(float)
-            rms_force = float(np.sqrt(np.mean(np.sum((mlff_force - dft_force) ** 2, axis=1)))) if mlff_force.shape == dft_force.shape else np.nan
-        except Exception:
-            rms_force = np.nan
+        mlff_force = _direct_final_force_vectors(source)
+        dft_force = _direct_final_force_vectors(dft_row)
+        rms_force = (
+            float(np.sqrt(np.mean(np.sum((mlff_force - dft_force) ** 2, axis=1))))
+            if mlff_force is not None
+            and dft_force is not None
+            and mlff_force.shape == dft_force.shape
+            else np.nan
+        )
         mlff_steps, dft_steps = source.get("after_relax_steps"), dft_row.get("after_relax_steps")
         pairs.append({
             "run_id": source_id, "source_model": source["calculator"], "material_slug": source.get("material_slug"),
@@ -7704,7 +7773,7 @@ def make_direct_comparison_figures(records, output_dir):
     pd.DataFrame({"reason": missing}).to_csv(output_dir / "missing_pairs.csv", index=False)
     metrics = [
         ("median_displacement_a", r"Median displacement ($\AA$)"),
-        ("rms_force_difference_ev_a", r"RMS force difference (eV/$\AA$)"),
+        ("rms_force_difference_ev_a", r"RMS $\Delta$ force (eV/$\AA$)"),
         ("relaxation_step_difference", "Relaxation-step difference"),
         ("neighbor_jaccard_distance", "Neighbor Jaccard distance"),
         ("coordination_number_difference_max", "Maximum CN difference"),
@@ -7729,43 +7798,230 @@ def make_direct_comparison_figures(records, output_dir):
         & (line_data["epsilon_percent_min_lattice"] > 0)
     ].copy()
 
-    def draw(ax, metric, label):
+    panel_letters = "ABCDEF"
+
+    def save_normalized_agreement_heatmap():
+        """Summarise post-relaxation MLFF--DFT agreement in a compact matrix."""
+        heatmap_metrics = [
+            ("neighbor_jaccard_distance", "Jaccard distance"),
+            ("coordination_number_difference_max", "CN change"),
+            ("relaxation_step_difference", "Relaxation steps"),
+            ("rdf_l1_distance", "RDF distance"),
+            ("rms_force_difference_ev_a", r"RMS $\Delta$ force"),
+            ("median_displacement_a", "Displacement"),
+        ]
+        eps_min, eps_max = 1.0e-2, 5.0e2
+        targets = np.logspace(np.log10(eps_min), np.log10(eps_max), 10)
+        matrices = {}
+        for model in comparison_models:
+            model_data = line_data.loc[line_data["source_model"] == model].copy()
+            matrix = np.full((len(heatmap_metrics), len(targets)), np.nan)
+            if not model_data.empty:
+                log_distance = np.abs(
+                    np.log10(model_data["epsilon_percent_min_lattice"].to_numpy(float))[:, None]
+                    - np.log10(targets)[None, :]
+                )
+                nearest_bin = log_distance.argmin(axis=1)
+                model_data["epsilon_bin"] = nearest_bin
+                for metric_index, (metric, _) in enumerate(heatmap_metrics):
+                    numeric = pd.to_numeric(model_data[metric], errors="coerce")
+                    grouped = numeric.groupby(model_data["epsilon_bin"]).median()
+                    for bin_index, value in grouped.items():
+                        matrix[metric_index, int(bin_index)] = value
+            matrices[model] = matrix
+
+        # Normalise metric-by-metric over both MLFFs: the same colour and
+        # printed value therefore always mean the same relative disagreement.
+        normalised = {model: np.full_like(matrix, np.nan) for model, matrix in matrices.items()}
+        for metric_index in range(len(heatmap_metrics)):
+            combined = np.concatenate([
+                matrices[model][metric_index][np.isfinite(matrices[model][metric_index])]
+                for model in comparison_models
+            ])
+            if not combined.size:
+                continue
+            lower, upper = float(np.min(combined)), float(np.max(combined))
+            for model in comparison_models:
+                row = matrices[model][metric_index]
+                if np.isclose(lower, upper):
+                    normalised[model][metric_index] = np.where(np.isfinite(row), 0.0, np.nan)
+                else:
+                    normalised[model][metric_index] = (row - lower) / (upper - lower)
+
+        fig, ax = plt.subplots(figsize=(8.4, 5.8), facecolor="white")
+        colour_map = plt.colormaps["Blues"]
+        scalar_map = plt.cm.ScalarMappable(cmap=colour_map)
+        scalar_map.set_clim(0.0, 1.0)
+
+        # Each merged cell contains two directly comparable values: MACE in
+        # the upper-right triangle and UMA in the lower-left triangle.
+        for row in range(len(heatmap_metrics)):
+            for column in range(len(targets)):
+                for model, corners, text_position in (
+                    ("mace_mh", ((column - 0.5, row - 0.5), (column + 0.5, row - 0.5),
+                                 (column + 0.5, row + 0.5)), (column + 0.18, row - 0.18)),
+                    ("uma", ((column - 0.5, row - 0.5), (column - 0.5, row + 0.5),
+                             (column + 0.5, row + 0.5)), (column - 0.18, row + 0.18)),
+                ):
+                    value = normalised[model][row, column]
+                    face_colour = colour_map(value) if np.isfinite(value) else "#F1F5F9"
+                    ax.add_patch(Polygon(corners, closed=True, facecolor=face_colour,
+                                         edgecolor="white", linewidth=0.85))
+                    if np.isfinite(value):
+                        text_colour = "white" if value >= 0.58 else "#0F172A"
+                        ax.text(*text_position, f"{value:.2f}", ha="center", va="center",
+                                fontsize=8.4, fontweight="semibold", color=text_colour)
+
+        ax.set_xlim(-0.5, len(targets) - 0.5)
+        ax.set_ylim(len(heatmap_metrics) - 0.5, -0.5)
+        ax.set_aspect("auto")
+        ax.set_facecolor("white")
+        ax.set_xticks((0, 2, 4, 6, 9))
+        ax.set_xticklabels([r"$10^{-2}$", r"$10^{-1}$", r"$10^{0}$", r"$10^{1}$", r"$10^{2}$"],
+                           fontsize=12, color="#334155")
+        ax.set_yticks(np.arange(len(heatmap_metrics)))
+        ax.set_yticklabels([label for _, label in heatmap_metrics], fontsize=13)
+        ax.tick_params(axis="both", length=0)
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+        ax._preserve_manual_limits = True
+
+        fig.suptitle("MLFF--DFT agreement after perturbation + relaxation",
+                     x=0.10, y=0.975, ha="left", fontsize=20,
+                     fontweight="bold", color="#0F172A")
+        fig.legend(
+            handles=[
+                Patch(facecolor="#4B8CC0", label="MACE-MH, upper triangle"),
+                Patch(facecolor="#4B8CC0", label="UMA, lower triangle"),
+            ],
+            loc="upper right", bbox_to_anchor=(0.97, 0.982), ncol=2,
+            frameon=False, fontsize=11,
+        )
+        colourbar = fig.colorbar(scalar_map, ax=ax, fraction=0.036, pad=0.035)
+        colourbar.set_ticks([0.0, 0.5, 1.0])
+        colourbar.set_ticklabels(["0.0", "0.5", "1.0"])
+        colourbar.ax.tick_params(labelsize=11, length=0)
+        colourbar.set_label("Normalized difference", fontsize=12, color="#334155", labelpad=9)
+        colourbar.outline.set_visible(False)
+        fig.subplots_adjust(left=0.27, right=0.90, bottom=0.17, top=0.80)
+        fig.text(0.55, 0.075, r"$\epsilon$ strength (% min lattice parameter)",
+                 ha="center", fontsize=14, color="#334155")
+        save_figure(fig, output_dir / "direct_comparison_normalized_heatmap")
+        plt.close(fig)
+
+    def smooth_response(x, y, points=320, bandwidth_decades=0.16):
+        """Return a softly smoothed curve in log-epsilon space.
+
+        The smoother intentionally reports the broad response trend instead of
+        visually overemphasising individual epsilon-level jumps.
+        """
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
+        valid = np.isfinite(x) & np.isfinite(y) & (x > 0)
+        x, y = x[valid], y[valid]
+        if len(x) == 0:
+            return x, y
+        order = np.argsort(x)
+        log_x, y = np.log10(x[order]), y[order]
+        grid_log = np.linspace(log_x[0], log_x[-1], max(points, len(x)))
+        interpolated = np.interp(grid_log, log_x, y)
+        if len(x) > 2 and grid_log[-1] > grid_log[0]:
+            step = grid_log[1] - grid_log[0]
+            sigma = max(1.0, bandwidth_decades / step)
+            radius = int(np.ceil(3.0 * sigma))
+            offsets = np.arange(-radius, radius + 1, dtype=float)
+            kernel = np.exp(-0.5 * (offsets / sigma) ** 2)
+            kernel /= kernel.sum()
+            padded = np.pad(interpolated, radius, mode="edge")
+            interpolated = np.convolve(padded, kernel, mode="valid")
+        return 10 ** grid_log, interpolated
+
+    def draw(ax, metric, label, panel_letter=None):
+        """Draw two smooth central trends with an IQR ribbon for each model."""
         values = line_data[["source_model", "epsilon", "epsilon_percent_min_lattice", metric]].copy()
         values[metric] = pd.to_numeric(values[metric], errors="coerce")
         values = values.replace([np.inf, -np.inf], np.nan).dropna(subset=[metric])
         summary = values.groupby(["source_model", "epsilon"], as_index=False).agg(
             epsilon_percent_min_lattice=("epsilon_percent_min_lattice", "median"),
             value=(metric, "median"),
+            q25=(metric, lambda series: series.quantile(0.25)),
+            q75=(metric, lambda series: series.quantile(0.75)),
         )
+        plotted_y = []
         for model in comparison_models:
             series = summary.loc[summary["source_model"] == model].sort_values("epsilon")
             if series.empty:
                 continue
-            ax.plot(
-                series["epsilon_percent_min_lattice"], series["value"],
-                marker="o", markersize=4.5, linewidth=1.8,
-                color=colors[model], label=model_label(model),
-            )
-        apply_epsilon_axis(
-            ax, summary["epsilon_percent_min_lattice"].to_numpy(float),
-            axis_mode=EPSILON_AXIS_PERCENT,
-        )
-        ax.set_ylabel(label)
-        ax.grid(axis="y", alpha=0.24)
+            x = series["epsilon_percent_min_lattice"].to_numpy(float)
+            curve_x, median = smooth_response(x, series["value"].to_numpy(float))
+            _, q25 = smooth_response(x, series["q25"].to_numpy(float))
+            _, q75 = smooth_response(x, series["q75"].to_numpy(float))
+            lower, upper = np.minimum(q25, q75), np.maximum(q25, q75)
+            ax.fill_between(curve_x, lower, upper, color=colors[model], alpha=0.20,
+                            linewidth=0, zorder=1)
+            ax.plot(curve_x, median, linewidth=2.6, color=colors[model],
+                    label=model_label(model), solid_capstyle="round", zorder=2)
+            plotted_y.extend(lower.tolist())
+            plotted_y.extend(upper.tolist())
+        apply_epsilon_axis(ax, summary["epsilon_percent_min_lattice"].to_numpy(float),
+                           axis_mode=EPSILON_AXIS_PERCENT)
+        ax.xaxis.set_major_formatter(mticker.LogFormatterMathtext(base=10.0))
+        ax.set_ylabel(label, fontsize=14)
+        ax.set_xlabel(EPSILON_PERCENT_AXIS_LABELS[EPSILON_AXIS_PERCENT], fontsize=14)
+        ax.set_facecolor("white")
+        ax.grid(axis="y", visible=False)
+        # Decade guides make the common log-epsilon scale legible in every
+        # panel without adding visual noise from minor-grid lines.
+        for decade in ax.get_xticks():
+            if decade > 0:
+                ax.axvline(decade, color="#CBD5E1", linewidth=0.8,
+                           linestyle="--", alpha=0.72, zorder=0)
         ax.set_axisbelow(True)
-        ax.legend(loc="best")
+        ax.spines["left"].set_color("#64748B")
+        ax.spines["bottom"].set_color("#64748B")
+        ax.tick_params(axis="both", labelsize=12, length=4, width=0.9,
+                       color="#64748B", pad=4)
+        if plotted_y:
+            maximum = max(plotted_y)
+            minimum = min(plotted_y)
+            if minimum >= 0:
+                ax.set_ylim(0.0, maximum * 1.12 if maximum > 0 else 1.0)
+            else:
+                padding = 0.10 * (maximum - minimum)
+                ax.set_ylim(minimum - padding, maximum + padding)
+            ax._preserve_manual_limits = True
+        if panel_letter:
+            ax.text(0.01, 0.98, panel_letter, transform=ax.transAxes, ha="left", va="top",
+                    fontsize=12, fontweight="bold", color="#334155",
+                    bbox=dict(boxstyle="round,pad=0.22", facecolor="white", edgecolor="none", alpha=0.9))
 
     for metric, label in metrics:
-        fig, ax = plt.subplots(figsize=(5.6, 4.5), facecolor="white")
+        fig, ax = plt.subplots(figsize=(3.2, 5.1), facecolor="white")
+        fig.subplots_adjust(left=0.28, right=0.96, bottom=0.15, top=0.73)
         draw(ax, metric, label)
-        ax.set_title(f"Post-attack + relaxation: {label}", fontweight="semibold")
+        handles, labels = ax.get_legend_handles_labels()
+        fig.legend(handles, labels, loc="upper center", ncol=2,
+                   bbox_to_anchor=(0.5, 0.995), frameon=False, fontsize=14)
+        ax.set_title(f"Post-attack + relaxation: {label}", pad=25,
+                     fontsize=16, fontweight="semibold")
         save_figure(fig, output_dir / f"{metric}.png")
         plt.close(fig)
-    fig, axes = plt.subplots(2, 3, figsize=(13, 7.2), constrained_layout=True, facecolor="white")
-    for ax, (metric, label) in zip(axes.flat, metrics):
-        draw(ax, metric, label)
-        ax.set_title(label, fontweight="semibold")
-    fig.suptitle("Post-attack + relaxation: MLFF--DFT difference vs epsilon strength", fontsize=15, fontweight="semibold")
+
+    save_normalized_agreement_heatmap()
+
+    fig, axes = plt.subplots(2, 3, figsize=(6.9, 7.8), facecolor="white")
+    fig.subplots_adjust(left=0.06, right=0.985, bottom=0.09, top=0.84, wspace=0.15, hspace=0.24)
+    for index, (ax, (metric, label)) in enumerate(zip(axes.flat, metrics)):
+        draw(ax, metric, label, panel_letters[index])
+        ax.set_title(label, loc="left", pad=10, fontsize=14,
+                     fontweight="semibold", color="#0F172A")
+    handles, labels = axes.flat[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper right", ncol=2, bbox_to_anchor=(0.982, 0.99),
+               frameon=False, fontsize=13)
+    fig.suptitle("Post-attack relaxation agreement with DFT", x=0.055, y=0.985,
+                 ha="left", fontsize=19, fontweight="bold", color="#0F172A")
+    fig.text(0.055, 0.942, "Smooth median trend | shaded ribbon = interquartile range",
+             ha="left", va="top", fontsize=12, color="#475569")
     save_figure(fig, output_dir / "direct_comparison_six_metrics")
     plt.close(fig)
     return pairs, missing
@@ -8084,6 +8340,7 @@ def main():
             "mace_mh": "dft_mace_mh",
             "uma": "dft_uma",
         },
+        symlog_y=True,
     )
     # Component plots are intentionally disabled to reduce the
     make_convergence_figure(epsilon_records, args.output_dir)

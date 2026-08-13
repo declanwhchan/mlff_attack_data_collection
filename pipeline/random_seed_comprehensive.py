@@ -123,7 +123,7 @@ TOPOLOGY_METRICS = [
     ),
     (
         "rdf_l1_distance",
-        "RDF L1 distance (Å)",
+        "RDF L1 distance (Ã…)",
     ),
     (
         "coordination_change_max",
@@ -1101,6 +1101,7 @@ def prepare_records(records):
         "attack_label",
         "epsilon",
         "epsilon_percent_displacement",
+        "n_steps",
         "run_dir",
         "seed",
     ]
@@ -1112,21 +1113,9 @@ def prepare_records(records):
         if column not in data.columns:
             data[column] = np.nan
 
-    run_ids = (
-        data["run_id"]
-        .fillna("")
-        .astype(str)
-    )
-
-    data = data[
-        ~run_ids.str.contains(
-            "_steps",
-            regex=False,
-        )
-    ].copy()
-
-    # Retain every valid available row. Missing models, attacks and
-    # epsilon values are allowed.
+    # Retain every valid available row, including the ``_stepsNNN``
+    # run IDs used by iterative attacks. Those are distinct attack cases,
+    # not auxiliary records.
     valid_calculators = set(
         CALCULATORS
     )
@@ -1161,6 +1150,8 @@ def prepare_records(records):
     data["epsilon_percent_displacement"] = numeric(
         data["epsilon_percent_displacement"]
     )
+
+    data["n_steps"] = numeric(data["n_steps"]).fillna(1.0)
 
     stage_results = [
         calculate_stage_metrics(row)
@@ -1303,6 +1294,11 @@ def topology_metrics_for_stage(stage):
 def seed_curves(records, metric):
     clean = records.copy()
 
+    if "n_steps" not in clean.columns:
+        clean["n_steps"] = 1.0
+    else:
+        clean["n_steps"] = numeric(clean["n_steps"]).fillna(1.0)
+
     clean[metric] = numeric(
         clean[metric]
     )
@@ -1348,6 +1344,7 @@ def seed_curves(records, metric):
                 "calculator",
                 "attack_label",
                 "epsilon",
+                "n_steps",
             ],
             as_index=False,
         )
@@ -1366,7 +1363,7 @@ def seed_curves(records, metric):
             ),
         )
         .sort_values(
-            "epsilon"
+            ["epsilon", "n_steps"]
         )
     )
 
@@ -1382,6 +1379,7 @@ def aggregate_curves(curves):
         "calculator",
         "attack_label",
         "epsilon",
+        "n_steps",
         "epsilon_percent_displacement",
         "median",
         "q25",
@@ -1401,6 +1399,7 @@ def aggregate_curves(curves):
             "calculator",
             "attack_label",
             "epsilon",
+            "n_steps",
         ],
         dropna=False,
     ):
@@ -1422,6 +1421,7 @@ def aggregate_curves(curves):
             "calculator": key[0],
             "attack_label": key[1],
             "epsilon": float(key[2]),
+            "n_steps": float(key[3]),
             "epsilon_percent_displacement": float(
                 np.median(epsilon_percent)
             ),
@@ -1531,6 +1531,16 @@ def configure_y_axis(
         )
         return
 
+    if scale == "unit_interval":
+        # Jaccard distance and the normalized maximum coordination-number
+        # change are bounded metrics. A linear axis keeps zero-valued cases
+        # visible and gives the requested decimal tick labels.
+        ax.set_yscale("linear")
+        ax.set_ylim(0.0, 1.0)
+        ax.set_yticks(np.arange(0.0, 1.01, 0.2))
+        ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.1f"))
+        return
+
     if scale == "log":
         positive = values[
             values > 0
@@ -1614,6 +1624,114 @@ def configure_y_axis(
         )
 
 
+def configure_rdf_l1_axis(ax, values):
+    """Configure an RDF L1 axis without hiding zeros or tiny distances.
+
+    RDF L1 distances regularly include exact zeros alongside much larger
+    values. A plain logarithmic axis masks the zeros, and the former fixed
+    lower bound (10^-3) also clipped legitimate small values. Symlog keeps a
+    readable linear region near zero while preserving dynamic range above it.
+    """
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+
+    positive = values[values > 0]
+    maximum = float(np.max(positive)) if positive.size else 1.0
+
+    # Put the lower quarter of non-zero observations in the linear region.
+    # This makes close DFT/MLFF curves at larger attack strengths legible
+    # without discarding the very small RDF distances.
+    linthresh = (
+        max(
+            float(np.percentile(positive, 25)),
+            maximum * 1e-6,
+            1e-12,
+        )
+        if positive.size
+        else 1e-12
+    )
+
+    upper_limit = maximum * 1.12 if maximum > 0 else 1.0
+
+    ax.set_yscale(
+        "symlog",
+        linthresh=linthresh,
+        linscale=1.2,
+        base=10.0,
+    )
+    ax.set_ylim(0.0, upper_limit)
+
+    # When every value is in the linear portion, use ordinary evenly spaced
+    # labels. Otherwise, show the symlog decades explicitly, including zero.
+    if upper_limit <= linthresh * 1.001:
+        ax.yaxis.set_major_locator(
+            mticker.MaxNLocator(nbins=5, min_n_ticks=4)
+        )
+        ax.yaxis.set_major_formatter(
+            mticker.ScalarFormatter(useMathText=True)
+        )
+    else:
+        ax.yaxis.set_major_locator(
+            mticker.SymmetricalLogLocator(
+                base=10.0,
+                linthresh=linthresh,
+                subs=(1.0,),
+            )
+        )
+        ax.yaxis.set_major_formatter(
+            mticker.LogFormatterMathtext(
+                base=10.0,
+                labelOnlyBase=False,
+                linthresh=linthresh,
+            )
+        )
+        ax.yaxis.set_minor_locator(
+            mticker.SymmetricalLogLocator(
+                base=10.0,
+                linthresh=linthresh,
+                subs=(2.0, 5.0),
+            )
+        )
+
+    ax.yaxis.set_minor_formatter(mticker.NullFormatter())
+
+    for line in list(ax.lines):
+        if line.get_gid() == "rdf-zero-reference":
+            line.remove()
+
+    zero_line = ax.axhline(
+        0.0,
+        color="#888888",
+        linewidth=0.65,
+        alpha=0.45,
+        zorder=0,
+    )
+    zero_line.set_gid("rdf-zero-reference")
+
+def smooth_seed_summary(x, y, points=320, bandwidth_decades=0.16):
+    """Smooth an aggregate curve in log-strength space for display only."""
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    valid = np.isfinite(x) & np.isfinite(y) & (x > 0)
+    x, y = x[valid], y[valid]
+    if len(x) < 2:
+        return x, y
+    order = np.argsort(x)
+    log_x, y = np.log10(x[order]), y[order]
+    grid_log = np.linspace(log_x[0], log_x[-1], max(points, len(x)))
+    trend = np.interp(grid_log, log_x, y)
+    if len(x) > 2 and grid_log[-1] > grid_log[0]:
+        step = grid_log[1] - grid_log[0]
+        sigma = max(1.0, bandwidth_decades / step)
+        radius = int(np.ceil(3.0 * sigma))
+        offsets = np.arange(-radius, radius + 1, dtype=float)
+        kernel = np.exp(-0.5 * (offsets / sigma) ** 2)
+        kernel /= kernel.sum()
+        trend = np.convolve(
+            np.pad(trend, radius, mode="edge"), kernel, mode="valid"
+        )
+    return 10 ** grid_log, trend
+
 def draw_metric_panel(
     ax,
     records,
@@ -1650,71 +1768,17 @@ def draw_metric_panel(
             "#777777",
         )
 
-        for seed, seed_data in (
-            calculator_curves.groupby(
-                "seed"
+        raw = calculator_curves.replace([np.inf, -np.inf], np.nan).dropna(
+            subset=["epsilon_percent_displacement", "value"]
+        )
+        raw = raw[raw["epsilon_percent_displacement"] > 0]
+        if not raw.empty:
+            ax.scatter(
+                raw["epsilon_percent_displacement"], raw["value"],
+                s=17, color=color, alpha=0.46, edgecolors="white",
+                linewidths=0.35, zorder=3,
             )
-        ):
-            seed_data = (
-                seed_data.sort_values(
-                    "epsilon_percent_displacement"
-                )
-                .replace(
-                    [np.inf, -np.inf],
-                    np.nan,
-                )
-                .dropna(
-                    subset=[
-                        "epsilon_percent_displacement",
-                        "value",
-                    ]
-                )
-            )
-
-            seed_data = seed_data[
-                seed_data[
-                    "epsilon_percent_displacement"
-                ] > 0
-            ]
-
-            if seed_data.empty:
-                continue
-
-            seed_number = int(
-                seed
-            )
-
-            linestyle, marker = (
-                SEED_STYLES.get(
-                    seed_number,
-                    ("-", "o"),
-                )
-            )
-
-            x = seed_data[
-                "epsilon_percent_displacement"
-            ].to_numpy(dtype=float)
-
-            y = seed_data[
-                "value"
-            ].to_numpy(dtype=float)
-
-            ax.plot(
-                x,
-                y,
-                color=color,
-                linestyle=linestyle,
-                marker=marker,
-                markersize=2.6,
-                markeredgewidth=0.3,
-                linewidth=0.9,
-                alpha=0.38,
-                zorder=2,
-            )
-
-            plotted.extend(
-                y.tolist()
-            )
+            plotted.extend(raw["value"].tolist())
 
         summary = aggregate[
             aggregate["calculator"]
@@ -1763,19 +1827,22 @@ def draw_metric_panel(
             "q75"
         ].to_numpy(dtype=float)
 
+        smooth_x, smooth_center = smooth_seed_summary(x, center)
+        _, smooth_q25 = smooth_seed_summary(x, q25)
+        _, smooth_q75 = smooth_seed_summary(x, q75)
         ax.fill_between(
-            x,
-            q25,
-            q75,
+            smooth_x,
+            np.minimum(smooth_q25, smooth_q75),
+            np.maximum(smooth_q25, smooth_q75),
             color=color,
-            alpha=0.14,
+            alpha=0.18,
             linewidth=0,
             zorder=1,
         )
 
         ax.plot(
-            x,
-            center,
+            smooth_x,
+            smooth_center,
             color=color,
             linewidth=2.25,
             zorder=4,
@@ -1859,58 +1926,16 @@ def draw_metric_panel(
 
 
 def figure_legend(records):
-    present_calculators = set(
-        records["calculator"]
-        .dropna()
-        .astype(str)
-    )
-
-    present_seeds = set(
-        pd.to_numeric(
-            records["seed"],
-            errors="coerce",
-        )
-        .dropna()
-        .astype(int)
-    )
-
+    present_calculators = set(records["calculator"].dropna().astype(str))
     model_handles = [
         Line2D(
-            [0],
-            [0],
-            color=COLORS.get(
-                calculator,
-                "#777777",
-            ),
-            linewidth=2.7,
-            label=model_label(calculator),
+            [0], [0], color=COLORS.get(calculator, "#777777"),
+            linewidth=2.7, label=model_label(calculator),
         )
         for calculator in CALCULATORS
         if calculator in present_calculators
     ]
-
-    seed_handles = [
-        Line2D(
-            [0],
-            [0],
-            color="#555555",
-            linestyle=SEED_STYLES.get(
-                seed,
-                ("-", "o"),
-            )[0],
-            marker=SEED_STYLES.get(
-                seed,
-                ("-", "o"),
-            )[1],
-            markersize=4,
-            linewidth=1,
-            label=f"Seed {seed}",
-        )
-        for seed in sorted(present_seeds)
-    ]
-
-    return model_handles, seed_handles
-
+    return model_handles, []
 
 def make_metric_figure(
     records,
@@ -1985,7 +2010,7 @@ def make_metric_figure(
                 )
 
             ax.set_xlabel(
-                "ε strength (% min lattice parameter)",
+                "Îµ strength (% min lattice parameter)",
                 labelpad=6,
             )
 
@@ -2010,7 +2035,7 @@ def make_metric_figure(
                 zorder=10,
             )
 
-    model_legend_handles, seed_legend_handles = figure_legend(
+    model_legend_handles, _ = figure_legend(
         records
     )
 
@@ -2029,47 +2054,6 @@ def make_metric_figure(
             title="Models",
             title_fontsize=9.0,
         )
-
-    if seed_legend_handles:
-        fig.legend(
-            handles=seed_legend_handles,
-            loc="upper center",
-            ncol=3,
-            frameon=False,
-            bbox_to_anchor=(0.75, 0.955),
-            fontsize=8.2,
-            handlelength=2.2,
-            columnspacing=1.2,
-            handletextpad=0.5,
-            borderaxespad=0.0,
-            title="Seeds",
-            title_fontsize=9.0,
-        )
-
-    uses_symlog = any(
-        scale == "symlog"
-        for scale in panel_scales.values()
-    )
-
-    note = (
-        "Thin lines: individual seeds; "
-        "shading: interquartile range; "
-        "contour x-axis: measured displacement"
-    )
-
-    if uses_symlog:
-        note += (
-            "; force panels use a logarithmic scale"
-        )
-
-    fig.text(
-        0.5,
-        0.014,
-        note,
-        ha="center",
-        fontsize=8.5,
-        color="#555555",
-    )
 
     fig.tight_layout(
         rect=[
@@ -2104,6 +2088,156 @@ def make_metric_figure(
 
     plt.close(fig)
 
+
+def configure_bubble_rdf_axis(ax, values):
+    """Keep negligible RDF values in a readable near-zero symlog region."""
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    positive = values[values > 0]
+    upper = float(np.max(positive)) * 1.15 if positive.size else 1.0
+
+    ax.set_yscale("symlog", linthresh=1e-2, linscale=1.0, base=10.0)
+    ax.set_ylim(0.0, max(upper, 1e-2 * 1.15))
+    ax.yaxis.set_major_locator(
+        mticker.SymmetricalLogLocator(base=10.0, linthresh=1e-2)
+    )
+    ax.yaxis.set_major_formatter(
+        mticker.LogFormatterMathtext(base=10.0, labelOnlyBase=False, linthresh=1e-2)
+    )
+    ax.yaxis.set_minor_formatter(mticker.NullFormatter())
+    ax.axhline(0.0, color="#888888", linewidth=0.65, alpha=0.45, zorder=0)
+
+def draw_bubble_metric_panel(ax, records, metric, attack, y_scale="linear"):
+    """Draw one attack panel with seed variability encoded as bubbles."""
+    curves = seed_curves(records, metric)
+    curves = curves[curves["attack_label"] == attack].copy()
+    aggregate = aggregate_curves(curves)
+    plotted, spreads, summaries = [], [], []
+
+    for calculator in CALCULATORS:
+        summary = aggregate[aggregate["calculator"] == calculator].sort_values(
+            "epsilon_percent_displacement"
+        )
+        summary = summary.replace([np.inf, -np.inf], np.nan).dropna(
+            subset=["epsilon_percent_displacement", "median", "q25", "q75"]
+        )
+        summary = summary[summary["epsilon_percent_displacement"] > 0].copy()
+        if summary.empty:
+            continue
+        summary["spread"] = (summary["q75"] - summary["q25"]).abs()
+        summaries.append((calculator, summary))
+        plotted.extend(summary[["median", "q25", "q75"]].to_numpy().ravel())
+        spreads.extend(summary["spread"].tolist())
+
+    finite_spreads = np.asarray(spreads, dtype=float)
+    finite_spreads = finite_spreads[np.isfinite(finite_spreads)]
+    max_spread = float(np.max(finite_spreads)) if finite_spreads.size else 0.0
+    for calculator, summary in summaries:
+        color = COLORS.get(calculator, "#777777")
+        x = summary["epsilon_percent_displacement"].to_numpy(dtype=float)
+        y = summary["median"].to_numpy(dtype=float)
+        if max_spread > 0:
+            bubble_area = 70.0 + 650.0 * np.clip(
+                summary["spread"].to_numpy(dtype=float) / max_spread, 0.0, 1.0
+            )
+        else:
+            bubble_area = np.full(len(summary), 120.0)
+        ax.scatter(x, y, s=bubble_area, color=color, alpha=0.14,
+                   edgecolors=color, linewidths=0.8, zorder=2)
+        ax.scatter(x, y, s=22, color=color, edgecolors="white",
+                   linewidths=0.45, zorder=4)
+
+    if not summaries:
+        ax.text(0.5, 0.5, "No matched seed data", transform=ax.transAxes,
+                ha="center", va="center", color="#555555")
+    positive_x = numeric(curves["epsilon_percent_displacement"]).dropna()
+    if len(positive_x[positive_x > 0]):
+        ax.set_xscale("log")
+    if y_scale == "rdf_symlog":
+        configure_bubble_rdf_axis(ax, plotted)
+    else:
+        configure_y_axis(ax, plotted, scale=y_scale)
+    ax.set_title(attack, pad=7)
+    ax.grid(True, which="major", alpha=0.24, linewidth=0.7)
+    ax.grid(True, which="minor", alpha=0.08, linewidth=0.45)
+    ax.tick_params(axis="both", labelsize=8)
+
+
+def make_bubble_metric_figure(records, metrics, output_path, title, panel_scales=None):
+    """Save a random-seed summary as bubbles, with no seed-trace lines."""
+    panel_scales = dict(panel_scales or {})
+    attacks = ADVERSARIAL_ATTACKS
+    fig, axes = plt.subplots(len(metrics), len(attacks),
+                             figsize=(13.6, max(4.2, 2.75 * len(metrics))),
+                             squeeze=False)
+    fig.suptitle(title, fontsize=14, fontweight="bold", y=0.99)
+    for row, (metric, ylabel) in enumerate(metrics):
+        for column, attack in enumerate(attacks):
+            ax = axes[row, column]
+            panel_label = chr(ord("A") + row * len(attacks) + column)
+            draw_bubble_metric_panel(ax, records, metric, attack,
+                                     panel_scales.get(panel_label, "linear"))
+            if column == 0:
+                ax.set_ylabel(ylabel, labelpad=7)
+            ax.set_xlabel("Epsilon (% min lattice parameter)", labelpad=6)
+            ax.text(0.018, 0.965, panel_label, transform=ax.transAxes,
+                    ha="left", va="top", fontsize=9, fontweight="bold",
+                    bbox={"facecolor": "white", "edgecolor": "none",
+                          "alpha": 0.82, "pad": 1.5}, zorder=10)
+
+    model_handles, _ = figure_legend(records)
+    if model_handles:
+        fig.legend(handles=model_handles, loc="upper center",
+                   ncol=min(4, len(model_handles)), frameon=False,
+                   bbox_to_anchor=(0.5, 0.965), fontsize=8.5,
+                   title="Model", title_fontsize=9.0)
+    fig.text(0.5, 0.012,
+             "Dot: median across seeds; bubble area: seed interquartile range",
+             ha="center", fontsize=8.5, color="#555555")
+    fig.tight_layout(rect=[0.035, 0.04, 0.995, 0.90], h_pad=2.0, w_pad=1.8)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=300, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+
+
+def save_bubble_plots(records, output_dir):
+    """Export final post-attack/relaxation random-seed bubble plots."""
+    output_dir = Path(output_dir) / "bubble_plots"
+    final_stage = "after_attack_after_relaxation"
+    metrics = physical_metrics(final_stage) + topology_metrics_for_stage(final_stage)
+    scales = {
+        **{letter: "symlog" for letter in "DEF"},
+        **{letter: "unit_interval" for letter in "JKLPQR"},
+        **{letter: "rdf_symlog" for letter in "MNO"},
+    }
+    make_bubble_metric_figure(
+        records, metrics,
+        output_dir / "seed_response_comprehensive_after_attack_after_relaxation_bubble.png",
+        "Random-seed bubble comparison: after attack and relaxation",
+        panel_scales=scales,
+    )
+    topology = {
+        stage_column(final_stage, "neighbor_jaccard_distance"),
+        stage_column(final_stage, "rdf_l1_distance"),
+        stage_column(final_stage, "coordination_change_max"),
+    }
+    for metric, label in metrics:
+        slug = metric.split("__", 1)[-1]
+        if "delta_force" in metric:
+            metric_scales = {letter: "symlog" for letter in "ABC"}
+        elif metric == stage_column(final_stage, "rdf_l1_distance"):
+            metric_scales = {letter: "rdf_symlog" for letter in "ABC"}
+        elif metric in topology:
+            metric_scales = {letter: "unit_interval" for letter in "ABC"}
+        else:
+            metric_scales = {}
+        make_bubble_metric_figure(
+            records, [(metric, label)],
+            output_dir / f"seed_response_{slug}_after_attack_after_relaxation_bubble.png",
+            f"Random-seed bubble comparison: {label} after attack and relaxation",
+            panel_scales=metric_scales,
+        )
 
 def write_aggregate_table(records, output_path):
     tables = []
@@ -2188,12 +2322,12 @@ def save_exact_random_seed_panels(fig):
         value = value.strip().lower()
 
         replacements = {
-            "Δ": "delta",
-            "δ": "delta",
-            "Å": "angstrom",
-            "å": "angstrom",
-            "²": "2",
-            "³": "3",
+            "Î”": "delta",
+            "Î´": "delta",
+            "Ã…": "angstrom",
+            "Ã¥": "angstrom",
+            "Â²": "2",
+            "Â³": "3",
         }
 
         for old, new in replacements.items():
@@ -2607,7 +2741,7 @@ def save_exact_random_seed_panels(fig):
         )
 
         axis.set_xlabel(
-            "ε strength (% min lattice parameter)",
+            "Îµ strength (% min lattice parameter)",
             labelpad=7,
         )
 
@@ -2623,26 +2757,10 @@ def save_exact_random_seed_panels(fig):
                 scale=axis.get_yscale(),
             )
 
-        # RDF standalone exports retain the comprehensive figure's 10^-13 floor.
+        # RDF panels use the same zero-safe symlog treatment as the
+        # comprehensive figure, so extracted panels cannot clip tiny values.
         if "rdf" in row_metric_names[row_index].lower():
-            positive_rdf_values = panel_values[panel_values > 0]
-            rdf_upper_limit = 1e-2
-
-            if positive_rdf_values.size:
-                rdf_upper_limit = max(
-                    rdf_upper_limit,
-                    10 ** math.ceil(math.log10(float(np.max(positive_rdf_values)))),
-                )
-
-            axis.set_yscale("log")
-            axis.set_ylim(1e-13, rdf_upper_limit)
-            axis.yaxis.set_major_locator(
-                mticker.LogLocator(base=10.0, subs=(1.0, 2.0, 5.0), numticks=8)
-            )
-            axis.yaxis.set_major_formatter(
-                mticker.LogFormatterMathtext(base=10.0, labelOnlyBase=False)
-            )
-            axis.yaxis.set_minor_formatter(mticker.NullFormatter())
+            configure_rdf_l1_axis(axis, panel_values)
         # Standalone linear panels must include every visible seed and
         # IQR value. The general helper uses robust percentiles, which
         # is useful for comprehensive figures but can crop the largest
@@ -3115,9 +3233,9 @@ def harmonize_random_seed_axes(fig):
             "force" in row_label
             and (
                 "delta" in row_label
-                or "Δ" in row_label
+                or "Î”" in row_label
                 or "\u0394" in row_label
-                or "δ" in row_label
+                or "Î´" in row_label
                 or "\u03b4" in row_label
             )
         )
@@ -3335,37 +3453,10 @@ def harmonize_random_seed_axes(fig):
                 )
 
         elif is_rdf:
-            upper_limit = 1e-2
-
-            if positive_y.size:
-                upper_limit = max(
-                    upper_limit,
-                    10 ** math.ceil(
-                        math.log10(
-                            float(np.max(positive_y))
-                        )
-                    ),
-                )
-
+            # Apply one scale across the full RDF row, including Contour,
+            # so no panel masks zeros or cuts off small RDF distances.
             for ax in all_row_axes:
-                ax.set_yscale("log")
-                ax.set_ylim(1e-3, upper_limit)
-                ax.yaxis.set_major_locator(
-                    mticker.LogLocator(
-                        base=10.0,
-                        subs=(1.0, 2.0, 5.0),
-                        numticks=8,
-                    )
-                )
-                ax.yaxis.set_major_formatter(
-                    mticker.LogFormatterMathtext(
-                        base=10.0,
-                        labelOnlyBase=False,
-                    )
-                )
-                ax.yaxis.set_minor_formatter(
-                    mticker.NullFormatter()
-                )
+                configure_rdf_l1_axis(ax, combined_y)
 
         elif "max cn change" in row_label:
             upper_limit = max(

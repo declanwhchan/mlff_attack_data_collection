@@ -190,12 +190,26 @@ def save_random_seed_rms_plots(records, output_dir, labels, colors):
         for axis, attack in zip(axes[0], attacks):
             panel = subset if attack == "all" else subset[subset["attack_label"] == attack]
             for calculator in RMS_MODELS:
-                group = panel[panel["calculator"] == calculator]
-                summary = group.groupby("epsilon", as_index=False)[column].median().sort_values("epsilon")
+                group = panel[panel["calculator"] == calculator].copy()
+                per_seed = group.groupby(["seed", "epsilon"], as_index=False)[column].median()
+                summary = per_seed.groupby("epsilon", as_index=False).agg(
+                    median=(column, "median"),
+                    q25=(column, lambda values: values.quantile(0.25)),
+                    q75=(column, lambda values: values.quantile(0.75)),
+                ).sort_values("epsilon")
                 if summary.empty:
                     continue
-                axis.plot(summary["epsilon"], summary[column], marker="o", linewidth=2,
-                          markersize=4, color=colors[calculator], label=labels[calculator])
+                x = summary["epsilon"].to_numpy(float)
+                median = summary["median"].to_numpy(float)
+                q25 = summary["q25"].to_numpy(float)
+                q75 = summary["q75"].to_numpy(float)
+                axis.scatter(per_seed["epsilon"], per_seed[column], s=17,
+                             color=colors[calculator], alpha=0.46,
+                             edgecolors="white", linewidths=0.35, zorder=3)
+                axis.fill_between(x, q25, q75, color=colors[calculator],
+                                  alpha=0.18, linewidth=0, zorder=1)
+                axis.plot(x, median, linewidth=2.25, color=colors[calculator],
+                          label=labels[calculator], zorder=4)
             axis.set_title(attack if attack != "all" else "All attacks")
             axis.set_xscale("log")
             axis.set_yscale("log")
