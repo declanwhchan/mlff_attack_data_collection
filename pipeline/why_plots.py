@@ -654,6 +654,55 @@ def save_phonons(data, material, preference, output, mace_mh_head, anomaly_key, 
     ax.legend(fontsize=8)
     fig.savefig(destination, dpi=300, bbox_inches="tight"); plt.close(fig)
 
+def phonon_ensemble_rows(data, material, preference, diagnostic_model):
+    """Choose the seed with the most usable epsilon cases for one trajectory."""
+    anchor = source_mlff_row(data, material, preference, diagnostic_model)
+    if anchor is None:
+        return pd.DataFrame()
+    rows = data[(data["material_slug"] == material) & (data["calculator"] == anchor["calculator"]) & (data["attack_label"] == anchor["attack_label"]) & data["transition_epsilon"].notna() & data["epsilon_percent"].notna() & data["converged"]].copy()
+    rows["_seed_key"] = jaccard_trajectory_key(rows)
+    rows = rows[rows.apply(lambda candidate: all(path is not None for path in structural_artifacts(candidate)), axis=1)]
+    if rows.empty:
+        return rows
+    coverage = rows.groupby("_seed_key").agg(epsilon_count=("transition_epsilon", "nunique"), contains_anchor=("transition_epsilon", lambda values: np.isclose(values, anchor["transition_epsilon"]).any())).reset_index()
+    seed = coverage.sort_values(["contains_anchor", "epsilon_count", "_seed_key"], ascending=[False, False, True]).iloc[0]["_seed_key"]
+    return rows[rows["_seed_key"] == seed].sort_values(["transition_epsilon", "epsilon_percent"], na_position="last").drop_duplicates("transition_epsilon", keep="first")
+
+def gamma_phonon_modes(row, atoms, output, cache_key, mace_mh_head):
+    """Calculate signed Gamma-point phonon energies in meV for one structure."""
+    configured = calculator_for(row, atoms, mace_mh_head)
+    cache = output / "phonon_cache" / cache_key
+    cache.parent.mkdir(exist_ok=True)
+    phonons = Phonons(configured, configured.calc, supercell=(1, 1, 1), delta=.01, name=str(cache))
+    phonons.run(); phonons.read(acoustic=True)
+    frequencies, _ = phonons.band_structure(np.array([[0., 0., 0.]]), modes=True, verbose=False)
+    return frequencies[0] * 1000.0
+
+def save_phonon_ensemble(data, material, preference, output, mace_mh_head, diagnostic_model):
+    """Plot a black reference curve plus every epsilon in one attack sweep."""
+    destination = output / "05_phonon_ensemble_epsilon_bundle.png"; table_path = output / "phonon_modes_ensemble_epsilon_bundle.csv"; records = []
+    selected = phonon_ensemble_rows(data, material, preference, diagnostic_model)
+    if selected.empty:
+        pd.DataFrame(records).to_csv(table_path, index=False); save_placeholder(destination, "Phonon ensemble across epsilon", "No converged epsilon sweep with complete structural artifacts was available."); return
+    try:
+        reference_atoms, _, _ = load_states(selected.iloc[0]); reference_modes = gamma_phonon_modes(selected.iloc[0], reference_atoms, output, f"05_ensemble_{material}_{selected.iloc[0]['calculator']}_reference", mace_mh_head)
+        for mode, frequency in enumerate(reference_modes, start=1): records.append({"material_slug": material, "calculator": selected.iloc[0]["calculator"], "state": "reference", "mode": mode, "frequency_meV": frequency})
+        for _, row in selected.iterrows():
+            try:
+                _, _, final = load_states(row); modes = gamma_phonon_modes(row, final, output, f"05_ensemble_{material}_{row['calculator']}_epsilon_{row['transition_epsilon']:.8g}", mace_mh_head)
+                for mode, frequency in enumerate(modes, start=1): records.append({"material_slug": material, "calculator": row["calculator"], "state": "final", "mode": mode, "frequency_meV": frequency, "epsilon": row["transition_epsilon"], "epsilon_percent": row["epsilon_percent"], "seed": row["_seed_key"]})
+            except Exception as error: records.append({"material_slug": material, "state": "final", "epsilon": row["transition_epsilon"], "epsilon_percent": row["epsilon_percent"], "error": str(error)})
+    except Exception as error: records.append({"material_slug": material, "error": str(error)})
+    table = pd.DataFrame(records); table.to_csv(table_path, index=False); usable = table.dropna(subset=["frequency_meV"]) if "frequency_meV" in table else pd.DataFrame(); finals = usable[usable["state"] == "final"] if not usable.empty else pd.DataFrame(); reference = usable[usable["state"] == "reference"] if not usable.empty else pd.DataFrame()
+    if finals.empty or reference.empty:
+        reason = table.get("error", pd.Series(["No usable phonon frequencies were produced."])).dropna().iloc[0]; save_placeholder(destination, "Phonon ensemble across epsilon", f"Phonon diagnostic unavailable: {reason}"); return
+    norm = Normalize(vmin=finals["epsilon_percent"].min(), vmax=finals["epsilon_percent"].max()); cmap = plt.colormaps["viridis"]; fig, ax = plt.subplots(figsize=(7.4, 5.4), constrained_layout=True, facecolor="white"); ax.set_facecolor("white")
+    # Broad translucent strokes are visual ribbons, not confidence intervals.
+    for epsilon, group in finals.groupby("epsilon", sort=True):
+        group = group.sort_values("mode"); color = cmap(norm(group["epsilon_percent"].iloc[0])); modes = group["mode"].to_numpy(); frequencies = group["frequency_meV"].to_numpy(); ax.plot(modes, frequencies, color=color, linewidth=6.0, alpha=.13, solid_capstyle="round", zorder=2); ax.plot(modes, frequencies, color=color, linewidth=1.15, alpha=.78, zorder=3)
+    reference = reference.sort_values("mode"); ax.plot(reference["mode"], reference["frequency_meV"], color="black", linewidth=2.4, label="reference", zorder=5); ax.axhline(0, color="#555", linewidth=.75, alpha=.55, zorder=1)
+    ax.set(xlabel=r"$\Gamma$-point mode index", ylabel="Signed phonon energy (meV)", title=f"Phonon ensemble across attack epsilon: {material}"); colorbar = fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap=cmap), ax=ax, pad=.02); colorbar.set_label(r"$\epsilon / a_{\min}$ (%)"); ax.legend(frameon=False, loc="best"); fig.savefig(destination, dpi=300, bbox_inches="tight"); plt.close(fig)
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project-root", type=Path, required=True)
@@ -696,6 +745,9 @@ def main():
             save_pes(data, material, preference, output, args.pes_grid, args.mace_mh_head, anomaly_key, anomaly_label, args.diagnostic_model, require_zero_jaccard)
         if args.with_phonons and not args.skip_phonons:
             save_phonons(data, material, preference, output, args.mace_mh_head, anomaly_key, anomaly_label, args.diagnostic_model, require_zero_jaccard)
+    if args.with_phonons and not args.skip_phonons:
+        spike_material = case_selection.get("Jaccard spike (>10%)", {}).get("material_slug")
+        save_phonon_ensemble(data, spike_material, spike, output, args.mace_mh_head, args.diagnostic_model)
     print(f"why_plots written to {output}")
 
 

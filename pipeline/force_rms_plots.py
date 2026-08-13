@@ -213,7 +213,7 @@ def save_random_seed_rms_plots(records, output_dir, labels, colors):
             axis.set_title(attack if attack != "all" else "All attacks")
             axis.set_xscale("log")
             axis.set_yscale("log")
-            axis.set_xlabel("Epsilon (Å)")
+            axis.set_xlabel(r"$\epsilon$ ($\AA$)")
             axis.set_ylabel(ylabel)
             axis.grid(True, which="both", alpha=0.28)
         handles, legend_labels = axes[0][-1].get_legend_handles_labels()
