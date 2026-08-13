@@ -19,8 +19,9 @@ fi
 export MPLBACKEND=Agg
 export REPO_ROOT
 
-SCRATCH_COLLECTION_ROOT="${SCRATCH_COLLECTION_ROOT:-/scratch/$USER/mlff_attack_data_collection}"
-PROJECT_RESULTS_ROOT="${PROJECT_RESULTS_ROOT:-$SCRATCH_COLLECTION_ROOT/licohpf_database_results}"
+PROJECT_BASE="${PROJECT_OUTPUT_ROOT:-$REPO_ROOT}"
+PROJECT_RESULTS_ROOT="${PROJECT_RESULTS_ROOT:-$PROJECT_BASE/2d_structures_results}"
+
 
 OUTPUT_DIR="${OUTPUT_DIR:-$REPO_ROOT/presentation_visuals/contour_relaxation_checks}"
 FIGURE_PREFIX="${FIGURE_PREFIX:-contour_relaxation_checks}"
@@ -115,7 +116,7 @@ attack = read_rows(ATTACK_SUMMARY_FILES)
 attack_runs = read_rows(ATTACK_RUN_SUMMARY_FILES)
 contour = read_rows(CONTOUR_SUMMARY_FILES)
 
-if not attack_runs.empty:
+if not attack_runs.empty and not attack.empty:
     keep = [
         "run_id",
         "status",
@@ -132,15 +133,47 @@ if not attack_runs.empty:
 
     keep = [c for c in keep if c in attack_runs.columns]
 
-    attack = attack.merge(
-        attack_runs[keep],
-        on="run_id",
-        how="left",
-    )
+    if "run_id" not in attack.columns or "run_id" not in keep:
+        log("Cannot match attack runs: missing run_id")
+    else:
+        run_data = attack_runs[keep].drop_duplicates(
+            subset="run_id",
+            keep="last",
+        )
+        attack = attack.merge(
+            run_data,
+            on="run_id",
+            how="left",
+            suffixes=("", "_run"),
+        )
 
-    matched = attack["before_force_csv"].notna().sum()
-    print(f"Matched attack runs: {matched}/{len(attack)}")
+        for column in keep:
+            if column == "run_id":
+                continue
 
+            run_column = f"{column}_run"
+            if run_column not in attack.columns:
+                continue
+
+            if column in attack.columns:
+                attack[column] = attack[column].where(
+                    attack[column].map(clean) != "",
+                    attack[run_column],
+                )
+                attack.drop(columns=run_column, inplace=True)
+            else:
+                attack.rename(
+                    columns={run_column: column},
+                    inplace=True,
+                )
+
+before_force_csv = attack.get("before_force_csv")
+matched = (
+    before_force_csv.map(clean).ne("").sum()
+    if before_force_csv is not None
+    else 0
+)
+print(f"Matched attack runs: {matched}/{len(attack)}")
 if attack.empty and contour.empty:
     raise SystemExit("ERROR: no usable rows were loaded")
 
@@ -870,8 +903,8 @@ def plot_bar(name, grouped_vals, ylabel, title):
     bars = ax.bar(positions, means, color=colors, width=0.62, alpha=0.94)
     ax.set_xticks(positions)
     ax.set_xticklabels(labels)
-    ax.set_xlabel("Stress Tests")
-    ax.set_ylabel(ylabel)
+    ax.set_xlabel("Stress Tests", labelpad=18)
+    ax.set_ylabel(ylabel, labelpad=18)
     ax.set_title(title)
 
     ymax = 100.0 if "Converged" in ylabel else max([m for m in means if np.isfinite(m)] + [1.0]) * 1.25
@@ -895,7 +928,7 @@ def plot_bar(name, grouped_vals, ylabel, title):
     save_fig(fig, name)
 
 
-def plot_box(name, grouped_vals, ylabel, title, logy=False):
+def plot_box(name, grouped_vals, ylabel, title, logy=False, symlog=False):
     fig, ax = plt.subplots(figsize=(8, 6.8), facecolor="white")
     setup_ax(ax)
 
@@ -996,8 +1029,8 @@ def plot_box(name, grouped_vals, ylabel, title, logy=False):
     for i, vals in enumerate(series):
         if vals.size:
             jitter = rng.uniform(
-                -0.12,
-                0.12,
+                -0.18,
+                0.18,
                 size=len(vals),
             )
 
@@ -1055,11 +1088,13 @@ def plot_box(name, grouped_vals, ylabel, title, logy=False):
 
     ax.set_xticks(np.arange(1, len(labels) + 1))
     ax.set_xticklabels(labels)
-    ax.set_xlabel("Stress Tests")
-    ax.set_ylabel(ylabel)
+    ax.set_xlabel("Stress Tests", labelpad=18)
+    ax.set_ylabel(ylabel, labelpad=18)
     ax.set_title(title)
 
-    if logy and any(vals.size for vals in series):
+    if symlog and any(vals.size for vals in series):
+        ax.set_yscale("symlog", linthresh=1.0e-2, linscale=0.8)
+    elif logy and any(vals.size for vals in series):
         ax.set_yscale("log")
 
         # Nice automatic major ticks.
@@ -1354,12 +1389,53 @@ topology_specs = [
     ),
 ]
 
+topology_zero_groups = {}
+
 for fname, ylabel, attack_keys, contour_keys in topology_specs:
     grouped_vals = collect_grouped_values(
         lambda row, keys=attack_keys: attack_metric(row, *keys),
         lambda row, keys=contour_keys: contour_metric(row, *keys),
     )
-    plot_box(fname, grouped_vals, ylabel, ylabel, logy=False)
+    topology_zero_groups[ylabel] = {
+        label: (np.nan if not values else 100.0 * np.mean(np.isclose(values, 0.0)))
+        for label, values in grouped_vals.items()
+    }
+
+    plot_box(
+        fname, grouped_vals, ylabel, ylabel,
+        symlog=(fname == "06_topology_rdf"),
+    )
+def plot_topology_zero_rate(metric_groups):
+    fig, ax = plt.subplots(figsize=(9.5, 6.8), facecolor="white")
+    setup_ax(ax)
+    labels = [label for label, _ in PLOT_GROUPS]
+    metrics = list(metric_groups)
+    colors = ["#4DAF4A", "#377EB8", "#984EA3"]
+    positions = np.arange(len(labels))
+    width = 0.24
+    for index, (metric, color) in enumerate(zip(metrics, colors)):
+        values = [metric_groups[metric].get(label, np.nan) for label in labels]
+        offset = (index - (len(metrics) - 1) / 2.0) * width
+        bars = ax.bar(positions + offset, values, width=width, color=color,
+                      alpha=0.94, label=metric)
+        for rect, value in zip(bars, values):
+            if np.isfinite(value):
+                ax.text(rect.get_x() + rect.get_width() / 2.0,
+                        min(value + 1.5, 98.0), f"{value:.1f}",
+                        ha="center", va="bottom", fontsize=10,
+                        fontweight="bold", color="#1F2328")
+    ax.set_xticks(positions)
+    ax.set_xticklabels(labels)
+    ax.set_xlabel("Stress Tests", labelpad=18)
+    ax.set_ylabel("Cases with zero distance/change (%)", labelpad=18)
+    ax.set_title("Unchanged topology after relaxation")
+    ax.set_ylim(0, 100)
+    ax.legend(frameon=False, loc="upper right")
+    save_fig(fig, "07_topology_zero_rate")
+
+
+plot_topology_zero_rate(topology_zero_groups)
+
 
 print("Done.")
 

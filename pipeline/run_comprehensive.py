@@ -6,14 +6,20 @@ import math
 import re
 
 import matplotlib.pyplot as plt
-from matplotlib.patches import Ellipse, FancyArrowPatch
+from matplotlib.patches import Ellipse, FancyArrowPatch, Patch, Polygon
 from matplotlib.ticker import MaxNLocator, ScalarFormatter, FuncFormatter, FixedLocator, NullLocator
 import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
 from ase.io import read as read_structure
-from load_dft import dft_coverage_table, load_dft_records
-from force_recovery import add_rms_force_metrics, make_rms_force_figures
+from load_dft import dft_coverage_table, load_dft_records, read_dft_structure
+from force_rms_plots import (
+    POST_ATTACK_RELAXED_RMS_FMAX_005_COLUMN,
+    RMS_MODELS,
+    add_post_attack_relaxed_rms_at_fmax_column,
+    add_post_attack_rms_columns,
+    rms_value_getter,
+)
 from run_tests import (
     coordination_by_atom,
     edge_jaccard_distance,
@@ -1107,7 +1113,6 @@ def ranking_force_delta_values(row, before_name, after_name):
             return finite_values, None
 
     return values, error
-
 
 def displacement_values(run_dir, before_name, after_name):
     merged, reason = merge_atom_csvs(
@@ -5127,6 +5132,9 @@ def save_mlff_ranking_violin_plot(
     value_getter,
     log_x=False,
     highlight_epsilon_percent=5.0,
+    lower_clip_reference_models=None,
+    symlog_y=False,
+    symlog_linthresh=1.0e-2,
 ):
     """
     Create a vertical MLFF ranking violin plot.
@@ -5146,6 +5154,13 @@ def save_mlff_ranking_violin_plot(
     )
 
     data = data.copy()
+    lower_clip_reference_models = dict(
+        lower_clip_reference_models or {}
+    )
+    # Keep raw measurements intact. Values below the paired DFT reference are
+    # represented later as a count-preserving lower display bucket.
+    lower_group_reference_floors = {}
+    lower_group_counts = {}
 
     if not data.empty:
         data["value"] = pd.to_numeric(
@@ -5166,10 +5181,35 @@ def save_mlff_ranking_violin_plot(
             )
         )
 
-        if log_x:
+        if log_x and not symlog_y:
             data = data.loc[
                 data["value"] > 0
             ].copy()
+
+        # Identify paired DFT minima used as lower display buckets. Raw MLFF
+        # values remain unchanged, so no observations are discarded.
+        for calculator, reference_calculator in (
+            lower_clip_reference_models.items()
+        ):
+            reference_values = data.loc[
+                data["calculator"] == reference_calculator,
+                "value",
+            ]
+            if reference_values.empty:
+                continue
+
+            floor = float(reference_values.min())
+            if not np.isfinite(floor) or floor <= 0:
+                continue
+
+            model_mask = data["calculator"] == calculator
+            if not model_mask.any():
+                continue
+
+            below_floor = model_mask & (data["value"] < floor)
+            if below_floor.any():
+                lower_group_reference_floors[calculator] = floor
+                lower_group_counts[calculator] = int(below_floor.sum())
 
     if data.empty:
         fig, ax = plt.subplots(
@@ -5211,11 +5251,18 @@ def save_mlff_ranking_violin_plot(
     #     )
     # )
 
-    def display_values(values):
+    def display_values(values, calculator=None):
         values = np.asarray(values, dtype=float).reshape(-1)
         values = values[np.isfinite(values)]
-        if log_x and np.any(values > 0):
-            return values[values > 0]
+        if log_x and not symlog_y and np.any(values > 0):
+            values = values[values > 0]
+
+        # This affects only the visual coordinate. Every below-floor value is
+        # retained, so more cases produce a larger lower violin bucket.
+        floor = lower_group_reference_floors.get(calculator)
+        if floor is not None:
+            values = np.maximum(values, floor)
+
         return values
 
     summary = (
@@ -5285,10 +5332,13 @@ def save_mlff_ranking_violin_plot(
     ]
 
     violin_values = [
-        data.loc[
-            data["calculator"] == calculator,
-            "value",
-        ].to_numpy(dtype=float)
+        display_values(
+            data.loc[
+                data["calculator"] == calculator,
+                "value",
+            ].to_numpy(dtype=float),
+            calculator,
+        )
         for calculator in model_order
     ]
 
@@ -5339,7 +5389,7 @@ def save_mlff_ranking_violin_plot(
             np.isfinite(values)
         ]
 
-        if log_x:
+        if log_x and not symlog_y:
             values = values[
                 values > 0
             ]
@@ -5348,7 +5398,8 @@ def save_mlff_ranking_violin_plot(
             continue
 
         plotted_values = display_values(
-            values
+            values,
+            calculator,
         )
 
         color = pastel_colors.get(
@@ -5413,7 +5464,7 @@ def save_mlff_ranking_violin_plot(
             )
 
         q1, median, q3 = np.percentile(
-            values,
+            plotted_values,
             [
                 25,
                 50,
@@ -5427,9 +5478,9 @@ def save_mlff_ranking_violin_plot(
         lower_fence = q1 - whisker_scale * iqr
         upper_fence = q3 + whisker_scale * iqr
 
-        inlier_values = values[
-            (values >= lower_fence)
-            & (values <= upper_fence)
+        inlier_values = plotted_values[
+            (plotted_values >= lower_fence)
+            & (plotted_values <= upper_fence)
         ]
 
         if inlier_values.size:
@@ -5553,9 +5604,13 @@ def save_mlff_ranking_violin_plot(
 
             if np.count_nonzero(valid_profile) >= 1:
                 profile_positions = positions[valid_profile]
-                profile_values = display_values(
-                    highlighted_medians.to_numpy(dtype=float)[valid_profile]
-                )
+                profile_values = np.asarray([
+                    display_values([value], calculator)[0]
+                    for calculator, value in zip(
+                        np.asarray(model_order)[valid_profile],
+                        highlighted_medians.to_numpy(dtype=float)[valid_profile],
+                    )
+                ])
 
                 ax.plot(
                     profile_positions,
@@ -5632,6 +5687,8 @@ def save_mlff_ranking_violin_plot(
         pad=14,
     )
 
+
+
     all_values = np.concatenate(
         violin_values
     )
@@ -5640,17 +5697,45 @@ def save_mlff_ranking_violin_plot(
         np.isfinite(all_values)
     ]
 
-    if log_x:
+    if log_x and not symlog_y:
         all_values = all_values[
             all_values > 0
         ]
 
-    configure_violin_y_axis(
-        ax,
-        all_values,
-        log_scale=log_x,
-    )
+    if symlog_y:
+        positive_values = all_values[all_values > 0]
 
+        upper_limit = max(
+            1.0e-1,  # always include the 10^-1 decade
+            (
+                float(np.max(positive_values)) * 1.25
+                if positive_values.size
+                else symlog_linthresh * 10.0
+            ),
+        )
+
+        ax.set_yscale(
+            "symlog",
+            linthresh=symlog_linthresh,
+            linscale=0.8,
+        )
+        ax.set_ylim(0.0, upper_limit)
+        ax.yaxis.set_major_locator(
+            mticker.SymmetricalLogLocator(
+                base=10.0,
+                linthresh=symlog_linthresh,
+            )
+        )
+        ax.yaxis.set_major_formatter(
+            mticker.LogFormatterMathtext(base=10.0)
+        )
+        ax.yaxis.set_minor_locator(mticker.NullLocator())
+    else:
+        configure_violin_y_axis(
+            ax,
+            all_values,
+            log_scale=log_x,
+        )
     # Completely white background with no grid lines.
     ax.grid(False)
 
@@ -5684,8 +5769,21 @@ def save_mlff_ranking_violin_plot(
         left=0.15,
         right=0.97,
         top=0.88,
-        bottom=0.22,
+        bottom=0.25,
     )
+
+    if lower_group_counts:
+        total_grouped = sum(lower_group_counts.values())
+        fig.text(
+            0.5,
+            0.012,
+            "MLFF values below the paired DFT minimum are grouped "
+            f"at that minimum ({total_grouped} cases; none omitted)",
+            ha="center",
+            va="bottom",
+            fontsize=8.5,
+            color="#555555",
+        )
 
     fig.savefig(
         output_path,
@@ -6003,6 +6101,8 @@ def make_mlff_rankings(
             ),
             # requested: log-scaled y-axis for final-stage violin rankings
             "log_x": True,
+            # Keep the zero-to-10^-1 region linear for this final RDF plot.
+            "symlog_linthresh": 1.0e-1,
         },
         {
             "filename": "coordination_change.png",
@@ -6042,6 +6142,8 @@ def make_mlff_rankings(
             value_getter=metric["getter"],
             highlight_epsilon_percent=highlight_epsilon_percent,
             log_x=metric.get("log_x", False),
+            symlog_y=("rdf l1 distance" in metric["title"].lower()),
+            symlog_linthresh=metric.get("symlog_linthresh", 1.0e-2),
         )
 
     for metric in relaxed_metrics:
@@ -6053,6 +6155,8 @@ def make_mlff_rankings(
             value_getter=metric["getter"],
             highlight_epsilon_percent=highlight_epsilon_percent,
             log_x=metric.get("log_x", False),
+            symlog_y=("rdf l1 distance" in metric["title"].lower()),
+            symlog_linthresh=metric.get("symlog_linthresh", 1.0e-2),
         )
 
 
@@ -7563,6 +7667,365 @@ def make_exact_min_lattice_figures_1_to_9(epsilon_records, output_dir):
     )
 
 
+def _direct_post_attack_traj(row):
+    run_dir = Path(str(row["run_dir"]))
+    saved = clean_value(row.get("after_attack_relax_traj"))
+    options = [Path(str(saved))] if saved is not None else []
+    if saved is not None and not Path(str(saved)).is_absolute():
+        options.append(run_dir / Path(str(saved)))
+    options.append(run_dir / "after_attack_relaxation.traj")
+    return next((path for path in options if path.is_file()), options[-1])
+
+
+def _direct_final_force_vectors(row):
+    """Load final force vectors from explicit or run-directory artifacts.
+
+    Comprehensive MLFF records may point to scratch-resolved force files via
+    ``after_force_csv``; DFT records retain the cached file under ``run_dir``.
+    The direct comparison must support both layouts.
+    """
+    run_dir = Path(str(row.get("run_dir", "")))
+    saved = clean_value(row.get("after_force_csv"))
+    options = []
+    if saved is not None:
+        saved_path = Path(str(saved))
+        options.append(saved_path)
+        if not saved_path.is_absolute():
+            options.append(run_dir / saved_path)
+    options.append(run_dir / "after_forces.csv")
+
+    for force_path in options:
+        if not force_path.is_file():
+            continue
+        try:
+            data = pd.read_csv(force_path)
+            vectors = data[["fx", "fy", "fz"]].apply(
+                pd.to_numeric, errors="coerce")
+            if "atom_index" in data:
+                vectors = vectors.assign(atom_index=pd.to_numeric(
+                    data["atom_index"], errors="coerce"
+                )).sort_values("atom_index")[["fx", "fy", "fz"]]
+            result = vectors.to_numpy(float)
+            if result.ndim == 2 and result.shape[1] == 3 and np.isfinite(result).all():
+                return result
+        except Exception:
+            continue
+    return None
+
+
+def make_direct_comparison_figures(records, output_dir):
+    """Plot paired final MLFF--DFT differences against attack strength.
+
+    The direct-comparison figures intentionally contain only the two MLFFs
+    which have matching DFT relaxations (MACE-MH and UMA). Each point is the
+    median paired difference across materials/attacks at one epsilon; epsilon
+    is shown as a percent of the material's minimum lattice parameter.
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    data = records.copy()
+    mlff = data[~data["calculator"].astype(str).str.startswith("dft_")]
+    dft = data[data["calculator"].astype(str).str.startswith("dft_")]
+    mlff_by_id = {str(row["run_id"]): row for _, row in mlff.iterrows()}
+    pairs, missing = [], []
+    for _, dft_row in dft.iterrows():
+        source_id = clean_value(dft_row.get("dft_source_run_id"))
+        source = mlff_by_id.get(str(source_id)) if source_id is not None else None
+        if source is None:
+            missing.append(f"No MLFF match for DFT run {dft_row.get('run_id')}")
+            continue
+        try:
+            mlff_atoms = read_structure(_direct_post_attack_traj(source), index=-1)
+            dft_atoms = read_dft_structure(Path(str(dft_row["dft_relaxed_structure"])), index=-1)
+            if len(mlff_atoms) != len(dft_atoms):
+                raise ValueError("atom-count mismatch")
+            displacement = np.linalg.norm(mlff_atoms.positions - dft_atoms.positions, axis=1)
+            mlff_edges = neighbor_edge_set(mlff_atoms)
+            dft_edges = neighbor_edge_set(dft_atoms)
+            mlff_cn = coordination_by_atom(mlff_edges, mlff_atoms)
+            dft_cn = coordination_by_atom(dft_edges, dft_atoms)
+            cn_delta = [abs(mlff_cn.get(atom, 0) - dft_cn.get(atom, 0)) for atom in set(mlff_cn) | set(dft_cn)]
+        except Exception as error:
+            missing.append(f"Could not calculate paired geometry for {source_id}: {error}")
+            continue
+        mlff_force = _direct_final_force_vectors(source)
+        dft_force = _direct_final_force_vectors(dft_row)
+        rms_force = (
+            float(np.sqrt(np.mean(np.sum((mlff_force - dft_force) ** 2, axis=1))))
+            if mlff_force is not None
+            and dft_force is not None
+            and mlff_force.shape == dft_force.shape
+            else np.nan
+        )
+        mlff_steps, dft_steps = source.get("after_relax_steps"), dft_row.get("after_relax_steps")
+        pairs.append({
+            "run_id": source_id, "source_model": source["calculator"], "material_slug": source.get("material_slug"),
+            "attack_label": source.get("attack_label"), "epsilon": source.get("epsilon"), "n_steps": source.get("n_steps"),
+            "epsilon_percent_min_lattice": source.get("epsilon_percent_displacement"),
+            "median_displacement_a": float(np.median(displacement)), "rms_force_difference_ev_a": rms_force,
+            "relaxation_step_difference": abs(float(mlff_steps) - float(dft_steps)) if pd.notna(mlff_steps) and pd.notna(dft_steps) else np.nan,
+            "neighbor_jaccard_distance": edge_jaccard_distance(mlff_edges, dft_edges),
+            "coordination_number_difference_max": float(max(cn_delta)) if cn_delta else 0.0,
+            "rdf_l1_distance": float(rdf_l1_distance(mlff_atoms, dft_atoms)),
+        })
+    pairs = pd.DataFrame(pairs)
+    pairs.to_csv(output_dir / "paired_mlff_dft_post_attack_relaxation.csv", index=False)
+    pd.DataFrame({"reason": missing}).to_csv(output_dir / "missing_pairs.csv", index=False)
+    metrics = [
+        ("median_displacement_a", r"Median displacement ($\AA$)"),
+        ("rms_force_difference_ev_a", r"RMS $\Delta$ force (eV/$\AA$)"),
+        ("relaxation_step_difference", "Relaxation-step difference"),
+        ("neighbor_jaccard_distance", "Neighbor Jaccard distance"),
+        ("coordination_number_difference_max", "Maximum CN difference"),
+        ("rdf_l1_distance", "RDF L1 distance"),
+    ]
+    comparison_models = ("mace_mh", "uma")
+    colors = {model: CALCULATOR_COLORS[model] for model in comparison_models}
+
+    # Step-count sweeps hold epsilon fixed and therefore do not describe an
+    # epsilon-strength response. Keep only epsilon sweeps, then pool paired
+    # material/attack measurements by strength.
+    line_data = pairs.loc[
+        pairs["source_model"].isin(comparison_models)
+        & ~pairs["run_id"].astype(str).str.contains("_steps", regex=False)
+    ].copy()
+    for column in ("epsilon", "epsilon_percent_min_lattice"):
+        line_data[column] = pd.to_numeric(line_data[column], errors="coerce")
+    line_data = line_data.loc[
+        np.isfinite(line_data["epsilon"])
+        & (line_data["epsilon"] > 0)
+        & np.isfinite(line_data["epsilon_percent_min_lattice"])
+        & (line_data["epsilon_percent_min_lattice"] > 0)
+    ].copy()
+
+    panel_letters = "ABCDEF"
+
+    def save_normalized_agreement_heatmap():
+        """Summarise post-relaxation MLFF--DFT agreement in a compact matrix."""
+        heatmap_metrics = [
+            ("neighbor_jaccard_distance", "Jaccard distance"),
+            ("coordination_number_difference_max", "CN change"),
+            ("relaxation_step_difference", "Relaxation steps"),
+            ("rdf_l1_distance", "RDF distance"),
+            ("rms_force_difference_ev_a", r"RMS $\Delta$ force"),
+            ("median_displacement_a", "Displacement"),
+        ]
+        eps_min, eps_max = 1.0e-2, 5.0e2
+        targets = np.logspace(np.log10(eps_min), np.log10(eps_max), 10)
+        matrices = {}
+        for model in comparison_models:
+            model_data = line_data.loc[line_data["source_model"] == model].copy()
+            matrix = np.full((len(heatmap_metrics), len(targets)), np.nan)
+            if not model_data.empty:
+                log_distance = np.abs(
+                    np.log10(model_data["epsilon_percent_min_lattice"].to_numpy(float))[:, None]
+                    - np.log10(targets)[None, :]
+                )
+                nearest_bin = log_distance.argmin(axis=1)
+                model_data["epsilon_bin"] = nearest_bin
+                for metric_index, (metric, _) in enumerate(heatmap_metrics):
+                    numeric = pd.to_numeric(model_data[metric], errors="coerce")
+                    grouped = numeric.groupby(model_data["epsilon_bin"]).median()
+                    for bin_index, value in grouped.items():
+                        matrix[metric_index, int(bin_index)] = value
+            matrices[model] = matrix
+
+        # Normalise metric-by-metric over both MLFFs: the same colour and
+        # printed value therefore always mean the same relative disagreement.
+        normalised = {model: np.full_like(matrix, np.nan) for model, matrix in matrices.items()}
+        for metric_index in range(len(heatmap_metrics)):
+            combined = np.concatenate([
+                matrices[model][metric_index][np.isfinite(matrices[model][metric_index])]
+                for model in comparison_models
+            ])
+            if not combined.size:
+                continue
+            lower, upper = float(np.min(combined)), float(np.max(combined))
+            for model in comparison_models:
+                row = matrices[model][metric_index]
+                if np.isclose(lower, upper):
+                    normalised[model][metric_index] = np.where(np.isfinite(row), 0.0, np.nan)
+                else:
+                    normalised[model][metric_index] = (row - lower) / (upper - lower)
+
+        fig, ax = plt.subplots(figsize=(8.4, 5.8), facecolor="white")
+        colour_map = plt.colormaps["Blues"]
+        scalar_map = plt.cm.ScalarMappable(cmap=colour_map)
+        scalar_map.set_clim(0.0, 1.0)
+
+        # Each merged cell contains two directly comparable values: MACE in
+        # the upper-right triangle and UMA in the lower-left triangle.
+        for row in range(len(heatmap_metrics)):
+            for column in range(len(targets)):
+                for model, corners, text_position in (
+                    ("mace_mh", ((column - 0.5, row - 0.5), (column + 0.5, row - 0.5),
+                                 (column + 0.5, row + 0.5)), (column + 0.18, row - 0.18)),
+                    ("uma", ((column - 0.5, row - 0.5), (column - 0.5, row + 0.5),
+                             (column + 0.5, row + 0.5)), (column - 0.18, row + 0.18)),
+                ):
+                    value = normalised[model][row, column]
+                    face_colour = colour_map(value) if np.isfinite(value) else "#F1F5F9"
+                    ax.add_patch(Polygon(corners, closed=True, facecolor=face_colour,
+                                         edgecolor="white", linewidth=0.85))
+                    if np.isfinite(value):
+                        text_colour = "white" if value >= 0.58 else "#0F172A"
+                        ax.text(*text_position, f"{value:.2f}", ha="center", va="center",
+                                fontsize=8.4, fontweight="semibold", color=text_colour)
+
+        ax.set_xlim(-0.5, len(targets) - 0.5)
+        ax.set_ylim(len(heatmap_metrics) - 0.5, -0.5)
+        ax.set_aspect("auto")
+        ax.set_facecolor("white")
+        ax.set_xticks((0, 2, 4, 6, 9))
+        ax.set_xticklabels([r"$10^{-2}$", r"$10^{-1}$", r"$10^{0}$", r"$10^{1}$", r"$10^{2}$"],
+                           fontsize=12, color="#334155")
+        ax.set_yticks(np.arange(len(heatmap_metrics)))
+        ax.set_yticklabels([label for _, label in heatmap_metrics], fontsize=13)
+        ax.tick_params(axis="both", length=0)
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+        ax._preserve_manual_limits = True
+
+        fig.suptitle("MLFF--DFT agreement after perturbation + relaxation",
+                     x=0.10, y=0.975, ha="left", fontsize=20,
+                     fontweight="bold", color="#0F172A")
+        fig.legend(
+            handles=[
+                Patch(facecolor="#4B8CC0", label="MACE-MH, upper triangle"),
+                Patch(facecolor="#4B8CC0", label="UMA, lower triangle"),
+            ],
+            loc="upper right", bbox_to_anchor=(0.97, 0.982), ncol=2,
+            frameon=False, fontsize=11,
+        )
+        colourbar = fig.colorbar(scalar_map, ax=ax, fraction=0.036, pad=0.035)
+        colourbar.set_ticks([0.0, 0.5, 1.0])
+        colourbar.set_ticklabels(["0.0", "0.5", "1.0"])
+        colourbar.ax.tick_params(labelsize=11, length=0)
+        colourbar.set_label("Normalized difference", fontsize=12, color="#334155", labelpad=9)
+        colourbar.outline.set_visible(False)
+        fig.subplots_adjust(left=0.27, right=0.90, bottom=0.17, top=0.80)
+        fig.text(0.55, 0.075, r"$\epsilon$ strength (% min lattice parameter)",
+                 ha="center", fontsize=14, color="#334155")
+        save_figure(fig, output_dir / "direct_comparison_normalized_heatmap")
+        plt.close(fig)
+
+    def smooth_response(x, y, points=320, bandwidth_decades=0.16):
+        """Return a softly smoothed curve in log-epsilon space.
+
+        The smoother intentionally reports the broad response trend instead of
+        visually overemphasising individual epsilon-level jumps.
+        """
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
+        valid = np.isfinite(x) & np.isfinite(y) & (x > 0)
+        x, y = x[valid], y[valid]
+        if len(x) == 0:
+            return x, y
+        order = np.argsort(x)
+        log_x, y = np.log10(x[order]), y[order]
+        grid_log = np.linspace(log_x[0], log_x[-1], max(points, len(x)))
+        interpolated = np.interp(grid_log, log_x, y)
+        if len(x) > 2 and grid_log[-1] > grid_log[0]:
+            step = grid_log[1] - grid_log[0]
+            sigma = max(1.0, bandwidth_decades / step)
+            radius = int(np.ceil(3.0 * sigma))
+            offsets = np.arange(-radius, radius + 1, dtype=float)
+            kernel = np.exp(-0.5 * (offsets / sigma) ** 2)
+            kernel /= kernel.sum()
+            padded = np.pad(interpolated, radius, mode="edge")
+            interpolated = np.convolve(padded, kernel, mode="valid")
+        return 10 ** grid_log, interpolated
+
+    def draw(ax, metric, label, panel_letter=None):
+        """Draw two smooth central trends with an IQR ribbon for each model."""
+        values = line_data[["source_model", "epsilon", "epsilon_percent_min_lattice", metric]].copy()
+        values[metric] = pd.to_numeric(values[metric], errors="coerce")
+        values = values.replace([np.inf, -np.inf], np.nan).dropna(subset=[metric])
+        summary = values.groupby(["source_model", "epsilon"], as_index=False).agg(
+            epsilon_percent_min_lattice=("epsilon_percent_min_lattice", "median"),
+            value=(metric, "median"),
+            q25=(metric, lambda series: series.quantile(0.25)),
+            q75=(metric, lambda series: series.quantile(0.75)),
+        )
+        plotted_y = []
+        for model in comparison_models:
+            series = summary.loc[summary["source_model"] == model].sort_values("epsilon")
+            if series.empty:
+                continue
+            x = series["epsilon_percent_min_lattice"].to_numpy(float)
+            curve_x, median = smooth_response(x, series["value"].to_numpy(float))
+            _, q25 = smooth_response(x, series["q25"].to_numpy(float))
+            _, q75 = smooth_response(x, series["q75"].to_numpy(float))
+            lower, upper = np.minimum(q25, q75), np.maximum(q25, q75)
+            ax.fill_between(curve_x, lower, upper, color=colors[model], alpha=0.20,
+                            linewidth=0, zorder=1)
+            ax.plot(curve_x, median, linewidth=2.6, color=colors[model],
+                    label=model_label(model), solid_capstyle="round", zorder=2)
+            plotted_y.extend(lower.tolist())
+            plotted_y.extend(upper.tolist())
+        apply_epsilon_axis(ax, summary["epsilon_percent_min_lattice"].to_numpy(float),
+                           axis_mode=EPSILON_AXIS_PERCENT)
+        ax.xaxis.set_major_formatter(mticker.LogFormatterMathtext(base=10.0))
+        ax.set_ylabel(label, fontsize=14)
+        ax.set_xlabel(EPSILON_PERCENT_AXIS_LABELS[EPSILON_AXIS_PERCENT], fontsize=14)
+        ax.set_facecolor("white")
+        ax.grid(axis="y", visible=False)
+        # Decade guides make the common log-epsilon scale legible in every
+        # panel without adding visual noise from minor-grid lines.
+        for decade in ax.get_xticks():
+            if decade > 0:
+                ax.axvline(decade, color="#CBD5E1", linewidth=0.8,
+                           linestyle="--", alpha=0.72, zorder=0)
+        ax.set_axisbelow(True)
+        ax.spines["left"].set_color("#64748B")
+        ax.spines["bottom"].set_color("#64748B")
+        ax.tick_params(axis="both", labelsize=12, length=4, width=0.9,
+                       color="#64748B", pad=4)
+        if plotted_y:
+            maximum = max(plotted_y)
+            minimum = min(plotted_y)
+            if minimum >= 0:
+                ax.set_ylim(0.0, maximum * 1.12 if maximum > 0 else 1.0)
+            else:
+                padding = 0.10 * (maximum - minimum)
+                ax.set_ylim(minimum - padding, maximum + padding)
+            ax._preserve_manual_limits = True
+        if panel_letter:
+            ax.text(0.01, 0.98, panel_letter, transform=ax.transAxes, ha="left", va="top",
+                    fontsize=12, fontweight="bold", color="#334155",
+                    bbox=dict(boxstyle="round,pad=0.22", facecolor="white", edgecolor="none", alpha=0.9))
+
+    for metric, label in metrics:
+        fig, ax = plt.subplots(figsize=(3.2, 5.1), facecolor="white")
+        fig.subplots_adjust(left=0.28, right=0.96, bottom=0.15, top=0.73)
+        draw(ax, metric, label)
+        handles, labels = ax.get_legend_handles_labels()
+        fig.legend(handles, labels, loc="upper center", ncol=2,
+                   bbox_to_anchor=(0.5, 0.995), frameon=False, fontsize=14)
+        ax.set_title(f"Post-attack + relaxation: {label}", pad=25,
+                     fontsize=16, fontweight="semibold")
+        save_figure(fig, output_dir / f"{metric}.png")
+        plt.close(fig)
+
+    save_normalized_agreement_heatmap()
+
+    fig, axes = plt.subplots(2, 3, figsize=(6.9, 7.8), facecolor="white")
+    fig.subplots_adjust(left=0.06, right=0.985, bottom=0.09, top=0.84, wspace=0.15, hspace=0.24)
+    for index, (ax, (metric, label)) in enumerate(zip(axes.flat, metrics)):
+        draw(ax, metric, label, panel_letters[index])
+        ax.set_title(label, loc="left", pad=10, fontsize=14,
+                     fontweight="semibold", color="#0F172A")
+    handles, labels = axes.flat[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper right", ncol=2, bbox_to_anchor=(0.982, 0.99),
+               frameon=False, fontsize=13)
+    fig.suptitle("Post-attack relaxation agreement with DFT", x=0.055, y=0.985,
+                 ha="left", fontsize=19, fontweight="bold", color="#0F172A")
+    fig.text(0.055, 0.942, "Smooth median trend | shaded ribbon = interquartile range",
+             ha="left", va="top", fontsize=12, color="#475569")
+    save_figure(fig, output_dir / "direct_comparison_six_metrics")
+    plt.close(fig)
+    return pairs, missing
+
 def main():
     global MODEL_ORDER
 
@@ -7786,8 +8249,12 @@ def main():
         ]
 
     records = pd.DataFrame(all_records)
+    records = add_post_attack_rms_columns(records)
+    records = add_post_attack_relaxed_rms_at_fmax_column(
+        records,
+        fmax=0.05,
+    )
 
-    records = add_rms_force_metrics(records)
     missing_rows = [
         {"reason": item}
         for item in all_missing
@@ -7827,6 +8294,11 @@ def main():
     make_space_group_figures(records, args.output_dir / "space_group")
     make_supercell_metadata(records, args.output_dir / "supercells")
 
+    direct_pairs, direct_missing = make_direct_comparison_figures(
+        records, args.output_dir.parent / "direct_comparison"
+    )
+    print(f"Saved {len(direct_pairs)} paired MLFF-vs-DFT comparisons to {args.output_dir.parent / 'direct_comparison'}")
+
     epsilon_records = records[
         ~records["run_id"].str.contains("_steps", regex=False)
     ].copy()
@@ -7847,16 +8319,31 @@ def main():
             args.mlff_ranking_highlight_epsilon_percent
         ),
     )
-    make_rms_force_figures(
-        epsilon_records,
-        args.output_dir / "mlffs_ranking",
-        MODEL_LABELS,
-        CALCULATOR_COLORS,
+
+
+    rms_records = epsilon_records[epsilon_records["calculator"].isin(RMS_MODELS)].copy()
+    rms_output_dir = args.output_dir / "mlffs_ranking" / "after_attack_after_relaxation"
+    save_mlff_ranking_violin_plot(
+        rms_records, rms_output_dir / "rms_force_post_attack.png",
+        "MLFF ranking: RMS force after attack", r"RMS force (eV/$\AA$)",
+        rms_value_getter("post_attack_rms_force_ev_a"), log_x=True,
+        highlight_epsilon_percent=args.mlff_ranking_highlight_epsilon_percent,
     )
-
-
-    make_convergence_figure(epsilon_records, args.output_dir)
+    save_mlff_ranking_violin_plot(
+        rms_records, rms_output_dir / "rms_force_post_attack_relaxed.png",
+        "MLFF ranking: RMS force after attack and relaxation\n"
+        r"(first state with $f_{\max} \leq 0.05$ eV/$\AA$)",
+        r"RMS force (eV/$\AA$)",
+        rms_value_getter(POST_ATTACK_RELAXED_RMS_FMAX_005_COLUMN), log_x=True,
+        highlight_epsilon_percent=args.mlff_ranking_highlight_epsilon_percent,
+        lower_clip_reference_models={
+            "mace_mh": "dft_mace_mh",
+            "uma": "dft_uma",
+        },
+        symlog_y=True,
+    )
     # Component plots are intentionally disabled to reduce the
+    make_convergence_figure(epsilon_records, args.output_dir)
     # number and total size of generated image files.
     # make_lattice_axis_component_figures(
     #     epsilon_records,
