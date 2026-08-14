@@ -177,8 +177,8 @@ def save_random_seed_rms_plots(records, output_dir, labels, colors):
     figures = (
         ("post_attack_rms_force_ev_a", "Post-attack RMS force (eV/$\\AA$)",
          "rms_force_post_attack.png"),
-        ("post_attack_relaxed_rms_force_ev_a",
-         "Post-attack + relaxation RMS force (eV/$\\AA$)",
+        (POST_ATTACK_RELAXED_RMS_FMAX_005_COLUMN,
+         "Post-attack RMS force at 0.05 eV/$\\AA$ convergence (eV/$\\AA$)",
          "rms_force_post_attack_relaxed.png"),
     )
     for column, ylabel, filename in figures:

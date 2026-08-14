@@ -19,6 +19,7 @@ from load_dft import dft_coverage_table, read_dft_structure
 from ase.io import read as ase_read
 from force_rms_plots import (
     add_post_attack_rms_columns,
+    add_post_attack_relaxed_rms_at_fmax_column,
     save_random_seed_rms_plots,
 )
 
@@ -128,7 +129,7 @@ TOPOLOGY_METRICS = [
     ),
     (
         "coordination_change_max",
-        "Max CN change",
+        r"Max $\Delta$ CN",
     ),
 ]
 
@@ -2323,12 +2324,12 @@ def save_exact_random_seed_panels(fig):
         value = value.strip().lower()
 
         replacements = {
-            "Î”": "delta",
-            "Î´": "delta",
-            "Ã…": "angstrom",
-            "Ã¥": "angstrom",
-            "Â²": "2",
-            "Â³": "3",
+            "ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â½ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â": "delta",
+            "ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â½ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â´": "delta",
+            "ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦": "angstrom",
+            "ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¥": "angstrom",
+            "ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â²": "2",
+            "ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³": "3",
         }
 
         for old, new in replacements.items():
@@ -2785,7 +2786,7 @@ def save_exact_random_seed_panels(fig):
         if (
             panel_values.size
             and axis.get_yscale() == "linear"
-            and row_metric_names[row_index] != "Max CN change"
+            and row_metric_names[row_index] != r"Max $\Delta$ CN"
             and not is_neighbor_jaccard
         ):
             finite_panel_values = panel_values[
@@ -2875,7 +2876,7 @@ def save_exact_random_seed_panels(fig):
 
 
         # Keep one-change panels readable without displaying an unreached 2.
-        if row_metric_names[row_index] == "Max CN change":
+        if row_metric_names[row_index] == r"Max $\Delta$ CN":
             line_value_sets = []
 
             for line in axis.lines:
@@ -3474,7 +3475,7 @@ def harmonize_random_seed_axes(fig):
             for ax in all_row_axes:
                 configure_rdf_l1_axis(ax, combined_y)
 
-        elif "max cn change" in row_label:
+        elif "max" in row_label and "cn" in row_label:
             upper_limit = max(
                 1.0,
                 float(math.ceil(np.max(combined_y)))
@@ -3690,16 +3691,38 @@ def direct_final_atoms(row):
     return ase_read(path, index=-1)
 
 
-def direct_final_force_rms(row):
-    """Return the RMS magnitude of final force vectors for one record."""
+def direct_final_force_vectors(row):
+    """Return final forces indexed by atom, or ``None`` when unavailable."""
     after_path = resolve_force_artifacts(row)[2]
     data = read_force_csv(after_path)
     if data is None:
+        return None
+    vectors = data[["fx", "fy", "fz"]].apply(
+        pd.to_numeric, errors="coerce"
+    ).to_numpy(dtype=float)
+    atom_indices = pd.to_numeric(data["atom_index"], errors="coerce").to_numpy()
+    if (
+        vectors.ndim != 2
+        or vectors.shape[1] != 3
+        or not np.isfinite(vectors).all()
+        or not np.isfinite(atom_indices).all()
+        or len(np.unique(atom_indices)) != len(atom_indices)
+    ):
+        return None
+    return {
+        int(atom_index): vector
+        for atom_index, vector in zip(atom_indices, vectors)
+    }
+
+
+def direct_final_force_rms_difference(mlff_row, dft_row):
+    """Return the RMS per-atom MLFF--DFT final-force vector difference."""
+    mlff_forces = direct_final_force_vectors(mlff_row)
+    dft_forces = direct_final_force_vectors(dft_row)
+    if mlff_forces is None or dft_forces is None:
         return np.nan
-    vectors = data[["fx", "fy", "fz"]].to_numpy(dtype=float)
-    if vectors.ndim != 2 or vectors.shape[1] != 3 or not np.isfinite(vectors).all():
+    if set(mlff_forces) != set(dft_forces) or not mlff_forces:
         return np.nan
-    return float(np.sqrt(np.mean(np.sum(vectors ** 2, axis=1))))
 
 
 def paired_mlff_dft_records(records, output_dir):
@@ -3745,8 +3768,6 @@ def paired_mlff_dft_records(records, output_dir):
             missing.append(f"Could not calculate paired geometry for {source_id}: {error}")
             continue
 
-        mlff_rms = direct_final_force_rms(source)
-        dft_rms = direct_final_force_rms(dft_row)
         pairs.append({
             "run_id": source_id,
             "trial": source.get("trial"),
@@ -3757,11 +3778,7 @@ def paired_mlff_dft_records(records, output_dir):
             "epsilon": source.get("epsilon"),
             "epsilon_percent_min_lattice": source.get("epsilon_percent_displacement"),
             "median_displacement_a": float(np.median(displacement)),
-            "rms_force_difference_ev_a": (
-                abs(mlff_rms - dft_rms)
-                if np.isfinite(mlff_rms) and np.isfinite(dft_rms)
-                else np.nan
-            ),
+            "rms_force_difference_ev_a": direct_final_force_rms_difference(source, dft_row),
             "relaxation_step_difference": (
                 abs(float(source.get("after_relax_steps")) - float(dft_row.get("after_relax_steps")))
                 if pd.notna(source.get("after_relax_steps"))
@@ -3846,10 +3863,10 @@ def draw_direct_comparison_panel(ax, pairs, metric, attack):
 def save_normalized_agreement_heatmap(pairs, output_dir):
     """Save the MLFF--DFT agreement heatmap beside the random-seed plots."""
     heatmap_metrics = [
-        ("neighbor_jaccard_distance", "Jaccard distance"),
-        ("coordination_number_difference_max", "CN change"),
+        ("neighbor_jaccard_distance", "Neighbor Jaccard distance"),
+        ("coordination_number_difference_max", r"Max $\Delta$ CN"),
         ("relaxation_step_difference", "Relaxation steps"),
-        ("rdf_l1_distance", "RDF distance"),
+        ("rdf_l1_distance", "RDF L1 distance"),
         ("rms_force_difference_ev_a", r"RMS $\Delta$ force"),
         ("median_displacement_a", "Displacement"),
     ]
@@ -3901,11 +3918,16 @@ def save_normalized_agreement_heatmap(pairs, output_dir):
         lower, upper = float(np.min(combined)), float(np.max(combined))
         for model in comparison_models:
             row = matrices[model][metric_index]
-            normalized[model][metric_index] = (
-                np.where(np.isfinite(row), 0.0, np.nan)
-                if np.isclose(lower, upper)
-                else (row - lower) / (upper - lower)
-            )
+            if np.isclose(lower, upper):
+                # A constant non-zero change is still a maximum change;
+                # only a constant zero row represents no difference.
+                normalized[model][metric_index] = np.where(
+                    np.isfinite(row),
+                    1.0 if upper > 0.0 else 0.0,
+                    np.nan,
+                )
+            else:
+                normalized[model][metric_index] = (row - lower) / (upper - lower)
 
     fig, ax = plt.subplots(figsize=(11.2, 5.8), facecolor="white")
     scalar_map = plt.cm.ScalarMappable(
@@ -3926,8 +3948,7 @@ def save_normalized_agreement_heatmap(pairs, output_dir):
                 ax.add_patch(Polygon(corners, closed=True, facecolor=facecolor,
                                      edgecolor="white", linewidth=0.85))
                 if np.isfinite(value):
-                    raw_value = matrices[model][row, column]
-                    ax.text(*text_position, f"{raw_value:.3g}", ha="center", va="center",
+                    ax.text(*text_position, f"{value:.2f}", ha="center", va="center",
                             fontsize=8.4, color="white" if value >= 0.58 else "#0F172A")
 
     ax.set_xlim(-0.5, len(targets) - 0.5)
@@ -3959,7 +3980,7 @@ def save_normalized_agreement_heatmap(pairs, output_dir):
     colourbar.set_ticks([0.0, 0.5, 1.0])
     colourbar.set_ticklabels(["0.0", "0.5", "1.0"])
     colourbar.ax.tick_params(labelsize=11, length=0)
-    colourbar.set_label("Normalized difference", fontsize=12, color="#000000", labelpad=9)
+    colourbar.set_label("Normalized difference from DFT", fontsize=12, color="#000000", labelpad=9)
     colourbar.outline.set_visible(False)
     fig.subplots_adjust(left=0.22, right=0.90, bottom=0.17, top=0.78)
     fig.text(0.55, 0.075, r"$\epsilon$ strength (% min lattice)",
@@ -3968,7 +3989,7 @@ def save_normalized_agreement_heatmap(pairs, output_dir):
                 dpi=300, bbox_inches="tight", facecolor="white")
     plt.close(fig)
 def save_direct_comparison_figures(records, output_dir):
-    """Save non-heatmap MLFF--DFT comparisons in the random-seed visual style."""
+    """Save standalone MLFF--DFT plots in the random-seed individual format."""
     output_dir = Path(output_dir) / "direct_comparison"
     output_dir.mkdir(parents=True, exist_ok=True)
     pairs, missing = paired_mlff_dft_records(records, output_dir)
@@ -3983,42 +4004,71 @@ def save_direct_comparison_figures(records, output_dir):
     ]
     attacks = ADVERSARIAL_ATTACKS
 
-    def save_figure(metrics_to_plot, filename, title):
-        fig, axes = plt.subplots(
-            len(metrics_to_plot), len(attacks),
-            figsize=(13.6, max(3.4, 2.75 * len(metrics_to_plot))),
-            squeeze=False,
+    def save_individual(metric, ylabel, attack, column):
+        """Export one plot with the exact standalone random-seed geometry."""
+        fig, axes = plt.subplots(3, 4, figsize=(18.2, 10.4), squeeze=False)
+        ax = axes[0, column]
+        draw_direct_comparison_panel(ax, pairs, metric, attack)
+        ax.set_ylabel(ylabel, labelpad=7)
+        ax.set_xlabel(r"$\epsilon$ strength (% min lattice parameter)", labelpad=7)
+        for row_axes in axes:
+            for placeholder_axis in row_axes:
+                placeholder_axis.set_xlabel(
+                    r"$\epsilon$ strength (% min lattice parameter)", labelpad=6,
+                )
+        for row_axes in axes:
+            row_axes[0].set_ylabel(ylabel, labelpad=7)
+        fig.tight_layout(
+            rect=[0.035, 0.05, 0.995, 0.875], h_pad=2.0, w_pad=1.8,
         )
-        fig.suptitle(title, fontsize=13, fontweight="bold", y=0.985)
-        for row, (metric, ylabel) in enumerate(metrics_to_plot):
-            for column, attack in enumerate(attacks):
-                ax = axes[row, column]
-                panel_label = chr(ord("A") + row * len(attacks) + column)
-                draw_direct_comparison_panel(ax, pairs, metric, attack)
-                if column == 0:
-                    ax.set_ylabel(ylabel, labelpad=7)
-                ax.set_xlabel(r"$\epsilon$ strength (% min lattice parameter)", labelpad=6)
-                ax.text(0.018, 0.965, panel_label, transform=ax.transAxes,
-                        ha="left", va="top", fontsize=9, fontweight="bold",
-                        color="#111111", bbox={"facecolor": "white", "edgecolor": "none",
-                        "alpha": 0.82, "pad": 1.5}, zorder=10)
-        handles = [
-            Line2D([0], [0], color=COLORS[model], linewidth=2.7,
-                   label=model_label(model))
-            for model in ("mace_mh", "uma")
-        ]
-        fig.legend(handles=handles, loc="upper center", ncol=2, frameon=False,
-                   bbox_to_anchor=(0.5, 0.955), fontsize=8.2,
-                   title="MLFF compared with its DFT relaxation", title_fontsize=9.0)
-        fig.tight_layout(rect=[0.035, 0.05, 0.995, 0.875], h_pad=2.0, w_pad=1.8)
-        harmonize_random_seed_axes(fig)
-        fig.savefig(output_dir / filename, dpi=300, bbox_inches="tight", facecolor="white")
+        for row_axes in axes:
+            for placeholder_axis in row_axes:
+                placeholder_axis.set_visible(placeholder_axis is ax)
+
+        # Match the 40% taller canvas and cropped axis-plus-legend geometry
+        # used by the existing random-seed individual exports.
+        fig.set_size_inches(18.2, 10.4 * 1.40, forward=True)
+        fig.canvas.draw()
+
+        model_legend = ax.legend(
+            handles=[
+                Line2D([0], [0], color=COLORS[model], linewidth=2.7,
+                       label=model_label(model))
+                for model in ("mace_mh", "uma")
+            ],
+            loc="lower center",
+            bbox_to_anchor=(0.28, 1.30),
+            ncol=2,
+            frameon=False,
+            fontsize=7.2,
+            handlelength=2.2,
+            columnspacing=1.0,
+            handletextpad=0.45,
+            borderaxespad=0.0,
+            title="Models",
+            title_fontsize=7.4,
+        )
+        ax.add_artist(model_legend)
+
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        bounding_box = matplotlib.transforms.Bbox.union([
+            ax.get_tightbbox(renderer),
+            model_legend.get_window_extent(renderer),
+        ]).transformed(fig.dpi_scale_trans.inverted()).padded(0.06)
+
+        fig.savefig(
+            output_dir / f"mlff_dft_{metric}_{attack.lower().replace('-', '')}.png",
+            dpi=300,
+            bbox_inches=bounding_box,
+            facecolor="white",
+            edgecolor="none",
+        )
         plt.close(fig)
 
     for metric, label in metrics:
-        save_figure([(metric, label)], f"{metric}.png", f"MLFF--DFT comparison: {label}")
-    save_figure(metrics, "direct_comparison_six_metrics.png",
-                "Random-seed MLFF--DFT agreement after perturbation + relaxation")
+        for column, attack in enumerate(attacks):
+            save_individual(metric, label, attack, column)
     return pairs, missing
 def main():
     global CALCULATORS, RELAXATION_STEP_UPPER_LIMIT
@@ -4147,6 +4197,10 @@ def main():
             f"{len(contour_records)} contour records."
         )
     records = add_post_attack_rms_columns(records)
+    records = add_post_attack_relaxed_rms_at_fmax_column(
+        records,
+        fmax=0.05,
+    )
 
     records.to_csv(
         output_dir / "random_seed_combined.csv",
