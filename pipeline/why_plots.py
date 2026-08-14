@@ -17,6 +17,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
+from matplotlib.patches import Patch, Polygon
 from matplotlib.ticker import LogFormatterMathtext
 import numpy as np
 import pandas as pd
@@ -105,14 +106,84 @@ def load_records(project_root):
     # Prefer final-stage columns but fall back per row for legacy records.
     data["final_jaccard"] = data["final_jaccard"].fillna(numeric(data, "neighbor_jaccard_distance"))
     data["final_max_cn"] = numeric(data, FINAL_MAX_CN).fillna(numeric(data, "coordination_change_max"))
-    if "post_attack_relaxed_rms_force_ev_a" not in data:
-        data = add_post_attack_rms_columns(data)
+    # Backfill partial legacy records so MLFF--DFT force pairs are retained.
+    calculated_rms = add_post_attack_rms_columns(data)
+    stored_rms = numeric(data, "post_attack_relaxed_rms_force_ev_a")
+    data["post_attack_relaxed_rms_force_ev_a"] = stored_rms.fillna(
+        numeric(calculated_rms, "post_attack_relaxed_rms_force_ev_a")
+    )
     data["final_rms_force"] = numeric(data, "post_attack_relaxed_rms_force_ev_a")
     data["final_energy"] = numeric(data, "final_energy")
     data["relax_steps"] = numeric(data, "after_relax_steps")
     data["converged"] = data.get("after_relax_converged", False).fillna(False).astype(bool)
     return data
 
+
+def paired_final_rms_force_records(data):
+    """Pair final MLFF RMS forces to their DFT reruns by source run ID."""
+    mlff = data[data["calculator"].isin(MLFF_MODELS)]
+    dft = data[data["calculator"].astype(str).str.startswith("dft_")]
+    by_trial = {(str(row.get("trial", "")), str(row.get("run_id", ""))): row for _, row in mlff.iterrows()}
+    pairs = []
+    for _, dft_row in dft.iterrows():
+        source_id = dft_row.get("dft_source_run_id")
+        if source_id is None or pd.isna(source_id):
+            continue
+        source = by_trial.get((str(dft_row.get("trial", "")), str(source_id)))
+        if source is None:
+            matches = mlff[mlff["run_id"].astype(str) == str(source_id)]
+            source = matches.iloc[0] if len(matches) == 1 else None
+        if source is None:
+            continue
+        mlff_rms = pd.to_numeric(source.get("final_rms_force"), errors="coerce")
+        dft_rms = pd.to_numeric(dft_row.get("final_rms_force"), errors="coerce")
+        if np.isfinite(mlff_rms) and np.isfinite(dft_rms):
+            pairs.append({
+                "run_id": source_id, "source_model": source["calculator"],
+                "epsilon": source.get("epsilon"),
+                "mlff_final_rms_force_ev_a": float(mlff_rms),
+                "dft_final_rms_force_ev_a": float(dft_rms),
+                "rms_force_difference_ev_a": abs(float(mlff_rms) - float(dft_rms)),
+            })
+    return pd.DataFrame(pairs)
+
+
+def save_final_rms_force_heatmap(data, output):
+    """Plot final relaxed RMS-force differences for MACE-MH and UMA vs DFT."""
+    pairs = paired_final_rms_force_records(data)
+    pairs.to_csv(output / "paired_mlff_dft_final_rms_forces.csv", index=False)
+    values = {model: np.full(len(ENSEMBLE_EPSILONS), np.nan) for model in MLFF_MODELS}
+    if not pairs.empty:
+        pairs["epsilon"] = pd.to_numeric(pairs["epsilon"], errors="coerce")
+        for model in MLFF_MODELS:
+            rows = pairs[(pairs["source_model"] == model) & np.isfinite(pairs["epsilon"]) & (pairs["epsilon"] > 0)].copy()
+            if rows.empty:
+                continue
+            bins = np.abs(np.log10(rows["epsilon"].to_numpy(float))[:, None] - np.log10(ENSEMBLE_EPSILONS)[None, :]).argmin(axis=1)
+            for index, value in pd.to_numeric(rows["rms_force_difference_ev_a"], errors="coerce").groupby(bins).median().items():
+                values[model][int(index)] = value
+    finite = np.concatenate([row[np.isfinite(row)] for row in values.values()])
+    normalized = {model: np.full(len(ENSEMBLE_EPSILONS), np.nan) for model in MLFF_MODELS}
+    if finite.size:
+        lower, upper = float(finite.min()), float(finite.max())
+        for model, row in values.items():
+            normalized[model] = np.where(np.isfinite(row), 1.0 if np.isclose(lower, upper) and upper > 0 else (0.0 if np.isclose(lower, upper) else (row - lower) / (upper - lower)), np.nan)
+    fig, ax = plt.subplots(figsize=(11.2, 2.6), facecolor="white")
+    cmap = plt.cm.ScalarMappable(norm=plt.Normalize(0, 1), cmap=plt.colormaps["Blues"]); cmap.set_array([])
+    for column in range(len(ENSEMBLE_EPSILONS)):
+        for model, corners, position in (("mace_mh", ((column-.5, -.5), (column+.5, -.5), (column+.5, .5)), (column+.18, -.18)), ("uma", ((column-.5, -.5), (column-.5, .5), (column+.5, .5)), (column-.18, .18))):
+            value = normalized[model][column]
+            ax.add_patch(Polygon(corners, closed=True, facecolor=cmap.to_rgba(value) if np.isfinite(value) else "#F1F5F9", edgecolor="white", linewidth=.85))
+            if np.isfinite(value): ax.text(*position, f"{value:.2f}", ha="center", va="center", fontsize=8, color="white" if value >= .58 else "#0F172A")
+    ax.set(xlim=(-.5, len(ENSEMBLE_EPSILONS)-.5), ylim=(.5, -.5), yticks=[0], yticklabels=[r"RMS $\Delta$ force"])
+    ax.set_xticks((0, 2, 4, 6, 8), [r"$10^{-2}$", r"$10^{-1}$", r"$10^{0}$", r"$10^{1}$", r"$10^{2}$"]); ax.tick_params(axis="both", length=0)
+    for spine in ax.spines.values(): spine.set_visible(False)
+    fig.suptitle("MLFF--DFT final RMS-force difference after perturbation + relaxation", fontsize=14, fontweight="bold")
+    fig.legend(handles=[Patch(facecolor="#4B8CC0", label="MACE-MH, upper triangle"), Patch(facecolor="#4B8CC0", label="UMA, lower triangle")], loc="upper center", bbox_to_anchor=(.5, .88), ncol=2, frameon=False, fontsize=9)
+    colorbar = fig.colorbar(cmap, ax=ax, fraction=.04, pad=.035); colorbar.set_label("Normalized absolute RMS-force difference from DFT", fontsize=9); colorbar.outline.set_visible(False)
+    ax.set_xlabel(r"$\epsilon$ strength (% min lattice)"); fig.subplots_adjust(left=.16, right=.89, bottom=.25, top=.62)
+    fig.savefig(output / "direct_comparison_normalized_heatmap.png", dpi=300, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
 
 def grouped_curve(data, metric, models):
     usable = data[data["calculator"].isin(models)].dropna(subset=["epsilon_percent", metric]).copy()
@@ -658,7 +729,12 @@ def save_phonons(data, material, preference, output, mace_mh_head, anomaly_key, 
     fig.savefig(destination, dpi=300, bbox_inches="tight"); plt.close(fig)
 
 def phonon_ensemble_rows(data, preference, diagnostic_model):
-    """Select a best-covered seed for each of the 20 materials."""
+    """Select a best-covered seed for each material on the nominal sweep.
+
+    ``epsilon_percent`` is the achieved, material-specific displacement.  It
+    must not be used to identify a cross-material epsilon sweep: the nominal
+    ``transition_epsilon`` is the coordinate shared by all materials.
+    """
     if preference is None or preference.empty:
         return pd.DataFrame()
     calculator = diagnostic_model or preference.get("calculator")
@@ -669,17 +745,19 @@ def phonon_ensemble_rows(data, preference, diagnostic_model):
         & data["transition_epsilon"].notna()
         & data["converged"]
     ].copy()
-    rows = rows[rows["epsilon_percent"].apply(lambda value: np.isclose(value, ENSEMBLE_EPSILONS).any())]
+    rows = rows[rows["transition_epsilon"].apply(
+        lambda value: np.isclose(value, ENSEMBLE_EPSILONS).any()
+    )]
     rows["_seed_key"] = jaccard_trajectory_key(rows)
     rows = rows[rows.apply(lambda candidate: all(path is not None for path in structural_artifacts(candidate)), axis=1)]
     if rows.empty:
         return rows
     selected = []
     for _, material_rows in rows.groupby("material_slug", sort=True):
-        coverage = material_rows.groupby("_seed_key")["epsilon_percent"].nunique()
+        coverage = material_rows.groupby("_seed_key")["transition_epsilon"].nunique()
         seed = coverage.sort_values(ascending=False, kind="stable").index[0]
-        selected.append(material_rows[material_rows["_seed_key"] == seed].drop_duplicates("epsilon_percent", keep="first"))
-    return pd.concat(selected, ignore_index=True).sort_values(["epsilon_percent", "material_slug"])
+        selected.append(material_rows[material_rows["_seed_key"] == seed].drop_duplicates("transition_epsilon", keep="first"))
+    return pd.concat(selected, ignore_index=True).sort_values(["transition_epsilon", "material_slug"])
 def gamma_phonon_modes(row, atoms, output, cache_key, mace_mh_head):
     """Calculate signed Gamma-point phonon energies in meV for one structure."""
     configured = calculator_for(row, atoms, mace_mh_head)
@@ -724,16 +802,16 @@ def save_phonon_ensemble(data, preference, output, mace_mh_head, diagnostic_mode
             _, _, final = load_states(row)
             modes = gamma_phonon_modes(row, final, output, f"05_ensemble_{row['material_slug']}_{row['calculator']}_epsilon_{row['transition_epsilon']:.8g}", mace_mh_head)
             for mode, frequency in enumerate(modes, start=1):
-                records.append({"material_slug": row["material_slug"], "state": "final", "mode": mode, "frequency_meV": frequency, "epsilon": row["epsilon_percent"], "seed": row["_seed_key"]})
+                records.append({"material_slug": row["material_slug"], "state": "final", "mode": mode, "frequency_meV": frequency, "epsilon": row["transition_epsilon"], "seed": row["_seed_key"]})
         except Exception as error:
-            records.append({"material_slug": row["material_slug"], "state": "final", "epsilon": row["epsilon_percent"], "error": str(error)})
+            records.append({"material_slug": row["material_slug"], "state": "final", "epsilon": row["transition_epsilon"], "error": str(error)})
     table = pd.DataFrame(records)
     table.to_csv(table_path, index=False)
     usable = table.dropna(subset=["frequency_meV"]) if "frequency_meV" in table else pd.DataFrame()
     finals = usable[usable["state"] == "final"] if not usable.empty else pd.DataFrame()
     reference = usable[usable["state"] == "reference"] if not usable.empty else pd.DataFrame()
     material_count = selected["material_slug"].nunique()
-    selected_coverage = selected.groupby("epsilon_percent")["material_slug"].nunique()
+    selected_coverage = selected.groupby("transition_epsilon")["material_slug"].nunique()
     complete_strengths = all(selected_coverage.get(epsilon, 0) == EXPECTED_ENSEMBLE_MATERIALS for epsilon in ENSEMBLE_EPSILONS)
     if finals.empty or reference.empty or material_count != EXPECTED_ENSEMBLE_MATERIALS or not complete_strengths:
         reason = f"Expected {EXPECTED_ENSEMBLE_MATERIALS} materials at each requested strength; found {material_count} materials with incomplete strength coverage."
@@ -781,6 +859,7 @@ def main():
     args = parser.parse_args()
     root = args.project_root.resolve(); output = (args.output_dir or root / "why_plots").resolve(); output.mkdir(parents=True, exist_ok=True)
     data = load_records(root); data.to_csv(output / "why_plot_records.csv", index=False)
+    save_final_rms_force_heatmap(data, output)
     dip, spike = choose_anomalies(data); contributions = contribution_rows(data, dip, spike)
     contributions.to_csv(output / "anomaly_contributions.csv", index=False)
     save_attribution(data, contributions, output)

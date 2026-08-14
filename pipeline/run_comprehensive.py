@@ -5617,9 +5617,9 @@ def save_mlff_ranking_violin_plot(
                     profile_values,
                     linestyle="None",
                     marker="o",
-                    markersize=3.4,
-                    markerfacecolor="#E53935",
-                    markeredgecolor="#E53935",
+                    markersize=4.4,
+                    markerfacecolor="#FF0000",
+                    markeredgecolor="#FF0000",
                     markeredgewidth=0.0,
                     alpha=1.0,
                     zorder=7,
@@ -7668,6 +7668,70 @@ def make_exact_min_lattice_figures_1_to_9(epsilon_records, output_dir):
 
 
 
+def save_mlff_dft_combined_attack_figures(records, output_dir):
+    """Save direct final-state MLFF--DFT summaries for every metric."""
+    output_dir = Path(output_dir) / "direct_comparison"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    mlff = records.loc[~records["calculator"].astype(str).str.startswith("dft_")]
+    dft = records.loc[records["calculator"].astype(str).str.startswith("dft_")]
+    sources = {str(row["run_id"]): row for _, row in mlff.iterrows()}
+    pairs, missing = [], []
+    for _, dft_row in dft.iterrows():
+        source = sources.get(str(clean_value(dft_row.get("dft_source_run_id"))))
+        if source is None:
+            missing.append(f"No MLFF match for DFT run {dft_row.get('run_id')}")
+            continue
+        pair = {"source_model": source.get("calculator"), "attack_label": source.get("attack_label"),
+                "epsilon_percent_min_lattice": as_float(source.get("epsilon_percent_displacement"))}
+        for column in ("after_relax_steps", "mean_displacement", "max_displacement",
+                       "neighbor_jaccard_distance", "coordination_change_max", "rdf_l1_distance"):
+            left, right = as_float(source.get(column)), as_float(dft_row.get(column))
+            pair[f"{column}_difference"] = abs(left - right) if np.isfinite(left) and np.isfinite(right) else np.nan
+        pairs.append(pair)
+    pairs = pd.DataFrame(pairs)
+    pairs.to_csv(output_dir / "paired_mlff_dft_post_attack_relaxation.csv", index=False)
+    pd.DataFrame({"reason": missing}).to_csv(output_dir / "missing_pairs.csv", index=False)
+    metrics = [("after_relax_steps_difference", "Relaxation-step difference"),
+               ("mean_displacement_difference", r"Mean displacement difference ($\AA$)"),
+               ("max_displacement_difference", r"Maximum displacement difference ($\AA$)"),
+               ("neighbor_jaccard_distance_difference", "Neighbor Jaccard-distance difference"),
+               ("coordination_change_max_difference", "Maximum coordination-change difference"),
+               ("rdf_l1_distance_difference", "RDF L1-distance difference")]
+    markers, styles = {"FGSM": "o", "I-FGSM": "s", "PGD": "^"}, {"FGSM": "-", "I-FGSM": "--", "PGD": ":"}
+    for metric, ylabel in metrics:
+        fig, ax = plt.subplots(figsize=(8.2, 5.2), facecolor="white")
+        has_data = False
+        for model in ("mace_mh", "uma"):
+            for attack in ATTACK_ORDER:
+                data = pairs.loc[(pairs["source_model"] == model) & (pairs["attack_label"] == attack), ["epsilon_percent_min_lattice", metric]].apply(pd.to_numeric, errors="coerce").dropna()
+                data = data.loc[data["epsilon_percent_min_lattice"] > 0]
+                if data.empty:
+                    continue
+                has_data = True
+                color = CALCULATOR_COLORS[model]
+                ax.scatter(data["epsilon_percent_min_lattice"], data[metric], s=9, color=color, alpha=.16, linewidths=0, zorder=1)
+                summary = data.groupby("epsilon_percent_min_lattice", as_index=False)[metric].agg(median="median", q25=lambda x: x.quantile(.25), q75=lambda x: x.quantile(.75)).sort_values("epsilon_percent_min_lattice")
+                x, center, q25, q75 = (summary[name].to_numpy(float) for name in ("epsilon_percent_min_lattice", "median", "q25", "q75"))
+                ax.fill_between(x, q25, q75, color=color, alpha=.08, zorder=2)
+                ax.plot(x, center, color=color, linewidth=1.8, marker=markers[attack], markersize=4, markeredgecolor="white", markeredgewidth=.45, linestyle=styles[attack], zorder=3)
+        if not has_data:
+            plt.close(fig)
+            continue
+        ax.set_xscale("log")
+        ax.set_xlabel(r"$\epsilon$ strength (% min lattice parameter)")
+        ax.set_ylabel(ylabel)
+        ax.set_title(f"MLFF--DFT agreement after attack + relaxation: {ylabel}")
+        ax.grid(True, which="major", alpha=.28)
+        ax.grid(True, which="minor", alpha=.08)
+        handles = [plt.Line2D([0], [0], color=CALCULATOR_COLORS[m], lw=2.5, label=model_label(m)) for m in ("mace_mh", "uma") if (pairs["source_model"] == m).any()]
+        handles += [plt.Line2D([0], [0], color="#4A4A4A", marker=markers[a], linestyle=styles[a], label=a) for a in ATTACK_ORDER]
+        ax.legend(handles=handles, title="Model / attack", ncol=2)
+        fig.tight_layout()
+        save_figure(fig, output_dir / f"mlff_dft_{metric}_all_attacks")
+        plt.close(fig)
+    return missing
+
+
 def main():
     global MODEL_ORDER
 
@@ -7897,6 +7961,11 @@ def main():
         fmax=0.05,
     )
 
+    if args.dft_structures_dir is not None:
+        dft_comparison_missing = save_mlff_dft_combined_attack_figures(
+            records, args.output_dir,
+        )
+
     missing_rows = [
         {"reason": item}
         for item in all_missing
@@ -7971,7 +8040,7 @@ def main():
         rms_records, rms_output_dir / "rms_force_post_attack_relaxed.png",
         "MLFF ranking: RMS force after attack and relaxation\n"
         r"(first state with $f_{\max} \leq 0.05$ eV/$\AA$)",
-        r"RMS force (eV/$\AA$)",
+        r"Final RMS force (eV/$\AA$)",
         rms_value_getter(POST_ATTACK_RELAXED_RMS_FMAX_005_COLUMN), log_x=True,
         highlight_epsilon_percent=args.mlff_ranking_highlight_epsilon_percent,
         lower_clip_reference_models={
