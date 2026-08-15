@@ -7681,8 +7681,18 @@ def save_mlff_dft_combined_attack_figures(records, output_dir):
         if source is None:
             missing.append(f"No MLFF match for DFT run {dft_row.get('run_id')}")
             continue
-        pair = {"source_model": source.get("calculator"), "attack_label": source.get("attack_label"),
-                "epsilon_percent_min_lattice": as_float(source.get("epsilon_percent_displacement"))}
+        pair = {
+            "source_model": source.get("calculator"),
+            "attack_label": source.get("attack_label"),
+            "epsilon_percent_min_lattice": as_float(
+                source.get("epsilon_percent_displacement")
+            ),
+            # Identify the same material/seed across epsilon values so raw
+            # MLFF--DFT agreement can be rendered as a thin trajectory.
+            "material_slug": source.get("material_slug"),
+            "trial": source.get("trial"),
+            "seed": source.get("seed"),
+        }
         for column in ("after_relax_steps", "mean_displacement", "max_displacement",
                        "neighbor_jaccard_distance", "coordination_change_max", "rdf_l1_distance"):
             left, right = as_float(source.get(column)), as_float(dft_row.get(column))
@@ -7697,23 +7707,56 @@ def save_mlff_dft_combined_attack_figures(records, output_dir):
                ("neighbor_jaccard_distance_difference", "Neighbor Jaccard-distance difference"),
                ("coordination_change_max_difference", "Maximum coordination-change difference"),
                ("rdf_l1_distance_difference", "RDF L1-distance difference")]
-    markers, styles = {"FGSM": "o", "I-FGSM": "s", "PGD": "^"}, {"FGSM": "-", "I-FGSM": "--", "PGD": ":"}
+    styles = {"FGSM": "-", "I-FGSM": "--", "PGD": ":"}
     for metric, ylabel in metrics:
         fig, ax = plt.subplots(figsize=(8.2, 5.2), facecolor="white")
         has_data = False
         for model in ("mace_mh", "uma"):
             for attack in ATTACK_ORDER:
-                data = pairs.loc[(pairs["source_model"] == model) & (pairs["attack_label"] == attack), ["epsilon_percent_min_lattice", metric]].apply(pd.to_numeric, errors="coerce").dropna()
+                data = pairs.loc[
+                    (pairs["source_model"] == model)
+                    & (pairs["attack_label"] == attack),
+                    [
+                        "epsilon_percent_min_lattice", metric,
+                        "material_slug", "trial", "seed",
+                    ],
+                ].copy()
+                data[["epsilon_percent_min_lattice", metric]] = data[
+                    ["epsilon_percent_min_lattice", metric]
+                ].apply(pd.to_numeric, errors="coerce")
+                data = data.dropna(
+                    subset=["epsilon_percent_min_lattice", metric]
+                )
                 data = data.loc[data["epsilon_percent_min_lattice"] > 0]
                 if data.empty:
                     continue
                 has_data = True
                 color = CALCULATOR_COLORS[model]
-                ax.scatter(data["epsilon_percent_min_lattice"], data[metric], s=9, color=color, alpha=.16, linewidths=0, zorder=1)
+                # One thin MLFF--DFT agreement trajectory for every material
+                # and random seed. The thicker curve and ribbon remain the
+                # median and IQR summary for this model/attack.
+                for _, trajectory in data.groupby(
+                    ["material_slug", "trial", "seed"], dropna=False
+                ):
+                    trajectory = (
+                        trajectory.groupby(
+                            "epsilon_percent_min_lattice", as_index=False
+                        )[metric]
+                        .median()
+                        .sort_values("epsilon_percent_min_lattice")
+                    )
+                    ax.plot(
+                        trajectory["epsilon_percent_min_lattice"],
+                        trajectory[metric],
+                        color=color,
+                        linewidth=0.65,
+                        alpha=0.22,
+                        zorder=1,
+                    )
                 summary = data.groupby("epsilon_percent_min_lattice", as_index=False)[metric].agg(median="median", q25=lambda x: x.quantile(.25), q75=lambda x: x.quantile(.75)).sort_values("epsilon_percent_min_lattice")
                 x, center, q25, q75 = (summary[name].to_numpy(float) for name in ("epsilon_percent_min_lattice", "median", "q25", "q75"))
                 ax.fill_between(x, q25, q75, color=color, alpha=.08, zorder=2)
-                ax.plot(x, center, color=color, linewidth=1.8, marker=markers[attack], markersize=4, markeredgecolor="white", markeredgewidth=.45, linestyle=styles[attack], zorder=3)
+                ax.plot(x, center, color=color, linewidth=2.25, linestyle=styles[attack], zorder=3)
         if not has_data:
             plt.close(fig)
             continue
@@ -7724,7 +7767,7 @@ def save_mlff_dft_combined_attack_figures(records, output_dir):
         ax.grid(True, which="major", alpha=.28)
         ax.grid(True, which="minor", alpha=.08)
         handles = [plt.Line2D([0], [0], color=CALCULATOR_COLORS[m], lw=2.5, label=model_label(m)) for m in ("mace_mh", "uma") if (pairs["source_model"] == m).any()]
-        handles += [plt.Line2D([0], [0], color="#4A4A4A", marker=markers[a], linestyle=styles[a], label=a) for a in ATTACK_ORDER]
+        handles += [plt.Line2D([0], [0], color="#4A4A4A", linestyle=styles[a], label=a) for a in ATTACK_ORDER]
         ax.legend(handles=handles, title="Model / attack", ncol=2)
         fig.tight_layout()
         save_figure(fig, output_dir / f"mlff_dft_{metric}_all_attacks")
