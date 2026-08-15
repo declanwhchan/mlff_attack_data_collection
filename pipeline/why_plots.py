@@ -16,9 +16,7 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.colors import LogNorm
 from matplotlib.patches import Patch, Polygon
-from matplotlib.ticker import LogFormatterMathtext
 import numpy as np
 import pandas as pd
 from ase.io import read as ase_read
@@ -728,120 +726,6 @@ def save_phonons(data, material, preference, output, mace_mh_head, anomaly_key, 
     ax.legend(fontsize=8)
     fig.savefig(destination, dpi=300, bbox_inches="tight"); plt.close(fig)
 
-def phonon_ensemble_rows(data, preference, diagnostic_model):
-    """Select a best-covered seed for each material on the nominal sweep.
-
-    ``epsilon_percent`` is the achieved, material-specific displacement.  It
-    must not be used to identify a cross-material epsilon sweep: the nominal
-    ``transition_epsilon`` is the coordinate shared by all materials.
-    """
-    if preference is None or preference.empty:
-        return pd.DataFrame()
-    calculator = diagnostic_model or preference.get("calculator")
-    rows = data[
-        (data["calculator"] == calculator)
-        & (data["attack_label"] == preference.get("attack_label"))
-        & data["material_slug"].notna()
-        & data["transition_epsilon"].notna()
-        & data["converged"]
-    ].copy()
-    rows = rows[rows["transition_epsilon"].apply(
-        lambda value: np.isclose(value, ENSEMBLE_EPSILONS).any()
-    )]
-    rows["_seed_key"] = jaccard_trajectory_key(rows)
-    rows = rows[rows.apply(lambda candidate: all(path is not None for path in structural_artifacts(candidate)), axis=1)]
-    if rows.empty:
-        return rows
-    selected = []
-    for _, material_rows in rows.groupby("material_slug", sort=True):
-        coverage = material_rows.groupby("_seed_key")["transition_epsilon"].nunique()
-        seed = coverage.sort_values(ascending=False, kind="stable").index[0]
-        selected.append(material_rows[material_rows["_seed_key"] == seed].drop_duplicates("transition_epsilon", keep="first"))
-    return pd.concat(selected, ignore_index=True).sort_values(["transition_epsilon", "material_slug"])
-def gamma_phonon_modes(row, atoms, output, cache_key, mace_mh_head):
-    """Calculate signed Gamma-point phonon energies in meV for one structure."""
-    configured = calculator_for(row, atoms, mace_mh_head)
-    cache = output / "phonon_cache" / cache_key
-    cache.parent.mkdir(exist_ok=True)
-    phonons = Phonons(configured, configured.calc, supercell=(1, 1, 1), delta=.01, name=str(cache))
-    phonons.run(); phonons.read(acoustic=True)
-    frequencies, _ = phonons.band_structure(np.array([[0., 0., 0.]]), modes=True, verbose=False)
-    return frequencies[0] * 1000.0
-
-def _smooth_curve(modes, values, points=300):
-    """Return a smooth spline curve, including the short-curve fallback."""
-    modes = np.asarray(modes, dtype=float)
-    values = np.asarray(values, dtype=float)
-    if len(modes) < 2:
-        return modes, values
-    smooth_modes = np.linspace(modes.min(), modes.max(), points)
-    return smooth_modes, make_interp_spline(modes, values, k=min(3, len(modes) - 1))(smooth_modes)
-
-
-def save_phonon_ensemble(data, preference, output, mace_mh_head, diagnostic_model):
-    """Plot 20-material phonon IQR ribbons at ten log-spaced strengths."""
-    destination = output / "05_phonon_ensemble_epsilon_bundle.png"
-    table_path = output / "phonon_modes_ensemble_epsilon_bundle.csv"
-    records = []
-    selected = phonon_ensemble_rows(data, preference, diagnostic_model)
-    if selected.empty:
-        pd.DataFrame(records).to_csv(table_path, index=False)
-        save_placeholder(destination, "Phonon ensemble across epsilon", "No converged epsilon sweep with complete structural artifacts was available.")
-        return
-    for material, material_rows in selected.groupby("material_slug", sort=True):
-        reference_row = material_rows.iloc[0]
-        try:
-            reference_atoms, _, _ = load_states(reference_row)
-            reference_modes = gamma_phonon_modes(reference_row, reference_atoms, output, f"05_ensemble_{material}_{reference_row['calculator']}_reference", mace_mh_head)
-            for mode, frequency in enumerate(reference_modes, start=1):
-                records.append({"material_slug": material, "state": "reference", "mode": mode, "frequency_meV": frequency})
-        except Exception as error:
-            records.append({"material_slug": material, "state": "reference", "error": str(error)})
-    for _, row in selected.iterrows():
-        try:
-            _, _, final = load_states(row)
-            modes = gamma_phonon_modes(row, final, output, f"05_ensemble_{row['material_slug']}_{row['calculator']}_epsilon_{row['transition_epsilon']:.8g}", mace_mh_head)
-            for mode, frequency in enumerate(modes, start=1):
-                records.append({"material_slug": row["material_slug"], "state": "final", "mode": mode, "frequency_meV": frequency, "epsilon": row["transition_epsilon"], "seed": row["_seed_key"]})
-        except Exception as error:
-            records.append({"material_slug": row["material_slug"], "state": "final", "epsilon": row["transition_epsilon"], "error": str(error)})
-    table = pd.DataFrame(records)
-    table.to_csv(table_path, index=False)
-    usable = table.dropna(subset=["frequency_meV"]) if "frequency_meV" in table else pd.DataFrame()
-    finals = usable[usable["state"] == "final"] if not usable.empty else pd.DataFrame()
-    reference = usable[usable["state"] == "reference"] if not usable.empty else pd.DataFrame()
-    material_count = selected["material_slug"].nunique()
-    selected_coverage = selected.groupby("transition_epsilon")["material_slug"].nunique()
-    complete_strengths = all(selected_coverage.get(epsilon, 0) == EXPECTED_ENSEMBLE_MATERIALS for epsilon in ENSEMBLE_EPSILONS)
-    if finals.empty or reference.empty or material_count != EXPECTED_ENSEMBLE_MATERIALS or not complete_strengths:
-        reason = f"Expected {EXPECTED_ENSEMBLE_MATERIALS} materials at each requested strength; found {material_count} materials with incomplete strength coverage."
-        save_placeholder(destination, "Phonon ensemble across epsilon", reason)
-        return
-    norm = LogNorm(vmin=ENSEMBLE_EPSILONS.min(), vmax=ENSEMBLE_EPSILONS.max())
-    cmap = plt.colormaps["viridis"]
-    fig, ax = plt.subplots(figsize=(7.4, 5.4), constrained_layout=True, facecolor="white")
-    ax.set_facecolor("white")
-    # Coloured regions are IQRs across materials; intentionally no median lines.
-    for epsilon in ENSEMBLE_EPSILONS:
-        group = finals[np.isclose(finals["epsilon"], epsilon)]
-        summary = group.groupby("mode")["frequency_meV"].quantile([.25, .75]).unstack().dropna().sort_index()
-        if summary.empty:
-            continue
-        modes, q25 = _smooth_curve(summary.index, summary[.25])
-        _, q75 = _smooth_curve(summary.index, summary[.75])
-        ax.fill_between(modes, q25, q75, color=cmap(norm(epsilon)), alpha=.30, linewidth=0, zorder=2)
-    summary = reference.groupby("mode")["frequency_meV"].median().sort_index()
-    modes, frequencies = _smooth_curve(summary.index, summary.to_numpy())
-    ax.plot(modes, frequencies, color="black", linewidth=2.4, label="reference", zorder=5)
-    ax.axhline(0, color="#555", linewidth=.75, alpha=.55, zorder=1)
-    ax.set(xlabel=r"$\Gamma$-point mode index", ylabel="Signed phonon energy (meV)", title="Phonon ensemble across attack strengths (20 materials)")
-    colorbar = fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap=cmap), ax=ax, pad=.02)
-    colorbar.set_label(r"$\epsilon$ strength (% min. lattice parameter)")
-    colorbar.set_ticks(10.0 ** np.arange(-2, 3))
-    colorbar.ax.yaxis.set_major_formatter(LogFormatterMathtext())
-    ax.legend(frameon=False, loc="best")
-    fig.savefig(destination, dpi=300, bbox_inches="tight")
-    plt.close(fig)
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project-root", type=Path, required=True)
@@ -885,8 +769,7 @@ def main():
             save_pes(data, material, preference, output, args.pes_grid, args.mace_mh_head, anomaly_key, anomaly_label, args.diagnostic_model, require_zero_jaccard)
         if args.with_phonons and not args.skip_phonons:
             save_phonons(data, material, preference, output, args.mace_mh_head, anomaly_key, anomaly_label, args.diagnostic_model, require_zero_jaccard)
-    if args.with_phonons and not args.skip_phonons:
-        save_phonon_ensemble(data, spike, output, args.mace_mh_head, args.diagnostic_model)
+
     print(f"why_plots written to {output}")
 
 
