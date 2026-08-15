@@ -69,7 +69,8 @@ for required_output in \
     "$WHY_PLOTS_DIR/01_material_attribution.png" \
     "$WHY_PLOTS_DIR/02_selected_anomaly_transitions.png" \
     "$WHY_PLOTS_DIR/03_basin_map_2d_mlff_jaccard_dip.png" \
-    "$WHY_PLOTS_DIR/04_phonon_stability_mlff_jaccard_dip.png"; do
+    "$WHY_PLOTS_DIR/04_phonon_stability_mlff_jaccard_dip.png" \
+    "$WHY_PLOTS_DIR/05_phonon_ensemble_epsilon_bundle.png"; do
     if [ ! -s "$required_output" ]; then
         echo "ERROR: Expected output was not created: $required_output"
         exit 1

@@ -1447,6 +1447,33 @@ def aggregate_curves(curves):
     )
 
 
+
+def case_iqr_curves(records, metric):
+    """Summarize every valid case for an IQR uncertainty ribbon."""
+    data = records.copy()
+    if "n_steps" not in data.columns:
+        data["n_steps"] = 1.0
+    else:
+        data["n_steps"] = numeric(data["n_steps"]).fillna(1.0)
+    data[metric] = numeric(data[metric])
+    data = data.dropna(subset=[
+        "calculator", "attack_label", "epsilon",
+        "epsilon_percent_displacement", metric,
+    ])
+    return (
+        data.groupby(
+            ["calculator", "attack_label", "epsilon", "n_steps"],
+            as_index=False, dropna=False,
+        )
+        .agg(
+            epsilon_percent_displacement=(
+                "epsilon_percent_displacement", "median"
+            ),
+            q25=(metric, lambda values: values.quantile(0.25)),
+            q75=(metric, lambda values: values.quantile(0.75)),
+        )
+    )
+
 def configure_y_axis(
     ax,
     values,
@@ -1753,6 +1780,8 @@ def draw_metric_panel(
     aggregate = aggregate_curves(
         curves
     )
+    case_iqr = case_iqr_curves(records, metric)
+    case_iqr = case_iqr[case_iqr["attack_label"] == attack].copy()
 
     plotted = []
 
@@ -1798,8 +1827,6 @@ def draw_metric_panel(
                 subset=[
                     "epsilon_percent_displacement",
                     "median",
-                    "q25",
-                    "q75",
                 ]
             )
         )
@@ -1812,6 +1839,12 @@ def draw_metric_panel(
 
         if summary.empty:
             continue
+        ribbon = case_iqr[case_iqr["calculator"] == calculator].copy()
+        ribbon = ribbon.replace([np.inf, -np.inf], np.nan).dropna(
+            subset=["epsilon_percent_displacement", "q25", "q75"]
+        )
+        ribbon = ribbon[ribbon["epsilon_percent_displacement"] > 0]
+
 
         x = summary[
             "epsilon_percent_displacement"
@@ -1821,26 +1854,24 @@ def draw_metric_panel(
             "median"
         ].to_numpy(dtype=float)
 
-        q25 = summary[
-            "q25"
-        ].to_numpy(dtype=float)
-
-        q75 = summary[
-            "q75"
-        ].to_numpy(dtype=float)
-
         smooth_x, smooth_center = smooth_seed_summary(x, center)
-        _, smooth_q25 = smooth_seed_summary(x, q25)
-        _, smooth_q75 = smooth_seed_summary(x, q75)
-        ax.fill_between(
-            smooth_x,
-            np.minimum(smooth_q25, smooth_q75),
-            np.maximum(smooth_q25, smooth_q75),
-            color=color,
-            alpha=0.18,
-            linewidth=0,
-            zorder=1,
-        )
+        if not ribbon.empty:
+            ribbon_x = ribbon["epsilon_percent_displacement"].to_numpy(dtype=float)
+            q25 = ribbon["q25"].to_numpy(dtype=float)
+            q75 = ribbon["q75"].to_numpy(dtype=float)
+            smooth_ribbon_x, smooth_q25 = smooth_seed_summary(ribbon_x, q25)
+            _, smooth_q75 = smooth_seed_summary(ribbon_x, q75)
+            ax.fill_between(
+                smooth_ribbon_x,
+                np.minimum(smooth_q25, smooth_q75),
+                np.maximum(smooth_q25, smooth_q75),
+                color=color,
+                alpha=0.18,
+                linewidth=0,
+                zorder=1,
+            )
+            plotted.extend(q25.tolist())
+            plotted.extend(q75.tolist())
 
         ax.plot(
             smooth_x,
@@ -1852,12 +1883,6 @@ def draw_metric_panel(
 
         plotted.extend(
             center.tolist()
-        )
-        plotted.extend(
-            q25.tolist()
-        )
-        plotted.extend(
-            q75.tolist()
         )
 
     if not plotted:
@@ -2126,6 +2151,7 @@ def draw_bubble_metric_panel(ax, records, metric, attack, y_scale="linear"):
         summary = summary[summary["epsilon_percent_displacement"] > 0].copy()
         if summary.empty:
             continue
+
         summary["spread"] = (summary["q75"] - summary["q25"]).abs()
         summaries.append((calculator, summary))
         plotted.extend(summary[["median", "q25", "q75"]].to_numpy().ravel())
@@ -3824,27 +3850,47 @@ def draw_direct_comparison_panel(ax, pairs, metric, attack):
         ]
         if values.empty:
             continue
+
+        # Condense the material-level MLFF--DFT pairs into one observation
+        # per random seed and nominal epsilon. These are the only raw dots
+        # shown in the direct-comparison individual panels.
+        seed_values = values.groupby(
+            ["seed", "epsilon"], as_index=False
+        ).agg(
+            epsilon_percent_min_lattice=(
+                "epsilon_percent_min_lattice", "median"
+            ),
+            **{metric: (metric, "median")},
+        )
+
         color = COLORS[model]
         ax.scatter(
-            values["epsilon_percent_min_lattice"], values[metric],
+            seed_values["epsilon_percent_min_lattice"],
+            seed_values[metric],
             s=17, color=color, alpha=0.46, edgecolors="white",
             linewidths=0.35, zorder=3,
         )
-        summary = values.groupby("epsilon", as_index=False).agg(
+        # The line remains the median of the seed summaries, while the
+        # ribbon uses every material-level case at that epsilon.
+        summary = seed_values.groupby("epsilon", as_index=False).agg(
             epsilon_percent_min_lattice=("epsilon_percent_min_lattice", "median"),
             median=(metric, "median"),
+        ).sort_values("epsilon_percent_min_lattice")
+        case_summary = values.groupby("epsilon", as_index=False).agg(
+            epsilon_percent_min_lattice=("epsilon_percent_min_lattice", "median"),
             q25=(metric, lambda series: series.quantile(0.25)),
             q75=(metric, lambda series: series.quantile(0.75)),
         ).sort_values("epsilon_percent_min_lattice")
         x = summary["epsilon_percent_min_lattice"].to_numpy(dtype=float)
         center = summary["median"].to_numpy(dtype=float)
-        q25 = summary["q25"].to_numpy(dtype=float)
-        q75 = summary["q75"].to_numpy(dtype=float)
+        ribbon_x = case_summary["epsilon_percent_min_lattice"].to_numpy(dtype=float)
+        q25 = case_summary["q25"].to_numpy(dtype=float)
+        q75 = case_summary["q75"].to_numpy(dtype=float)
         smooth_x, smooth_center = smooth_seed_summary(x, center)
-        _, smooth_q25 = smooth_seed_summary(x, q25)
-        _, smooth_q75 = smooth_seed_summary(x, q75)
+        smooth_ribbon_x, smooth_q25 = smooth_seed_summary(ribbon_x, q25)
+        _, smooth_q75 = smooth_seed_summary(ribbon_x, q75)
         ax.fill_between(
-            smooth_x, np.minimum(smooth_q25, smooth_q75),
+            smooth_ribbon_x, np.minimum(smooth_q25, smooth_q75),
             np.maximum(smooth_q25, smooth_q75), color=color,
             alpha=0.18, linewidth=0, zorder=1,
         )
