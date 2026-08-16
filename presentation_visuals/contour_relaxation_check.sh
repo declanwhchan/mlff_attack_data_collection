@@ -820,6 +820,7 @@ def attack_metric(row, *keys):
 
 def setup_ax(ax):
     ax.set_facecolor("white")
+    ax.figure.set_facecolor("white")
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     ax.spines["left"].set_color("#1F2328")
@@ -928,9 +929,11 @@ def plot_bar(name, grouped_vals, ylabel, title):
     save_fig(fig, name)
 
 
-def plot_box(name, grouped_vals, ylabel, title, logy=False, symlog=False):
+def plot_box(name, grouped_vals, ylabel, title, logy=False, symlog=False, clean_background=False):
     fig, ax = plt.subplots(figsize=(8, 6.8), facecolor="white")
     setup_ax(ax)
+    if clean_background:
+        ax.grid(False)
 
     labels = [label for label, _ in PLOT_GROUPS]
     colors = [color for _, color in PLOT_GROUPS]
@@ -1111,34 +1114,28 @@ def plot_box(name, grouped_vals, ylabel, title, logy=False, symlog=False):
             )
         )
 
-        # Minor ticks between decades.
-        ax.yaxis.set_minor_locator(
-            mticker.LogLocator(
-                base=10.0,
-                subs=np.arange(2, 10) * 0.1,
-                numticks=100,
+        if clean_background:
+            # Display only labeled decade ticks on a plain white field.
+            ax.yaxis.set_minor_locator(mticker.NullLocator())
+            ax.yaxis.set_minor_formatter(mticker.NullFormatter())
+        else:
+            # Minor ticks between decades.
+            ax.yaxis.set_minor_locator(
+                mticker.LogLocator(
+                    base=10.0,
+                    subs=np.arange(2, 10) * 0.1,
+                    numticks=100,
+                )
             )
-        )
-
-        ax.yaxis.set_minor_formatter(
-            mticker.NullFormatter()
-        )
-
-        ax.grid(
-            which="major",
-            axis="y",
-            color="#D9E1E8",
-            linewidth=1.0,
-            alpha=0.85,
-        )
-
-        ax.grid(
-            which="minor",
-            axis="y",
-            color="#ECEFF3",
-            linewidth=0.6,
-            alpha=0.5,
-        )
+            ax.yaxis.set_minor_formatter(mticker.NullFormatter())
+            ax.grid(
+                which="major", axis="y", color="#D9E1E8",
+                linewidth=1.0, alpha=0.85,
+            )
+            ax.grid(
+                which="minor", axis="y", color="#ECEFF3",
+                linewidth=0.6, alpha=0.5,
+            )
 
     save_fig(fig, name)
 
@@ -1355,9 +1352,10 @@ print(
 plot_box(
     "02_delta_force",
     delta_force_groups,
-    r"Median $\Delta$ force (eV/$\AA$)",
+    r"$\Delta$ force (eV/$\AA$)",
     "Force change after relaxation",
     logy=True,
+    clean_background=True,
 )
 
 plot_box(
