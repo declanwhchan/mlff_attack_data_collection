@@ -633,7 +633,7 @@ def load_force_table(path):
     return frame
 
 
-def force_delta_after_relax(row):
+def force_deltas_after_relax(row):
     # Reference: final initially relaxed structure.
     before_path = resolve_path(
         row,
@@ -704,7 +704,19 @@ def force_delta_after_relax(row):
     if delta.size == 0:
         return None
 
-    return float(np.median(delta))
+    return delta
+
+
+def force_delta_after_relax(row):
+    delta = force_deltas_after_relax(row)
+    return None if delta is None else float(np.median(delta))
+
+
+def unphysical_force_rate_after_relax(row):
+    delta = force_deltas_after_relax(row)
+    if delta is None:
+        return None
+    return float(100.0 * np.count_nonzero(delta >= 100.0) / delta.size)
 
 
 def displacement_after_relax(row):
@@ -908,7 +920,7 @@ def plot_bar(name, grouped_vals, ylabel, title):
     ax.set_ylabel(ylabel, labelpad=18)
     ax.set_title(title)
 
-    ymax = 100.0 if "Converged" in ylabel else max([m for m in means if np.isfinite(m)] + [1.0]) * 1.25
+    ymax = 100.0 if "(%)" in ylabel else max([m for m in means if np.isfinite(m)] + [1.0]) * 1.25
     if not np.isfinite(ymax) or ymax <= 0:
         ymax = 1.0
     ax.set_ylim(0, ymax)
@@ -1293,6 +1305,26 @@ plot_bar(
     convergence_groups,
     "Converged cases (%)",
     "Convergence rate after relaxation",
+)
+
+unphysical_force_groups = collect_grouped_values(
+    unphysical_force_rate_after_relax,
+    unphysical_force_rate_after_relax,
+)
+
+print(
+    "Unphysical-force rates:",
+    ", ".join(
+        f"{label}={len(unphysical_force_groups[label])}"
+        for label, _ in PLOT_GROUPS
+    ),
+)
+
+plot_bar(
+    "01b_unphysical_force_rate",
+    unphysical_force_groups,
+    r"Atoms with $\Delta$ force $\geq$ 100 eV/$\AA$ (%)",
+    "Unphysical forces after relaxation",
 )
 
 def attack_force_delta_value(row):
