@@ -10,10 +10,10 @@ module load gcc/12.3 python/3.11 arrow
 PYTHON="${PYTHON:-$HOME/project/.venv-mace/bin/python}"
 TRIAL="${TRIAL:-trial1_seed42}"
 SCRATCH_ROOT="${SCRATCH_OUTPUT_ROOT:-/scratch/$USER/mlff_attack_data_collection/2d_structures}"
-MATERIAL_SLUG="${MATERIAL_SLUG:-berlinite_alpo4}"
+MATERIAL_SLUG="${MATERIAL_SLUG:-reo3}"
 MODEL_ID="${MODEL_ID:-mace_mh}"
 MLFF_DTYPE="${MLFF_DTYPE:-float64}"
-OUTPUT_DIR="${OUTPUT_DIR:-visualize_${MATERIAL_SLUG}}"
+OUTPUT_DIR="${OUTPUT_DIR:-visualize_relaxation_trajectory}"
 
 if [ ! -x "$PYTHON" ]; then
     echo "ERROR: Python not found: $PYTHON"
