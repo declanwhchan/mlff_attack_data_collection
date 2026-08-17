@@ -50,11 +50,6 @@ done
 
 mkdir -p "$RANDOM_SEED_DIR" "$WHY_PLOTS_DIR"
 
-echo "Rebuilding random-seed figures: $RANDOM_SEED_DIR"
-"$PYTHON" -u pipeline/random_seed_comprehensive.py \
-    --project-root "$PROJECT_RESULTS" \
-    --output-dir "$RANDOM_SEED_DIR" \
-    --models mace_mh uma
 echo "Generating presentation why-plots: $WHY_PLOTS_DIR"
 "$PYTHON" -u pipeline/why_plots.py \
     --project-root "$PROJECT_RESULTS" \
@@ -63,6 +58,11 @@ echo "Generating presentation why-plots: $WHY_PLOTS_DIR"
     --diagnostic-model uma \
     --with-pes \
     --with-phonons
+echo "Rebuilding random-seed figures: $RANDOM_SEED_DIR"
+"$PYTHON" -u pipeline/random_seed_comprehensive.py \
+    --project-root "$PROJECT_RESULTS" \
+    --output-dir "$RANDOM_SEED_DIR" \
+    --models mace_mh uma
 
 for required_output in \
     "$RANDOM_SEED_DIR/random_seed_combined.csv" \
