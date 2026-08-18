@@ -732,7 +732,7 @@ def save_pes(data, material, preference, output, grid, mace_mh_head, anomaly_key
         ax.plot(path_points[:, 0], path_points[:, 1], color="#C7C7C7", alpha=.9, linewidth=1.15, zorder=4, label="relaxation trajectory")
         for point, label, marker, color in zip(endpoints, ("reference", "perturbed", "final relaxed"), ("o", "^", "s"), ("#35B7EB", "#FFB000", "#00A878")):
             ax.scatter(*point, marker=marker, s=68, color=color, edgecolor="white", linewidth=.85, zorder=5, label=label)
-        ax.set(title=f"Local MLFF basin at {anomaly_label}: {material}", xlabel=r"Attack direction ($\AA\sqrt{\mathrm{atoms}}$)", ylabel=r"Orthogonal relaxation direction ($\AA\sqrt{\mathrm{atoms}}$)")
+        ax.set(title=f"Local MLFF basin at {anomaly_label}: {material}", xlabel=r"Attack direction ($\AA\sqrt{\mathrm{atoms}}$)", ylabel=r"Orthogonal-to-attack direction ($\AA\sqrt{\mathrm{atoms}}$)")
         ax.tick_params(labelsize=13, width=.85, length=4)
         ax.xaxis.label.set_size(15); ax.yaxis.label.set_size(15); ax.title.set_size(17)
         ax.spines[["top", "right"]].set_visible(False)
