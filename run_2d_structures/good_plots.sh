@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --account=rrg-j3goals
-#SBATCH --time=04:00:00
+#SBATCH --time=08:00:00
 #SBATCH --mem=32G
 #SBATCH --cpus-per-task=8
 #SBATCH --output=good-plots-%A_%a.out
@@ -50,11 +50,6 @@ done
 
 mkdir -p "$RANDOM_SEED_DIR" "$WHY_PLOTS_DIR"
 
-echo "Rebuilding random-seed figures: $RANDOM_SEED_DIR"
-"$PYTHON" -u pipeline/random_seed_comprehensive.py \
-    --project-root "$PROJECT_RESULTS" \
-    --output-dir "$RANDOM_SEED_DIR" \
-    --models mace_mh uma
 echo "Generating presentation why-plots: $WHY_PLOTS_DIR"
 "$PYTHON" -u pipeline/why_plots.py \
     --project-root "$PROJECT_RESULTS" \
@@ -63,13 +58,19 @@ echo "Generating presentation why-plots: $WHY_PLOTS_DIR"
     --diagnostic-model uma \
     --with-pes \
     --with-phonons
+echo "Rebuilding random-seed figures: $RANDOM_SEED_DIR"
+"$PYTHON" -u pipeline/random_seed_comprehensive.py \
+    --project-root "$PROJECT_RESULTS" \
+    --output-dir "$RANDOM_SEED_DIR" \
+    --models mace_mh uma
 
 for required_output in \
     "$RANDOM_SEED_DIR/random_seed_combined.csv" \
     "$WHY_PLOTS_DIR/01_material_attribution.png" \
     "$WHY_PLOTS_DIR/02_selected_anomaly_transitions.png" \
     "$WHY_PLOTS_DIR/03_basin_map_2d_mlff_jaccard_dip.png" \
-    "$WHY_PLOTS_DIR/04_phonon_stability_mlff_jaccard_dip.png"; do
+    "$WHY_PLOTS_DIR/04_phonon_stability_mlff_jaccard_dip.png" \
+    "$WHY_PLOTS_DIR/05_phonon_ensemble_epsilon_bundle.png"; do
     if [ ! -s "$required_output" ]; then
         echo "ERROR: Expected output was not created: $required_output"
         exit 1

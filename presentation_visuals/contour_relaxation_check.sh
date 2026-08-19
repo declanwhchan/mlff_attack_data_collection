@@ -633,7 +633,7 @@ def load_force_table(path):
     return frame
 
 
-def force_delta_after_relax(row):
+def force_deltas_after_relax(row):
     # Reference: final initially relaxed structure.
     before_path = resolve_path(
         row,
@@ -704,7 +704,19 @@ def force_delta_after_relax(row):
     if delta.size == 0:
         return None
 
-    return float(np.median(delta))
+    return delta
+
+
+def force_delta_after_relax(row):
+    delta = force_deltas_after_relax(row)
+    return None if delta is None else float(np.median(delta))
+
+
+def unphysical_force_rate_after_relax(row):
+    delta = force_deltas_after_relax(row)
+    if delta is None:
+        return None
+    return float(100.0 * np.count_nonzero(delta >= 100.0) / delta.size)
 
 
 def displacement_after_relax(row):
@@ -820,6 +832,7 @@ def attack_metric(row, *keys):
 
 def setup_ax(ax):
     ax.set_facecolor("white")
+    ax.figure.set_facecolor("white")
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     ax.spines["left"].set_color("#1F2328")
@@ -907,7 +920,7 @@ def plot_bar(name, grouped_vals, ylabel, title):
     ax.set_ylabel(ylabel, labelpad=18)
     ax.set_title(title)
 
-    ymax = 100.0 if "Converged" in ylabel else max([m for m in means if np.isfinite(m)] + [1.0]) * 1.25
+    ymax = 100.0 if "(%)" in ylabel else max([m for m in means if np.isfinite(m)] + [1.0]) * 1.25
     if not np.isfinite(ymax) or ymax <= 0:
         ymax = 1.0
     ax.set_ylim(0, ymax)
@@ -928,9 +941,11 @@ def plot_bar(name, grouped_vals, ylabel, title):
     save_fig(fig, name)
 
 
-def plot_box(name, grouped_vals, ylabel, title, logy=False, symlog=False):
+def plot_box(name, grouped_vals, ylabel, title, logy=False, symlog=False, clean_background=False):
     fig, ax = plt.subplots(figsize=(8, 6.8), facecolor="white")
     setup_ax(ax)
+    if clean_background:
+        ax.grid(False)
 
     labels = [label for label, _ in PLOT_GROUPS]
     colors = [color for _, color in PLOT_GROUPS]
@@ -1111,34 +1126,28 @@ def plot_box(name, grouped_vals, ylabel, title, logy=False, symlog=False):
             )
         )
 
-        # Minor ticks between decades.
-        ax.yaxis.set_minor_locator(
-            mticker.LogLocator(
-                base=10.0,
-                subs=np.arange(2, 10) * 0.1,
-                numticks=100,
+        if clean_background:
+            # Display only labeled decade ticks on a plain white field.
+            ax.yaxis.set_minor_locator(mticker.NullLocator())
+            ax.yaxis.set_minor_formatter(mticker.NullFormatter())
+        else:
+            # Minor ticks between decades.
+            ax.yaxis.set_minor_locator(
+                mticker.LogLocator(
+                    base=10.0,
+                    subs=np.arange(2, 10) * 0.1,
+                    numticks=100,
+                )
             )
-        )
-
-        ax.yaxis.set_minor_formatter(
-            mticker.NullFormatter()
-        )
-
-        ax.grid(
-            which="major",
-            axis="y",
-            color="#D9E1E8",
-            linewidth=1.0,
-            alpha=0.85,
-        )
-
-        ax.grid(
-            which="minor",
-            axis="y",
-            color="#ECEFF3",
-            linewidth=0.6,
-            alpha=0.5,
-        )
+            ax.yaxis.set_minor_formatter(mticker.NullFormatter())
+            ax.grid(
+                which="major", axis="y", color="#D9E1E8",
+                linewidth=1.0, alpha=0.85,
+            )
+            ax.grid(
+                which="minor", axis="y", color="#ECEFF3",
+                linewidth=0.6, alpha=0.5,
+            )
 
     save_fig(fig, name)
 
@@ -1298,6 +1307,26 @@ plot_bar(
     "Convergence rate after relaxation",
 )
 
+unphysical_force_groups = collect_grouped_values(
+    unphysical_force_rate_after_relax,
+    unphysical_force_rate_after_relax,
+)
+
+print(
+    "Unphysical-force rates:",
+    ", ".join(
+        f"{label}={len(unphysical_force_groups[label])}"
+        for label, _ in PLOT_GROUPS
+    ),
+)
+
+plot_bar(
+    "01b_unphysical_force_rate",
+    unphysical_force_groups,
+    r"Atoms with $\Delta$ force $\geq$ 100 eV/$\AA$ (%)",
+    "Unphysical forces after relaxation",
+)
+
 def attack_force_delta_value(row):
     value = attack_metric(
         row,
@@ -1355,9 +1384,10 @@ print(
 plot_box(
     "02_delta_force",
     delta_force_groups,
-    r"Median $\Delta$ force (eV/$\AA$)",
+    r"$\Delta$ force (eV/$\AA$)",
     "Force change after relaxation",
     logy=True,
+    clean_background=True,
 )
 
 plot_box(

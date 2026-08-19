@@ -177,8 +177,8 @@ def save_random_seed_rms_plots(records, output_dir, labels, colors):
     figures = (
         ("post_attack_rms_force_ev_a", "Post-attack RMS force (eV/$\\AA$)",
          "rms_force_post_attack.png"),
-        ("post_attack_relaxed_rms_force_ev_a",
-         "Post-attack + relaxation RMS force (eV/$\\AA$)",
+        (POST_ATTACK_RELAXED_RMS_FMAX_005_COLUMN,
+         "Post-attack RMS force at 0.05 eV/$\\AA$ convergence (eV/$\\AA$)",
          "rms_force_post_attack_relaxed.png"),
     )
     for column, ylabel, filename in figures:
@@ -213,7 +213,7 @@ def save_random_seed_rms_plots(records, output_dir, labels, colors):
             axis.set_title(attack if attack != "all" else "All attacks")
             axis.set_xscale("log")
             axis.set_yscale("log")
-            axis.set_xlabel("Epsilon (Å)")
+            axis.set_xlabel(r"$\epsilon$ ($\AA$)")
             axis.set_ylabel(ylabel)
             axis.grid(True, which="both", alpha=0.28)
         handles, legend_labels = axes[0][-1].get_legend_handles_labels()

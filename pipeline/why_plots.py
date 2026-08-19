@@ -16,7 +16,9 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.colors import Normalize
+from matplotlib.colors import LogNorm
+from matplotlib.ticker import LogFormatterMathtext, NullLocator
+from matplotlib.patches import Patch, Polygon, Rectangle
 import numpy as np
 import pandas as pd
 from ase.io import read as ase_read
@@ -49,6 +51,8 @@ LABELS = {
 FINAL_JACCARD = "after_attack_after_relaxation__neighbor_jaccard_distance"
 FINAL_MAX_CN = "after_attack_after_relaxation__coordination_change_max"
 DEFAULT_MACE_MH_HEAD = "omat_pbe"
+ENSEMBLE_EPSILONS = np.array((0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0, 50.0, 100.0, 500.0))
+EXPECTED_ENSEMBLE_MATERIALS = 20
 
 
 def numeric(frame, column):
@@ -102,14 +106,84 @@ def load_records(project_root):
     # Prefer final-stage columns but fall back per row for legacy records.
     data["final_jaccard"] = data["final_jaccard"].fillna(numeric(data, "neighbor_jaccard_distance"))
     data["final_max_cn"] = numeric(data, FINAL_MAX_CN).fillna(numeric(data, "coordination_change_max"))
-    if "post_attack_relaxed_rms_force_ev_a" not in data:
-        data = add_post_attack_rms_columns(data)
+    # Backfill partial legacy records so MLFF--DFT force pairs are retained.
+    calculated_rms = add_post_attack_rms_columns(data)
+    stored_rms = numeric(data, "post_attack_relaxed_rms_force_ev_a")
+    data["post_attack_relaxed_rms_force_ev_a"] = stored_rms.fillna(
+        numeric(calculated_rms, "post_attack_relaxed_rms_force_ev_a")
+    )
     data["final_rms_force"] = numeric(data, "post_attack_relaxed_rms_force_ev_a")
     data["final_energy"] = numeric(data, "final_energy")
     data["relax_steps"] = numeric(data, "after_relax_steps")
     data["converged"] = data.get("after_relax_converged", False).fillna(False).astype(bool)
     return data
 
+
+def paired_final_rms_force_records(data):
+    """Pair final MLFF RMS forces to their DFT reruns by source run ID."""
+    mlff = data[data["calculator"].isin(MLFF_MODELS)]
+    dft = data[data["calculator"].astype(str).str.startswith("dft_")]
+    by_trial = {(str(row.get("trial", "")), str(row.get("run_id", ""))): row for _, row in mlff.iterrows()}
+    pairs = []
+    for _, dft_row in dft.iterrows():
+        source_id = dft_row.get("dft_source_run_id")
+        if source_id is None or pd.isna(source_id):
+            continue
+        source = by_trial.get((str(dft_row.get("trial", "")), str(source_id)))
+        if source is None:
+            matches = mlff[mlff["run_id"].astype(str) == str(source_id)]
+            source = matches.iloc[0] if len(matches) == 1 else None
+        if source is None:
+            continue
+        mlff_rms = pd.to_numeric(source.get("final_rms_force"), errors="coerce")
+        dft_rms = pd.to_numeric(dft_row.get("final_rms_force"), errors="coerce")
+        if np.isfinite(mlff_rms) and np.isfinite(dft_rms):
+            pairs.append({
+                "run_id": source_id, "source_model": source["calculator"],
+                "epsilon": source.get("epsilon"),
+                "mlff_final_rms_force_ev_a": float(mlff_rms),
+                "dft_final_rms_force_ev_a": float(dft_rms),
+                "rms_force_difference_ev_a": abs(float(mlff_rms) - float(dft_rms)),
+            })
+    return pd.DataFrame(pairs)
+
+
+def save_final_rms_force_heatmap(data, output):
+    """Plot final relaxed RMS-force differences for MACE-MH and UMA vs DFT."""
+    pairs = paired_final_rms_force_records(data)
+    pairs.to_csv(output / "paired_mlff_dft_final_rms_forces.csv", index=False)
+    values = {model: np.full(len(ENSEMBLE_EPSILONS), np.nan) for model in MLFF_MODELS}
+    if not pairs.empty:
+        pairs["epsilon"] = pd.to_numeric(pairs["epsilon"], errors="coerce")
+        for model in MLFF_MODELS:
+            rows = pairs[(pairs["source_model"] == model) & np.isfinite(pairs["epsilon"]) & (pairs["epsilon"] > 0)].copy()
+            if rows.empty:
+                continue
+            bins = np.abs(np.log10(rows["epsilon"].to_numpy(float))[:, None] - np.log10(ENSEMBLE_EPSILONS)[None, :]).argmin(axis=1)
+            for index, value in pd.to_numeric(rows["rms_force_difference_ev_a"], errors="coerce").groupby(bins).median().items():
+                values[model][int(index)] = value
+    finite = np.concatenate([row[np.isfinite(row)] for row in values.values()])
+    normalized = {model: np.full(len(ENSEMBLE_EPSILONS), np.nan) for model in MLFF_MODELS}
+    if finite.size:
+        lower, upper = float(finite.min()), float(finite.max())
+        for model, row in values.items():
+            normalized[model] = np.where(np.isfinite(row), 1.0 if np.isclose(lower, upper) and upper > 0 else (0.0 if np.isclose(lower, upper) else (row - lower) / (upper - lower)), np.nan)
+    fig, ax = plt.subplots(figsize=(11.2, 2.6), facecolor="white")
+    cmap = plt.cm.ScalarMappable(norm=plt.Normalize(0, 1), cmap=plt.colormaps["Blues"]); cmap.set_array([])
+    for column in range(len(ENSEMBLE_EPSILONS)):
+        for model, corners, position in (("mace_mh", ((column-.5, -.5), (column+.5, -.5), (column+.5, .5)), (column+.18, -.18)), ("uma", ((column-.5, -.5), (column-.5, .5), (column+.5, .5)), (column-.18, .18))):
+            value = normalized[model][column]
+            ax.add_patch(Polygon(corners, closed=True, facecolor=cmap.to_rgba(value) if np.isfinite(value) else "#F1F5F9", edgecolor="white", linewidth=.85))
+            if np.isfinite(value): ax.text(*position, f"{value:.2f}", ha="center", va="center", fontsize=8, color="white" if value >= .58 else "#0F172A")
+    ax.set(xlim=(-.5, len(ENSEMBLE_EPSILONS)-.5), ylim=(.5, -.5), yticks=[0], yticklabels=[r"RMS $\Delta$ force"])
+    ax.set_xticks((0, 2, 4, 6, 8), [r"$10^{-2}$", r"$10^{-1}$", r"$10^{0}$", r"$10^{1}$", r"$10^{2}$"]); ax.tick_params(axis="both", length=0)
+    for spine in ax.spines.values(): spine.set_visible(False)
+    fig.suptitle("MLFF--DFT final RMS-force difference after perturbation + relaxation", fontsize=14, fontweight="bold")
+    fig.legend(handles=[Patch(facecolor="#4B8CC0", label="MACE-MH, upper triangle"), Patch(facecolor="#4B8CC0", label="UMA, lower triangle")], loc="upper center", bbox_to_anchor=(.5, .88), ncol=2, frameon=False, fontsize=9)
+    colorbar = fig.colorbar(cmap, ax=ax, fraction=.04, pad=.035); colorbar.set_label("Normalized absolute RMS-force difference from DFT", fontsize=9); colorbar.outline.set_visible(False)
+    ax.set_xlabel(r"$\epsilon$ strength (% min lattice)"); fig.subplots_adjust(left=.16, right=.89, bottom=.25, top=.62)
+    fig.savefig(output / "direct_comparison_normalized_heatmap.png", dpi=300, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
 
 def grouped_curve(data, metric, models):
     usable = data[data["calculator"].isin(models)].dropna(subset=["epsilon_percent", metric]).copy()
@@ -283,7 +357,7 @@ def select_cases(data, contributions, dip, spike):
     return selected
 
 
-def choose_zero_jaccard_control(data, target_percent=0.1):
+def choose_zero_jaccard_control(data, target_percent=1.0):
     """Choose a zero-topology-change point near ``target_percent``.
 
     The control is selected on measured displacement: unlike a shared attack
@@ -294,6 +368,11 @@ def choose_zero_jaccard_control(data, target_percent=0.1):
         subset=["material_slug", "transition_epsilon", "epsilon_percent", "final_jaccard"]
     ).copy()
     usable = usable[(usable["epsilon_percent"] > 0) & np.isclose(usable["final_jaccard"], 0.0)]
+    # Prefer UMA for this optional control because its runtime is commonly
+    # available when MACE is not; retain MACE only when no UMA control exists.
+    uma_controls = usable[usable["calculator"] == "uma"]
+    if not uma_controls.empty:
+        usable = uma_controls
     if usable.empty:
         return pd.Series(dtype=object)
     usable["_log_distance_to_target"] = np.abs(
@@ -352,6 +431,13 @@ def source_mlff_row(data, material, preference, diagnostic_model=None, require_z
         return None
     if diagnostic_model:
         preferred = subset[subset["calculator"] == diagnostic_model]
+        if not preferred.empty:
+            subset = preferred
+    elif require_zero_jaccard:
+        # The MACE and UMA runtimes are often installed separately. Prefer an
+        # available UMA control when no diagnostic model was explicitly set,
+        # avoiding an accidental MACE-only selection for this optional panel.
+        preferred = subset[subset["calculator"] == "uma"]
         if not preferred.empty:
             subset = preferred
     subset = subset.copy()
@@ -530,6 +616,62 @@ def calculator_for(row, atoms, mace_mh_head=DEFAULT_MACE_MH_HEAD):
     return configured
 
 
+def same_reference_structure(candidate, reference, atol=1e-6):
+    """Return whether two saved references describe the exact same PES origin."""
+    return (
+        len(candidate) == len(reference)
+        and candidate.get_chemical_symbols() == reference.get_chemical_symbols()
+        and np.array_equal(candidate.pbc, reference.pbc)
+        and np.allclose(candidate.cell.array, reference.cell.array, atol=atol, rtol=0)
+        and np.allclose(candidate.positions, reference.positions, atol=atol, rtol=0)
+    )
+
+
+def comprehensive_basin_overlay(data, row, reference, u1, u2):
+    """Return matched low-epsilon MLFF finals and the corresponding DFT final.
+
+    A local PES coordinate system belongs to one material and attack family.
+    The overlay deliberately excludes other materials and seeds rather than
+    projecting incomparable structures into this slice.
+    """
+    family = data[
+        (data["material_slug"] == row["material_slug"])
+        & (data["calculator"] == row["calculator"])
+        & (data["attack_label"] == row["attack_label"])
+        & (data["transition_epsilon"] > 0)
+        & (data["transition_epsilon"] < 10)
+    ].copy()
+    family["_trajectory_key"] = jaccard_trajectory_key(family)
+    selected_key = jaccard_trajectory_key(pd.DataFrame([row])).iloc[0]
+    family = family[family["_trajectory_key"] == selected_key]
+    points = []
+    for _, candidate in family.iterrows():
+        try:
+            candidate_reference, _, candidate_final = load_states(candidate)
+            if same_reference_structure(candidate_reference, reference):
+                points.append(project_structures((candidate_final,), reference, u1, u2)[0])
+        except Exception:
+            continue
+    low_epsilon_points = np.asarray(points, dtype=float).reshape((-1, 2)) if points else np.empty((0, 2))
+
+    dft_point = None
+    dft_model = f"dft_{row['calculator']}"
+    source_id = str(row.get("run_id", ""))
+    dft_rows = data[
+        (data["calculator"] == dft_model)
+        & (data.get("dft_source_run_id", pd.Series("", index=data.index)).astype(str) == source_id)
+    ]
+    for _, dft_row in dft_rows.iterrows():
+        try:
+            dft_reference, _, dft_final = load_states(dft_row)
+            if same_reference_structure(dft_reference, reference):
+                dft_point = project_structures((dft_final,), reference, u1, u2)[0]
+                break
+        except Exception:
+            continue
+    return low_epsilon_points, dft_point
+
+
 def save_pes(data, material, preference, output, grid, mace_mh_head, anomaly_key, anomaly_label, diagnostic_model, require_zero_jaccard=False):
     """Render a 2-D MLFF energy landscape for one selected anomaly."""
     destination = output / f"03_basin_map_2d_{anomaly_key}.png"
@@ -561,8 +703,14 @@ def save_pes(data, material, preference, output, grid, mace_mh_head, anomaly_key
         # The trajectory captures actual optimizer steps; retain the final saved state if needed.
         if len(path_points) and not np.allclose(path_points[-1], endpoints[-1]):
             path_points = np.vstack((path_points, endpoints[-1]))
-        extent = np.maximum(np.max(np.abs(np.vstack((endpoints, path_points))), axis=0) * 1.25, .08)
-        x = np.linspace(-.2 * extent[0], extent[0], grid); y = np.linspace(-extent[1], extent[1], grid)
+        if anomaly_key == "zero_jaccard_control_near_0p1_percent":
+            # Match the presentation basin-map window for direct comparison.
+            x = np.linspace(0.0, 8.0, grid)
+            y = np.linspace(-8.0, 8.0, grid)
+        else:
+            extent = np.maximum(np.max(np.abs(np.vstack((endpoints, path_points))), axis=0) * 1.25, .08)
+            x = np.linspace(-.2 * extent[0], extent[0], grid)
+            y = np.linspace(-extent[1], extent[1], grid)
         energies = np.full((grid, grid), np.nan)
         base = calculator_for(row, reference, mace_mh_head)
         reference_energy = base.get_potential_energy()
@@ -584,7 +732,7 @@ def save_pes(data, material, preference, output, grid, mace_mh_head, anomaly_key
         ax.plot(path_points[:, 0], path_points[:, 1], color="#C7C7C7", alpha=.9, linewidth=1.15, zorder=4, label="relaxation trajectory")
         for point, label, marker, color in zip(endpoints, ("reference", "perturbed", "final relaxed"), ("o", "^", "s"), ("#35B7EB", "#FFB000", "#00A878")):
             ax.scatter(*point, marker=marker, s=68, color=color, edgecolor="white", linewidth=.85, zorder=5, label=label)
-        ax.set(title=f"Local MLFF basin at {anomaly_label}: {material}", xlabel=r"Attack direction ($\AA\sqrt{\mathrm{atoms}}$)", ylabel=r"Orthogonal relaxation direction ($\AA\sqrt{\mathrm{atoms}}$)")
+        ax.set(title=f"Local MLFF basin at {anomaly_label}: {material}", xlabel=r"Attack direction ($\AA\sqrt{\mathrm{atoms}}$)", ylabel=r"Orthogonal-to-attack direction ($\AA\sqrt{\mathrm{atoms}}$)")
         ax.tick_params(labelsize=13, width=.85, length=4)
         ax.xaxis.label.set_size(15); ax.yaxis.label.set_size(15); ax.title.set_size(17)
         ax.spines[["top", "right"]].set_visible(False)
@@ -596,8 +744,39 @@ def save_pes(data, material, preference, output, grid, mace_mh_head, anomaly_key
         colorbar.ax.tick_params(labelsize=13, width=.7, length=3)
         colorbar.set_label("Relative energy (eV)", fontsize=15)
         colorbar.outline.set_linewidth(.6)
-        fig.savefig(destination, dpi=300, bbox_inches="tight"); plt.close(fig)
+        fig.savefig(destination, dpi=300, bbox_inches="tight")
         np.savez_compressed(output / f"basin_map_data_{anomaly_key}.npz", x=x, y=y, energy=energies, endpoints=endpoints, relaxation_path=path_points)
+
+        if anomaly_key == "mlff_jaccard_dip":
+            low_points, dft_point = comprehensive_basin_overlay(data, row, reference, u1, u2)
+            if len(low_points):
+                ax.scatter(low_points[:, 0], low_points[:, 1], s=19, color="#38BDF8", alpha=.45,
+                           linewidth=0, zorder=5, label=r"low-$\epsilon$ final states")
+            if len(low_points) >= 4:
+                q25, q75 = np.quantile(low_points, (.25, .75), axis=0)
+                iqr_box = Rectangle(q25, *(q75 - q25), facecolor="#38BDF8", edgecolor="#0284C7",
+                                    linewidth=1.1, linestyle="--", alpha=.18, zorder=4,
+                                    label=rf"central 50% ($\epsilon<10\%$, n={len(low_points)})")
+                ax.add_patch(iqr_box)
+            if dft_point is not None:
+                ax.scatter(*dft_point, marker="s", s=74, color="#7C3AED", edgecolor="white",
+                           linewidth=.9, zorder=7, label="DFT final")
+            else:
+                ax.text(.98, .02, "Matched DFT final unavailable", transform=ax.transAxes,
+                        ha="right", va="bottom", fontsize=8, color="white",
+                        bbox={"facecolor": "#111827", "alpha": .7, "edgecolor": "none"})
+            legend = ax.get_legend()
+            if legend is not None:
+                legend.remove()
+            ax.legend(fontsize=9, loc="lower center", bbox_to_anchor=(.5, 1.02), ncol=3,
+                      borderaxespad=0, frameon=False)
+            ax.set_title(f"Comprehensive local MLFF basin at {anomaly_label}: {material}")
+            fig.savefig(output / "03_basin_map_comprehensive.png", dpi=300, bbox_inches="tight")
+            np.savez_compressed(output / "basin_map_data_comprehensive.npz", x=x, y=y, energy=energies,
+                                endpoints=endpoints, relaxation_path=path_points,
+                                low_epsilon_finals=low_points,
+                                dft_final=np.asarray(dft_point) if dft_point is not None else np.empty((0, 2)))
+        plt.close(fig)
     except Exception as error:
         (output / f"basin_map_error_{anomaly_key}.txt").write_text(f"PES skipped: {error}\n", encoding="utf-8")
         save_placeholder(destination, "Local MLFF basin", f"MLFF basin evaluation failed: {error}")
@@ -654,6 +833,144 @@ def save_phonons(data, material, preference, output, mace_mh_head, anomaly_key, 
     ax.legend(fontsize=8)
     fig.savefig(destination, dpi=300, bbox_inches="tight"); plt.close(fig)
 
+def phonon_ensemble_rows(data, preference, diagnostic_model):
+    """Choose the best available seed for every material in the epsilon sweep."""
+    if preference is None or preference.empty:
+        return pd.DataFrame()
+    calculator = diagnostic_model or preference.get("calculator")
+    rows = data[
+        (data["calculator"] == calculator)
+        & (data["attack_label"] == preference.get("attack_label"))
+        & data["material_slug"].notna()
+        & data["transition_epsilon"].notna()
+        & data["converged"]
+    ].copy()
+    rows = rows[rows["transition_epsilon"].apply(
+        lambda value: np.isclose(value, ENSEMBLE_EPSILONS).any()
+    )]
+    rows["_seed_key"] = jaccard_trajectory_key(rows)
+    rows = rows[rows.apply(
+        lambda candidate: all(path is not None for path in structural_artifacts(candidate)),
+        axis=1,
+    )]
+    if rows.empty:
+        return rows
+    selected = []
+    for _, material_rows in rows.groupby("material_slug", sort=True):
+        coverage = material_rows.groupby("_seed_key")["transition_epsilon"].nunique()
+        seed = coverage.sort_values(ascending=False, kind="stable").index[0]
+        selected.append(
+            material_rows[material_rows["_seed_key"] == seed].drop_duplicates(
+                "transition_epsilon", keep="first"
+            )
+        )
+    return pd.concat(selected, ignore_index=True).sort_values(
+        ["transition_epsilon", "material_slug"]
+    )
+
+
+def gamma_phonon_modes(row, atoms, output, cache_key, mace_mh_head):
+    """Calculate signed Gamma-point phonon energies in meV."""
+    configured = calculator_for(row, atoms, mace_mh_head)
+    cache = output / "phonon_cache" / cache_key
+    cache.parent.mkdir(exist_ok=True)
+    phonons = Phonons(
+        configured, configured.calc, supercell=(1, 1, 1), delta=.01, name=str(cache)
+    )
+    phonons.run()
+    phonons.read(acoustic=True)
+    frequencies, _ = phonons.band_structure(
+        np.array([[0., 0., 0.]]), modes=True, verbose=False
+    )
+    return frequencies[0] * 1000.0
+
+
+def _smooth_curve(modes, values, points=300):
+    modes = np.asarray(modes, dtype=float)
+    values = np.asarray(values, dtype=float)
+    if len(modes) < 2:
+        return modes, values
+    smooth_modes = np.linspace(modes.min(), modes.max(), points)
+    return smooth_modes, make_interp_spline(
+        modes, values, k=min(3, len(modes) - 1)
+    )(smooth_modes)
+
+
+def save_phonon_ensemble(data, preference, output, mace_mh_head, diagnostic_model):
+    """Plot central phonon distributions with visible epsilon-wise medians."""
+    destination = output / "05_phonon_ensemble_epsilon_bundle.png"
+    table_path = output / "phonon_modes_ensemble_epsilon_bundle.csv"
+    records = []
+    selected = phonon_ensemble_rows(data, preference, diagnostic_model)
+    if selected.empty:
+        pd.DataFrame(records).to_csv(table_path, index=False)
+        save_placeholder(destination, "Phonon ensemble across epsilon", "No usable converged epsilon-sweep structures were available.")
+        return
+    for material, material_rows in selected.groupby("material_slug", sort=True):
+        reference_row = material_rows.iloc[0]
+        try:
+            reference_atoms, _, _ = load_states(reference_row)
+            frequencies = gamma_phonon_modes(
+                reference_row, reference_atoms, output,
+                f"05_ensemble_{material}_{reference_row['calculator']}_reference",
+                mace_mh_head,
+            )
+            records.extend({"material_slug": material, "state": "reference", "mode": mode, "frequency_meV": frequency} for mode, frequency in enumerate(frequencies, start=1))
+        except Exception as error:
+            records.append({"material_slug": material, "state": "reference", "error": str(error)})
+    for _, row in selected.iterrows():
+        try:
+            _, _, final = load_states(row)
+            frequencies = gamma_phonon_modes(
+                row, final, output,
+                f"05_ensemble_{row['material_slug']}_{row['calculator']}_epsilon_{row['transition_epsilon']:.8g}",
+                mace_mh_head,
+            )
+            records.extend({"material_slug": row["material_slug"], "state": "final", "mode": mode, "frequency_meV": frequency, "epsilon": row["transition_epsilon"], "seed": row["_seed_key"]} for mode, frequency in enumerate(frequencies, start=1))
+        except Exception as error:
+            records.append({"material_slug": row["material_slug"], "state": "final", "epsilon": row["transition_epsilon"], "error": str(error)})
+    table = pd.DataFrame(records)
+    table.to_csv(table_path, index=False)
+    usable = table.dropna(subset=["frequency_meV"]) if "frequency_meV" in table else pd.DataFrame()
+    finals = usable[usable["state"] == "final"] if not usable.empty else pd.DataFrame()
+    reference = usable[usable["state"] == "reference"] if not usable.empty else pd.DataFrame()
+    if finals.empty or reference.empty:
+        save_placeholder(destination, "Phonon ensemble across epsilon", "Available phonon calculations did not produce both reference and final modes.")
+        return
+    # The display scale intentionally stops at 10^2: this makes the requested
+    # 10^-2 -> 10^2 progression readable and renders any larger strength with
+    # the same darkest colour instead of expanding the useful part of the map.
+    norm = LogNorm(vmin=1e-2, vmax=1e2, clip=True)
+    cmap = plt.colormaps["viridis_r"]  # light at 10^-2, dark at 10^2
+    fig, ax = plt.subplots(figsize=(7.4, 5.4), constrained_layout=True, facecolor="white")
+    ax.set_facecolor("white")
+    plotted_strengths = []
+    for epsilon in ENSEMBLE_EPSILONS:
+        group = finals[np.isclose(finals["epsilon"], epsilon)]
+        # The former IQR (25th--75th percentile) hid small epsilon-dependent
+        # shifts under wide, overlapping bands. Use a central 20% ribbon and
+        # draw its exact median, without spline interpolation, so differences
+        # between strengths remain inspectable mode by mode.
+        summary = group.groupby("mode")["frequency_meV"].quantile([.40, .50, .60]).unstack().dropna().sort_index()
+        if summary.empty:
+            continue
+        color = cmap(norm(epsilon))
+        ax.fill_between(summary.index, summary[.40], summary[.60], color=color, alpha=.16, linewidth=0, zorder=2)
+        ax.plot(summary.index, summary[.50], color=color, linewidth=.85, alpha=.95, zorder=3)
+        plotted_strengths.append(epsilon)
+    summary = reference.groupby("mode")["frequency_meV"].median().sort_index()
+    ax.plot(summary.index, summary.to_numpy(), color="black", linewidth=2.4, label="reference", zorder=5)
+    ax.axhline(0, color="#555", linewidth=.75, alpha=.55, zorder=1)
+    ax.set(xlabel=r"$\Gamma$-point mode index", ylabel="Signed phonon energy (meV)", title=f"Phonon ensemble across attack strengths ({selected['material_slug'].nunique()} available materials)")
+    colorbar = fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap=cmap), ax=ax, pad=.02)
+    colorbar.set_label(r"$\epsilon$ strength (% min. lattice parameter)")
+    colorbar.set_ticks([1e-2, 1e-1, 1e0, 1e1, 1e2])
+    colorbar.ax.yaxis.set_major_formatter(LogFormatterMathtext())
+    colorbar.ax.yaxis.set_minor_locator(NullLocator())
+    ax.legend(frameon=False, loc="best")
+    fig.savefig(destination, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project-root", type=Path, required=True)
@@ -671,13 +988,14 @@ def main():
     args = parser.parse_args()
     root = args.project_root.resolve(); output = (args.output_dir or root / "why_plots").resolve(); output.mkdir(parents=True, exist_ok=True)
     data = load_records(root); data.to_csv(output / "why_plot_records.csv", index=False)
+    save_final_rms_force_heatmap(data, output)
     dip, spike = choose_anomalies(data); contributions = contribution_rows(data, dip, spike)
     contributions.to_csv(output / "anomaly_contributions.csv", index=False)
     save_attribution(data, contributions, output)
     case_selection = select_cases(data, contributions, dip, spike)
     zero_jaccard_control = choose_zero_jaccard_control(data)
     if not zero_jaccard_control.empty:
-        case_selection["Zero-Jaccard control (~0.1%)"] = {
+        case_selection["Zero-Jaccard control (~1%)"] = {
             "material_slug": zero_jaccard_control["material_slug"],
             "epsilon_percent": float(zero_jaccard_control["epsilon_percent"]),
             "final_jaccard": float(zero_jaccard_control["final_jaccard"]),
@@ -687,15 +1005,18 @@ def main():
     ))
     (output / "analysis_selection.json").write_text(json.dumps({"jaccard_dip": dip.to_dict(), "jaccard_spike_after_10_percent": spike.to_dict(), "zero_jaccard_control_near_0p1_percent": zero_jaccard_control.to_dict(), "case_selection": case_selection, "case_materials": case_materials}, indent=2, default=str), encoding="utf-8")
     save_anomaly_transitions(data, dip, spike, output)
-    diagnostic_cases = (("mlff_jaccard_dip", "Jaccard dip", dip, False), ("mlff_jaccard_spike_after_10_percent", "Jaccard spike (>10%)", spike, False), ("zero_jaccard_control_near_0p1_percent", "zero-Jaccard control (~0.1% displacement)", zero_jaccard_control, True))
+    diagnostic_cases = (("mlff_jaccard_dip", "Jaccard dip", dip, False), ("mlff_jaccard_spike_after_10_percent", "Jaccard spike (>10%)", spike, False), ("zero_jaccard_control_near_0p1_percent", "zero-Jaccard control (~1% displacement)", zero_jaccard_control, True))
     for anomaly_key, anomaly_label, preference, require_zero_jaccard in diagnostic_cases:
         material = case_selection.get(anomaly_label, {}).get("material_slug")
         if require_zero_jaccard:
-            material = case_selection.get("Zero-Jaccard control (~0.1%)", {}).get("material_slug")
+            material = case_selection.get("Zero-Jaccard control (~1%)", {}).get("material_slug")
         if args.with_pes:
             save_pes(data, material, preference, output, args.pes_grid, args.mace_mh_head, anomaly_key, anomaly_label, args.diagnostic_model, require_zero_jaccard)
         if args.with_phonons and not args.skip_phonons:
             save_phonons(data, material, preference, output, args.mace_mh_head, anomaly_key, anomaly_label, args.diagnostic_model, require_zero_jaccard)
+
+    if args.with_phonons and not args.skip_phonons:
+        save_phonon_ensemble(data, spike, output, args.mace_mh_head, args.diagnostic_model)
     print(f"why_plots written to {output}")
 
 

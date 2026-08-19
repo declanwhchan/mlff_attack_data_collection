@@ -9,8 +9,11 @@ module load gcc/12.3 python/3.11 arrow
 
 PYTHON="${PYTHON:-$HOME/project/.venv-mace/bin/python}"
 TRIAL="${TRIAL:-trial1_seed42}"
-SCRATCH_ROOT="${SCRATCH_OUTPUT_ROOT:-/scratch/$USER/mlff_attack_data_collection/licohpf_database}"
-OUTPUT_DIR="${OUTPUT_DIR:-visualize_licohpf_001}"
+SCRATCH_ROOT="${SCRATCH_OUTPUT_ROOT:-/scratch/$USER/mlff_attack_data_collection/2d_structures}"
+MATERIAL_SLUG="${MATERIAL_SLUG:-reo3}"
+MODEL_ID="${MODEL_ID:-mace_mh}"
+MLFF_DTYPE="${MLFF_DTYPE:-float64}"
+OUTPUT_DIR="${OUTPUT_DIR:-visualize_relaxation_trajectory}"
 
 if [ ! -x "$PYTHON" ]; then
     echo "ERROR: Python not found: $PYTHON"
@@ -21,7 +24,7 @@ mkdir -p "$OUTPUT_DIR"
 rm -f "$OUTPUT_DIR/02_delta_force_vs_epsilon.png"
 
 export MPLBACKEND=Agg
-export REPO_ROOT TRIAL SCRATCH_ROOT OUTPUT_DIR
+export REPO_ROOT TRIAL SCRATCH_ROOT MATERIAL_SLUG MODEL_ID MLFF_DTYPE OUTPUT_DIR
 
 "$PYTHON" - <<'PY'
 import math
@@ -47,6 +50,9 @@ from matplotlib.lines import Line2D
 
 repo_root = Path(os.environ["REPO_ROOT"]).resolve()
 trial = os.environ["TRIAL"]
+material_slug = os.environ["MATERIAL_SLUG"]
+model_id = os.environ["MODEL_ID"]
+mlff_dtype = os.environ["MLFF_DTYPE"]
 
 scratch_trial = (
     Path(os.environ["SCRATCH_ROOT"])
@@ -56,13 +62,34 @@ scratch_trial = (
 output_dir = Path(os.environ["OUTPUT_DIR"])
 output_dir.mkdir(parents=True, exist_ok=True)
 
-summary_path = (
-    scratch_trial
-    / "array_summaries"
-    / "float64_mace_model_licohpf_001_summary.csv"
+summary_directory = scratch_trial / "array_summaries"
+
+# ``mace`` was used as the MACE-MH identifier by early 2D runs. Newer
+# configuration and summaries use the explicit ``mace_mh`` identifier.
+model_id_aliases = {
+    "mace": {"mace", "mace_mh", "mace-mh"},
+    "mace_mh": {"mace", "mace_mh", "mace-mh"},
+    "mace-mh": {"mace", "mace_mh", "mace-mh"},
+}
+model_ids_to_match = model_id_aliases.get(
+    model_id.lower(),
+    {model_id.lower()},
 )
 
-fmax = 0.01
+summary_candidates = [
+    summary_directory / f"{mlff_dtype}_{candidate}_{material_slug}_summary.csv"
+    for candidate in [
+        model_id.lower(),
+        *sorted(model_ids_to_match - {model_id.lower()}),
+    ]
+]
+
+summary_path = next(
+    (candidate for candidate in summary_candidates if candidate.is_file()),
+    summary_candidates[0],
+)
+
+fmax = 0.05
 
 BLUE = "#2166AC"
 PERTURB_RED = "#C43C39"
@@ -125,6 +152,29 @@ def candidate_directories(row):
                 scratch_trial / path,
                 repo_root / path,
             ])
+
+    # Reconstruct the standard 2D-workflow location. This covers legacy
+    # summaries whose stored paths were relative to a different submit
+    # directory, as well as the historical ``mace`` output folder.
+    row_dtype = clean_string(
+        row.get("dtype_str", mlff_dtype)
+    ).lower() or mlff_dtype.lower()
+    row_material = clean_string(
+        row.get("material_slug", material_slug)
+    ).lower() or material_slug.lower()
+    run_folder = clean_string(
+        row.get("run_folder", row.get("run_id", ""))
+    )
+
+    if run_folder:
+        for candidate_model_id in model_ids_to_match:
+            directories.append(
+                scratch_trial
+                / f"outputs_{row_dtype}"
+                / candidate_model_id
+                / row_material
+                / run_folder
+            )
 
     return directories
 
@@ -227,6 +277,24 @@ def trajectory_maximum_forces(path):
     )
 
 
+def truncate_at_threshold(values, threshold):
+    """End a trajectory at its first finite force at or below threshold."""
+    values = np.asarray(values, dtype=float)
+    reached = np.flatnonzero(
+        np.isfinite(values)
+        & (values <= threshold)
+    )
+
+    if not reached.size:
+        return values
+
+    # Show the endpoint on the displayed convergence line, rather than
+    # continuing to lower values recorded after the stopping criterion.
+    return np.concatenate([
+        values[:int(reached[0])],
+        np.asarray([threshold], dtype=float),
+    ])
+
 def final_finite_value(values):
     finite = np.flatnonzero(
         np.isfinite(values)
@@ -252,7 +320,7 @@ def decade_limits(values):
     ]
 
     if not values.size:
-        return 1.0e-3, 1.0
+        return 1.0e-2, 1.0
 
     lower = 10.0 ** math.floor(
         math.log10(
@@ -273,7 +341,7 @@ def decade_limits(values):
 
 
 # ---------------------------------------------------------------------
-# Load applicable MACE-model rows
+# Load applicable 2D-material MACE-MH rows
 # ---------------------------------------------------------------------
 
 if not summary_path.is_file():
@@ -284,8 +352,42 @@ if not summary_path.is_file():
 
 summary = pd.read_csv(summary_path)
 
-run_ids = summary.get(
-    "run_id",
+material_slugs = summary.get(
+    "material_slug",
+    pd.Series(
+        "",
+        index=summary.index,
+    ),
+).astype(str).str.lower()
+
+model_ids = summary.get(
+    "model_id",
+    pd.Series(
+        "",
+        index=summary.index,
+    ),
+).astype(str).str.lower()
+
+# Older summaries sometimes recorded only the calculator backend. For
+# MACE-MH this is ``mace``, so use it as an additional identity field.
+calculator_ids = summary.get(
+    "calculator",
+    pd.Series(
+        "",
+        index=summary.index,
+    ),
+).astype(str).str.lower()
+
+dtype_values = summary.get(
+    "dtype_str",
+    pd.Series(
+        "",
+        index=summary.index,
+    ),
+).astype(str).str.lower()
+
+attack_types = summary.get(
+    "attack_type",
     pd.Series(
         "",
         index=summary.index,
@@ -293,26 +395,13 @@ run_ids = summary.get(
 ).astype(str).str.lower()
 
 mask = (
-    run_ids.str.contains(
-        "licohpf_001",
-        regex=False,
+    material_slugs.eq(material_slug.lower())
+    & (
+        model_ids.isin(model_ids_to_match)
+        | calculator_ids.isin(model_ids_to_match)
     )
-    & run_ids.str.contains(
-        "_mace_model_",
-        regex=False,
-    )
-    & run_ids.str.contains(
-        "_float64_",
-        regex=False,
-    )
-    & run_ids.str.contains(
-        "_fgsm_",
-        regex=False,
-    )
-    & ~run_ids.str.contains(
-        "_ifgsm_",
-        regex=False,
-    )
+    & dtype_values.eq(mlff_dtype.lower())
+    & attack_types.eq("fgsm")
 )
 
 summary = summary.loc[mask].copy()
@@ -406,16 +495,18 @@ for _, row in summary.iterrows():
 
     try:
         if initial_force is None:
-            initial_force = (
+            initial_force = truncate_at_threshold(
                 trajectory_maximum_forces(
                     before_path
-                )
+                ),
+                fmax,
             )
 
-        recovery_force = (
+        recovery_force = truncate_at_threshold(
             trajectory_maximum_forces(
                 after_path
-            )
+            ),
+            fmax,
         )
     except Exception as error:
         print(
@@ -540,7 +631,7 @@ force_lower, force_upper = decade_limits(
 
 force_lower = min(
     force_lower,
-    1.0e-3,
+    1.0e-2,
 )
 
 
@@ -639,11 +730,12 @@ initial_axis.plot(
     zorder=5,
 )
 
-# End the axis where the initial trajectory actually ends.
+# Keep the initial relaxation panel at its actual final optimizer step.
 initial_x_upper = max(
     float(maximum_initial_step),
     1.0,
 )
+initial_tick_spacing = 1 if initial_x_upper <= 20 else 2
 
 initial_axis.set_xlim(
     0,
@@ -654,12 +746,12 @@ initial_axis.set_xticks(
     np.arange(
         0,
         initial_x_upper + 1,
-        100,
+        initial_tick_spacing,
     )
 )
 
 initial_axis.set_ylabel(
-    "Max atomic force (eVÅ⁻¹)",
+    r"Max atomic force (eV/$\AA$)",
     labelpad=20,
 )
 
@@ -684,7 +776,7 @@ for record in recovery_records:
         zorder=5,
     )
 
-recovery_x_upper = 360
+recovery_x_upper = 300
 
 recovery_axis.set_xlim(
     0,
@@ -713,12 +805,12 @@ recovery_axis.spines["left"].set_visible(
 # ---------------------------------------------------------------------
 
 recovery_axis.text(
-    -0.1,
-    fmax * 2.0,
-    r"$f_{\max}=0.01\mathrm{eV\AA^{-1}}$",
+    1,
+    fmax / 1.6,
+    rf"$f_{{\max}}={fmax:g}\,\mathrm{{eV/\AA}}$",
     transform=recovery_axis.get_yaxis_transform(),
     ha="right",
-    va="bottom",
+    va="top",
     fontsize=20,
     color=THRESHOLD_COLOR,
     bbox={
@@ -750,7 +842,7 @@ colorbar = figure.colorbar(
 
 colorbar.ax.set_title(
     r"$\epsilon$",
-    fontsize=24,
+    fontsize=30,
     pad=12,
 )
 
@@ -817,8 +909,9 @@ converged_count = sum(
 
 print()
 print(f"Created: {output_path}")
-print("Model: MACE model")
-print("Dtype: float64")
+print(f"Material: {material_slug}")
+print(f"Model: {model_id}")
+print(f"Dtype: {mlff_dtype}")
 print("Attack: FGSM")
 print(
     "Recovery epsilon values: "
